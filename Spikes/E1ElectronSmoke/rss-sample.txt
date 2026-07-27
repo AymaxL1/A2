@@ -1,0 +1,5 @@
+22424 119088 /Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/electron-recon/Spikes/E1ElectronSmoke/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
+22425  59680 /Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/electron-recon/Spikes/E1ElectronSmoke/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper (GPU).app/Contents/MacOS/Electron Helper (GPU)
+22426  33856 /Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/electron-recon/Spikes/E1ElectronSmoke/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper
+22427  78096 /Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/electron-recon/Spikes/E1ElectronSmoke/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper (Renderer).app/Contents/MacOS/Electron Helper (Renderer)
+36356   3472 /Applications/Figma.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler

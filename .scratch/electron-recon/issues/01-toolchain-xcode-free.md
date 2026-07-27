@@ -1,7 +1,7 @@
 # 01 — Electron 工具链最小面与「免 Xcode」的诚实边界
 
 Type: research
-Status: open
+Status: claimed
 
 ## Question
 

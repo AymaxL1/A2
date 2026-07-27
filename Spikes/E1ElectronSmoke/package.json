@@ -1,0 +1,13 @@
+{
+  "name": "e1-electron-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E1 spike: minimal Electron closed loop (floating overlay window + UDS round-trip)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}

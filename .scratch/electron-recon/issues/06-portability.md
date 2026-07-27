@@ -1,7 +1,7 @@
 # 06 — 「通用性」两种解读的事实盘点(不裁决 Mac-only)
 
 Type: research
-Status: open
+Status: resolved
 
 ## Question
 
@@ -18,3 +18,9 @@ Status: open
 ## Output
 
 `docs/research/electron-recon/portability.md`(中文;两种解读分节,结尾各给一行「如果用户要的是这个,那么事实支持/不支持什么」)。
+
+## Answer
+
+解读(a)开发环境通用性:**支持**——域层测试/lint/构建可在任意 Node 机器(Linux CI/无 Xcode 的 Mac)上跑,零 Xcode;唯 mac 目标打包/签名/公证仍锁定真机 mac(Apple 限制,非语言限制),但门槛远低于 Swift 路线「处处要 Xcode.app」。解读(b)产品跨 Windows:**部分支持**——栈无关层(契约/manifest/注册表/CLI/mihomo)不受影响;UDS→named pipe 靠 Node `net` 几乎免费打通(最大利好);Tray/通知/点击穿透需 Windows 真机适配;Authenticode 签名需硬件 token/云 HSM,采购与流程与 mac Developer ID 完全不同形态(最大坑)。量级从 ADR 0001「含核心全重写」降到「栈无关层复用 + host-windows 适配包 + 独立签名流程」。「切 Electron 但 V1 仍 Mac-only(ADR 0001 不动)」自洽,解读(a)收益不依赖是否做 Windows。详见 [docs/research/electron-recon/portability.md](../../../docs/research/electron-recon/portability.md)。
+
+Status: resolved

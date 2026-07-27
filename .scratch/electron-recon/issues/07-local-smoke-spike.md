@@ -1,7 +1,7 @@
 # 07 — 本机 Electron 冒烟 spike(E1)
 
 Type: task
-Status: open
+Status: claimed
 
 ## Question
 

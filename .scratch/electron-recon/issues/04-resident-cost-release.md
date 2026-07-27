@@ -1,7 +1,7 @@
 # 04 — 常驻成本、系统集成与发布链
 
 Type: research
-Status: open
+Status: claimed
 
 ## Question
 

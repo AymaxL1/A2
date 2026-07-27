@@ -21,6 +21,10 @@ Labels: wayfinder:map
 
 <!-- 主会话在各票 resolved 后统一回写 -->
 
+- [测试与 AI 闭环:切 Electron 找回什么](issues/05-testing-ai-loop.md) — 四项成本翻转打折:自读兜底只恢复浅层(manifest/contract 可读,域逻辑仍靠 AI+测试);DOM 面秒级闭环属实(Playwright `_electron`/WebdriverIO 活跃),但**非 DOM 面(Tray/原生菜单/系统弹窗)两栈同弱**(只能白盒打桩)——XCUITest 弱项不构成差异化理由,裁决权重最大修正;语料差距语言级属实、Electron 专属 API 面不明显;升级税形态互换(8 周小步 vs 年度集中)未必更低;S1 实证 Swift 热缓存编译约 1s,AI 闭环差距主要是环境损坏所致而非语言结构性。详见 `docs/research/electron-recon/testing-ai-loop.md`。
+- [capability 纵切与 CLI/UDS:S2/S3 在 Electron 的等价形态](issues/03-capability-cli-uds.md) — Node `net` 的 UDS 坑集合与 S2 同源同量,无新增阻塞;dangerous 确认推荐独立 `BrowserWindow`+`app.focus({steal:true})`;**`aa` CLI 分发推荐 Node SEA**(Plan B=yao-pkg;拒绝要求装 node/bun compile(mac 签名 bug)/`ELECTRON_RUN_AS_NODE`(违反 runAsNode fuse 安全声明且破坏 prefix_rule 字面量匹配));**S3 栈无关性确认成立**——Seatbelt 拦的是沙箱内客户端 `connect(2)`,不识别监听端语言,`prefix_rule` 幸存路径不变,且反哺约束 CLI 必须产出干净 `aa` 前缀。详见 `docs/research/electron-recon/capability-cli.md`。
+- [「通用性」两种解读的事实盘点](issues/06-portability.md) — 解读(a)开发环境通用性**支持**:V1 依赖面零原生模块,`npm install && npm start` 任意 Node 机器成立(Linux CI/无 Xcode Mac);唯 mac 目标打包/签名/公证锁定真机 mac(Apple 限制;GitHub Actions macOS runner ≈ Linux 10 倍价)。解读(b)跨 Windows **部分支持**:栈无关层不受影响,UDS→named pipe 在 Node `net` 同 API 几乎免费,但 Tray/点透/通知需真机适配,**最大坑=Authenticode 私钥 2023 起强制硬件 token/云 HSM**;量级从「含核心全重写」降为「适配包+独立签名流程」。「切 Electron 但 V1 仍 Mac-only」自洽。详见 `docs/research/electron-recon/portability.md`。
+
 ## Not yet specified
 
 - **若翻案**:ADR 修订批次(0002 翻案文;0001 是否连动)、路线图与 Phase 0 spike 清单的 Electron 重排、原调研文档已废弃章节(§1/§3/§4.1 等)的复活修订、S1/S2 Swift 资产的处置方式。

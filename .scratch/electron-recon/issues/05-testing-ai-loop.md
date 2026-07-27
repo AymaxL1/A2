@@ -1,7 +1,13 @@
 # 05 — 测试与 AI 闭环:切 Electron 找回什么
 
 Type: research
-Status: open
+Status: resolved
+
+## Answer
+
+四项成本翻转结论（详见研究文档）：①自读兜底——真实但只覆盖浅层（manifest/capability contract 类型），域逻辑正确性判断仍依赖 AI；②XCUITest 分钟级闭环——DOM 面属实（Playwright/WDIO 秒级），但**非 DOM 面（Tray/原生菜单/系统弹窗）两栈同弱**，均需白盒 IPC/evaluate 打桩，非真黑盒 E2E，系统权限弹窗上 XCTest 反而有内建拦截、Electron 侧没有——故此项成本不构成 Electron 差异化理由；③语料密度——语言级差距属实，但 Electron 专属 API（Tray/dialog）语料并不比 SwiftUI/AppKit 菜单栏场景丰富，翻转幅度小于数字暗示；④年度 SDK 升级纪律——翻转但打折扣，Electron 升级更频繁只是幅度更小，总负担未必更低。
+
+详见 [`docs/research/electron-recon/testing-ai-loop.md`](../../../docs/research/electron-recon/testing-ai-loop.md)。
 
 ## Question
 

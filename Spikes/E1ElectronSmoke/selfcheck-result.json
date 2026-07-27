@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "electron": "33.4.11",
+    "chrome": "130.0.6723.191",
+    "node_electron_internal": "20.18.3",
+    "node_external_bin": "/private/tmp/claude-501/-Users-Shared-Workspaces-PROJECT-AA/7c04744b-700b-462f-b773-b00cd31acb1c/scratchpad/node-v24.18.0-darwin-arm64/bin/node"
+  },
+  "e1a": {
+    "selfcheck": {
+      "isAlwaysOnTop": true,
+      "isVisibleOnAllWorkspaces": true,
+      "isVisible": true,
+      "isFocused": false,
+      "isResizable": false,
+      "isFullScreenable": true,
+      "hasShadow": false,
+      "bounds": {
+        "x": 1000,
+        "y": 510,
+        "width": 240,
+        "height": 240
+      },
+      "primaryDisplayWorkArea": {
+        "width": 2240,
+        "height": 1235
+      },
+      "ignoreMouseEventsGetterAvailable": false
+    },
+    "capture": {
+      "ok": true,
+      "file": "e1a-capture.png",
+      "bytes": 44010,
+      "width": 480,
+      "height": 480
+    },
+    "duration_ms": 399
+  },
+  "e1b": {
+    "ok": false,
+    "error": "client_spawn_timeout",
+    "stdout": "",
+    "stderr": ""
+  },
+  "timings_ms": {
+    "total_before_quit": 33383
+  },
+  "quit_reason": "smoke_complete"
+}

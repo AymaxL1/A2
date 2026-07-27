@@ -1,7 +1,7 @@
 # 02 — 宠物悬浮窗:S1 验收项在 Electron 的对标
 
 Type: research
-Status: open
+Status: claimed
 
 ## Question
 

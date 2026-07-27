@@ -1,7 +1,7 @@
 # 03 — capability 纵切与 CLI/UDS:S2/S3 在 Electron 的等价形态
 
 Type: research
-Status: open
+Status: resolved
 
 ## Question
 
@@ -21,3 +21,9 @@ S2 纵切(注册表→菜单栏→`aa` CLI→UDS→dangerous 宿主确认弹窗,
 ## Output
 
 `docs/research/electron-recon/capability-cli.md`(中文;CLI 分发形态一节必须给出明确推荐+理由,这是明天裁决要用的)。
+
+## Answer
+
+UDS/Tray/弹窗:Node `net` 的 UDS 坑集合(sun_path、废 socket、权限位)与 S2 同源同量,无新增阻塞;dangerous 确认推荐独立 `BrowserWindow`(非 `dialog.showMessageBox`,无父窗口失焦是已知类目);无 dock 图标下前台激活需 `app.focus({steal:true})` 补偿,与 S2 的 `NSApp.activate` 教训同构。CLI 分发**推荐 Node SEA(`--build-sea`)**,`yao-pkg` 为 Plan B,拒绝「要求装 node」「bun compile(macOS 签名 bug 未消)」「`ELECTRON_RUN_AS_NODE` 复用(违反 Electron 官方 runAsNode fuse 安全声明,且破坏 prefix_rule 命令字面量匹配)」。S3 栈无关性**确认成立**:被拦的是沙箱内客户端进程的 `connect(2)`,Seatbelt 只看发起方,不识别监听端语言;`prefix_rule` 匹配的是命令字面量,反哺约束 CLI 分发必须产出干净的 `aa` 前缀(SEA 满足,`ELECTRON_RUN_AS_NODE` 不满足)。完整推理链、证据引用与进程拓扑草图见 `docs/research/electron-recon/capability-cli.md`。
+
+Status: resolved
