@@ -1,7 +1,7 @@
 # 02 — 宠物悬浮窗:S1 验收项在 Electron 的对标
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -23,3 +23,7 @@ S1 spike(Swift `NSPanel`+`NSHostingView`,已用户验收)的验收项,在 Electr
 ## Output
 
 `docs/research/electron-recon/pet-window.md`(中文,逐项给证据链接;GitHub issue 注明 open/closed 与最后活跃时间)。
+
+## Answer
+
+点击穿透(forward 事件驱动)、置顶 level 映射两项**达标**,与 S1 同等或更省事。全空间(缺 `stationary` 位 + 隐式 dock 副作用)、透明窗圆角残留(#47833,2025 年仍未解决)、跨屏拖拽(跳变非跟手,#31058)三项**有坑**但非阻断。**最大风险**:alwaysOnTop 与全屏 App 抢层级,2017/2022/2023 三个年份反复报告"需手动 focus 才生效",均 wontfix/not planned 关闭而非修复——这是唯一可能撞回退硬门①的点。详见 `docs/research/electron-recon/pet-window.md`。

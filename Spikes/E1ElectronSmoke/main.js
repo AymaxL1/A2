@@ -17,6 +17,12 @@ const { spawn } = require('node:child_process');
 
 const T0 = Date.now();
 const elapsed = () => Date.now() - T0;
+const DEBUG_LOG = path.join(__dirname, 'debug.log');
+function dbg(msg) {
+  try {
+    fs.appendFileSync(DEBUG_LOG, `[+${elapsed()}ms] ${msg}\n`);
+  } catch (_) {}
+}
 
 const SPIKE_DIR = __dirname;
 const SOCKET_PATH = `/tmp/e1-electron-smoke-${process.pid}.sock`;
@@ -77,7 +83,11 @@ function finishAndQuit(reason) {
 }
 
 // Hard cap: whatever happens, we are gone by T0+8000ms.
-const hardTimer = setTimeout(() => finishAndQuit('hard_timeout_8s'), HARD_TIMEOUT_MS);
+const hardTimer = setTimeout(() => {
+  dbg('HARD TIMEOUT fired');
+  finishAndQuit('hard_timeout_8s');
+}, HARD_TIMEOUT_MS);
+dbg('hard timer armed for ' + HARD_TIMEOUT_MS + 'ms');
 
 function runE1b() {
   return new Promise((resolve) => {
@@ -113,22 +123,33 @@ function runE1b() {
     });
 
     udsServer.listen(SOCKET_PATH, () => {
+      dbg('uds server listening on ' + SOCKET_PATH);
       const clientScript = path.join(SPIKE_DIR, 'uds-client.js');
+      dbg('spawning client: ' + NODE_BIN + ' ' + clientScript + ' ' + SOCKET_PATH);
       const child = spawn(NODE_BIN, [clientScript, SOCKET_PATH], {
         env: { ...process.env },
       });
+      dbg('spawn() returned, child pid=' + child.pid);
 
       let out = '';
       let err = '';
       child.stdout.on('data', (d) => (out += d.toString()));
       child.stderr.on('data', (d) => (err += d.toString()));
+      child.on('spawn', () => dbg('child spawn event fired, pid=' + child.pid));
+      child.on('error', (e) => {
+        dbg('child error event: ' + e.message);
+        clearTimeout(clientTimeout);
+        resolve({ ok: false, error: 'child_spawn_error: ' + e.message, stdout: out, stderr: err });
+      });
 
       const clientTimeout = setTimeout(() => {
+        dbg('clientTimeout (5000ms) fired, killing child');
         child.kill();
         resolve({ ok: false, error: 'client_spawn_timeout', stdout: out, stderr: err });
       }, 5000);
 
-      child.on('exit', (code) => {
+      child.on('exit', (code, signal) => {
+        dbg('child exit event: code=' + code + ' signal=' + signal);
         clearTimeout(clientTimeout);
         const m = out.match(/CLIENT_RESULT:(.*)/s);
         let serverReplyEchoedBack = null;
@@ -232,19 +253,32 @@ app.whenReady().then(async () => {
   // Explicitly never open DevTools (per spec: no human present, no leftover UI).
   win.webContents.on('devtools-opened', () => win.webContents.closeDevTools());
 
+  dbg('app ready, window created');
   await win.loadFile(path.join(SPIKE_DIR, 'pet.html'));
+  dbg('window loadFile done');
 
   try {
     result.e1a = await runE1a(win);
+    dbg('e1a done');
   } catch (e) {
     result.e1a = { error: e.message };
+    dbg('e1a threw: ' + e.message);
   }
 
   try {
     result.e1b = await runE1b();
+    dbg('e1b done');
   } catch (e) {
     result.e1b = { error: e.message };
+    dbg('e1b threw: ' + e.message);
   }
+
+  // Deliberate hold so an external `ps` sample (see run.sh) has a window to
+  // catch the live main/GPU/renderer processes before we quit. Well within
+  // the 8s hard cap; no window interaction happens during this time.
+  const HOLD_FOR_RSS_MS = 3000;
+  dbg(`holding ${HOLD_FOR_RSS_MS}ms for external RSS sampling`);
+  await new Promise((r) => setTimeout(r, HOLD_FOR_RSS_MS));
 
   finishAndQuit('smoke_complete');
 });

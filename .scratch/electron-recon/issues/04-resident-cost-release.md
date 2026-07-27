@@ -1,7 +1,7 @@
 # 04 — 常驻成本、系统集成与发布链
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -22,3 +22,7 @@ ADR 0002 给 Electron 记的三笔成本(常驻内存、8 周 major+Chromium 安
 ## Output
 
 `docs/research/electron-recon/resident-release.md`(中文;内存与体积给出多来源数据点而非单一数字;每笔「维护税」给出可核查来源)。
+
+## Answer
+
+三笔成本 2026-07 均仍真实:①常驻内存 idle 80-300MB/典型 200-400MB,对 Swift 30-80MB 是 3-5 倍,Chromium 基线结构性、无法工程消除;②维护税实测确认 8 周 major/仅支持最新 3 个 major/单 major 支持窗口约 5.5 个月,无 LTS 可跟,本地无远程内容大幅降但不清零暴露面(V8 snapshot 完整性等本地攻击面仍在);③原生感隔层部分抵消——SMAppService/LSUIElement/模板图标与 Swift 对等,更新链(用户确认更新)能力对标持平,但 Notification 未签名下"静默失败非崩溃"比 Swift 更温和。mihomo 打包动作量与 GPL 边界结论均不因栈变(ADR 0007 逐字适用)。体积叠加 mihomo 后 Electron ~90-230MB vs Swift 预估 ~70-100MB。详见 [docs/research/electron-recon/resident-release.md](../../../docs/research/electron-recon/resident-release.md)。

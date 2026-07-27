@@ -1,7 +1,7 @@
 # 07 — 本机 Electron 冒烟 spike(E1)
 
 Type: task
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -23,4 +23,4 @@ Status: claimed
 
 ## Answer
 
-(执行后由子代理填写)
+通过。Node v24.18.0/npm 11.16.0 用户态装机 51s；`npm install electron` 20s 装到 electron@33.4.11，全程一次成功，未用到代理/镜像预案，无 CLT/Xcode 介入，无 Gatekeeper 弹窗。E1a：alwaysOnTop/visibleOnAllWorkspaces 等标志读回全 true，`capturePage` PNG 验证角像素透明(alpha=0)，8s 硬上限内实测 3.5s 自动退出。E1b：外部 node 客户端与 Electron 主进程 UDS round-trip 成功，socket 收尾已清理；过程中揪出并修好自己写的一个 client 端 bug(忘记 `.end()`导致死等)。RSS：主进程+GPU+utility+renderer 共 4 进程合计约 287MB。意外发现：二进制"首次执行"耗时异常(33s，超过 8s 硬规则)，之后同批二进制降到 3-5s，成因未 100%坐实(疑似 Gatekeeper 首次校验)，已建议生产用进程外看门狗兜底硬超时而非只靠同进程 JS 定时器。详见 `Spikes/E1ElectronSmoke/README.md`。

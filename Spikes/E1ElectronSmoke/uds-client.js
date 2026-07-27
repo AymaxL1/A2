@@ -19,7 +19,9 @@ const payload = {
 };
 
 const client = net.createConnection(socketPath, () => {
-  client.write(JSON.stringify(payload));
+  // half-close our write side so the server's `end` handler (which waits
+  // for a complete message before replying) actually fires.
+  client.end(JSON.stringify(payload));
 });
 
 let buf = '';

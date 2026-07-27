@@ -49,8 +49,9 @@ echo "== launching app (auto-quits within 8s) =="
 "$ELECTRON_BIN" . > run.log 2>&1 &
 APP_PID=$!
 
-# Give it a couple seconds to spin up windows + UDS server before sampling RSS.
-sleep 2.5
+# main.js holds for ~3s after finishing e1a/e1b specifically so this sample
+# can catch the live main/GPU/renderer processes before it quits.
+sleep 1.5
 echo "== RSS sample (pid,rss_kb,comm) =="
 ps -axo pid,rss,comm | grep -i electron | grep -v grep | tee rss-sample.txt || echo "(no electron processes found — see run.log)"
 

@@ -1,0 +1,11 @@
+[+0ms] hard timer armed for 8000ms
+[+57ms] app ready, window created
+[+106ms] window loadFile done
+[+443ms] e1a done
+[+445ms] uds server listening on /tmp/e1-electron-smoke-22661.sock
+[+445ms] spawning client: /private/tmp/claude-501/-Users-Shared-Workspaces-PROJECT-AA/7c04744b-700b-462f-b773-b00cd31acb1c/scratchpad/node-v24.18.0-darwin-arm64/bin/node /Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/electron-recon/Spikes/E1ElectronSmoke/uds-client.js /tmp/e1-electron-smoke-22661.sock
+[+447ms] spawn() returned, child pid=22665
+[+447ms] child spawn event fired, pid=22665
+[+475ms] child exit event: code=0 signal=null
+[+476ms] e1b done
+[+476ms] holding 3000ms for external RSS sampling
