@@ -1,0 +1,17 @@
+{
+  "version": 0,
+  "case-sensitive": "false",
+  "roots": [
+    {
+      "type": "directory",
+      "name": "/Library/Developer/CommandLineTools/usr/include/swift",
+      "contents": [
+        {
+          "type": "file",
+          "name": "module.modulemap",
+          "external-contents": "/Users/Shared/Workspaces/PROJECT_AA/Spikes/S1PetOverlay/toolchain-workaround/empty.modulemap"
+        }
+      ]
+    }
+  ]
+}

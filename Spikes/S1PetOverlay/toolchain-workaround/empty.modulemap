@@ -1,0 +1,1 @@
+// 故意留空：经 VFS overlay 顶替 CLT 里重复定义 SwiftBridging 的旧 module.modulemap（与 bridging.modulemap 内容完全相同，遮掉无损失）。CLT 修好后整个 toolchain-workaround/ 目录可删。
