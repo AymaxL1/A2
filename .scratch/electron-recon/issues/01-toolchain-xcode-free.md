@@ -1,7 +1,7 @@
 # 01 — Electron 工具链最小面与「免 Xcode」的诚实边界
 
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -22,3 +22,7 @@ Electron 路线在这台机器上的开发→构建→分发全链,各环节到�
 ## Output
 
 `docs/research/electron-recon/toolchain.md`(中文,列来源 URL 与核实日期;区分实测/官方文档/社区经验三档证据)。
+
+## Answer
+
+Electron 全链(开发/打包/签名/公证)在本机现状下不需要 Xcode.app;node-gyp 只需 CLT(已健康),V1 依赖面(Tray/UDS/子进程/通知)零原生模块。今晚 E1 冒烟已实测坐实开发循环:Node v24.18.0 装 51s、Electron 33.4.11 装 20s,全程零 Xcode/CLT 介入。Swift 侧 `xcodebuild`/XCUITest/SPM 清单解析三项官方证实非完整 Xcode.app 不可,vfsoverlay workaround 只解锁裸 swiftc 直编,够不到这三项,解锁需装 Xcode.app + 一次 sudo。签名+公证环节两路线成本相同(CLT 即可)。详见 [docs/research/electron-recon/toolchain.md](../../../docs/research/electron-recon/toolchain.md)。
