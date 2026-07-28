@@ -33,8 +33,15 @@ let package = Package(
         .target(name: "AAUISystem", dependencies: ["AAContracts"]),
 
         // ③ 依赖 HostRuntime 的宿主具体层 / 假件;以及插件域逻辑
-        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime"]),
-        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime"]),
+        // 依赖边须与源码实际 import 一一对应(两个 target 都同时 import AAHostRuntime 与 AAContracts)。
+        //
+        // @main 债务口径(重要):AAHostMacOS 的终态是「库」——07 票架构映射定它为 Host Port 的 macOS 实现,
+        //   spec 定 GUI 宿主是 XcodeGen app 壳(LSUIElement;SPM 可执行产不出 .app bundle)。
+        //   现阶段 Sources/AAHostMacOS/HostApp.swift 里塞的 @main 只是 vfsoverlay 过桥用(check.sh 单独把它编成可执行冒烟);
+        //   正确终态归 12 票:把 @main 移进 XcodeGen app 壳、AppDelegate 转 public,本 target 保持库不变。
+        //   因此这里保持 .target(库),不要改成 .executableTarget。
+        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts"]),
+        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts"]),
         // 铁律:PluginProxy 只依赖 SDK / Contracts / UISystem,绝不依赖任何 Host* target。
         .target(name: "PluginProxy", dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"]),
 

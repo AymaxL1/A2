@@ -10,7 +10,10 @@ import Foundation
 /// - `safe`:只读,无副作用(如 proxy.status / groups.list / latency.test)。
 /// - `normal`:可逆状态变更(如开关系统代理 / 切模式 / 选节点 / 更新已有订阅)。
 /// - `dangerous`:信任面变更(如新增或替换订阅源 / 覆写内核配置),须经宿主 GUI 最终确认,CLI 永不交互阻塞。
-public enum RiskLevel: String, Sendable, CaseIterable {
+/// - `Codable`:线协议(逐行 JSON)里 `CapabilityDescriptor.risk` 就是它。
+///   String 原始值枚举自动获得 Codable,编码即其 rawValue("safe"/"normal"/"dangerous"),
+///   反解由 `init(from:)` 走 rawValue 匹配(与 `parse(_:)` 的宽松解析分工:线协议要严格,入口要宽松)。
+public enum RiskLevel: String, Sendable, CaseIterable, Codable {
     case safe
     case normal
     case dangerous
