@@ -2,10 +2,10 @@
 // 照 S2 spike 的线程模型重写(study 而非 copy):
 //   * socket/bind/listen 在 start();sun_path 逐字节填、写 sun_len、bind 前 unlink 旧文件。
 //   * accept 循环跑在后台串行队列;每条连接派发到并发队列独立处理。
-//   * 本票只路由 `capabilities.list`:decode 请求 → registry.list() → encode 统一信封 → 写一行。
-//     list 无 dangerous,不需确认回调(那是 03 票 invoke 的事)。
+//   * 03 票:route 路由 list / describe / call 三 op。call 的校验/风险路由/执行全在 registry.invoke
+//     (宿主侧集中,不可绕过);safe/normal 直执行,dangerous 留 seam 给 04 票。服务端读超时仍记为债(未做)。
 //
-// 全部经 JSONDecoder/JSONEncoder;禁止手拼字符串。响应类型是 Contracts 的 WireResponse<CapabilityListResult>。
+// 全部经 JSONDecoder/JSONEncoder;禁止手拼字符串。响应类型是 Contracts 的 WireResponse<R>(R 随 op 而异)。
 
 import Foundation
 import Darwin
@@ -98,6 +98,7 @@ final class UDSServer {
     }
 
     /// 解析请求行、按 op 路由、编码统一信封为一行 JSON 的 Data(不含结尾换行)。
+    /// list/describe/call 三 op 都走 registry 的纯逻辑,再包成 `WireResponse<R>`;未知 op 明确报错(不静默)。
     private func route(requestLine: String) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys] // 稳定键序,便于诊断与断言
@@ -105,24 +106,52 @@ final class UDSServer {
         // 解不出合法请求 → bad_request 失败信封
         guard let data = requestLine.data(using: .utf8),
               let request = try? JSONDecoder().decode(WireRequest.self, from: data) else {
-            return encodeFailure(encoder, code: "bad_request", detail: "请求非合法 JSON 或缺 op 字段")
+            return encodeFailure(encoder, code: WireErrorCode.badRequest, detail: "请求非合法 JSON 或缺 op 字段")
         }
 
         switch request.op {
         case WireOp.capabilitiesList:
-            let result = CapabilityListResult(capabilities: registry.list())
-            let response = WireResponse<CapabilityListResult>.success(result)
-            return (try? encoder.encode(response)) ?? encodeFailure(encoder, code: "encode_failed", detail: "响应编码失败")
+            let response = WireResponse<CapabilityListResult>.success(
+                CapabilityListResult(capabilities: registry.list()))
+            return encode(encoder, response)
+
+        case WireOp.capabilitiesDescribe:
+            guard let id = request.capability else {
+                return encodeFailure(encoder, code: WireErrorCode.invalidParams, detail: "describe 请求缺 capability 字段")
+            }
+            guard let descriptor = registry.describe(id) else {
+                return encodeFailure(encoder, code: WireErrorCode.unknownCapability, detail: "未知能力: \(id)")
+            }
+            let response = WireResponse<DescribeResult>.success(DescribeResult(descriptor: descriptor))
+            return encode(encoder, response)
+
+        case WireOp.capabilitiesCall:
+            guard let id = request.capability else {
+                return encodeFailure(encoder, code: WireErrorCode.invalidParams, detail: "call 请求缺 capability 字段")
+            }
+            // 宿主侧集中校验 + 风险路由 + 执行都在 registry.invoke(不可绕过)。
+            switch registry.invoke(capabilityID: id, input: request.input) {
+            case .success(let output):
+                let response = WireResponse<CallResult>.success(CallResult(output: output))
+                return encode(encoder, response)
+            case .failure(let err):
+                return encodeFailure(encoder, code: err.code, detail: err.detail)
+            }
+
         default:
-            // 03 票会补 describe/call;当前未知 op 明确报错(不静默)。
-            return encodeFailure(encoder, code: "unknown_op", detail: "未知操作: \(request.op)")
+            return encodeFailure(encoder, code: WireErrorCode.unknownOp, detail: "未知操作: \(request.op)")
         }
+    }
+
+    /// 编码成功信封;编码失败退回统一失败信封(仍走 Codable)。
+    private func encode<R: Codable & Sendable>(_ encoder: JSONEncoder, _ response: WireResponse<R>) -> Data {
+        (try? encoder.encode(response)) ?? encodeFailure(encoder, code: WireErrorCode.encodeFailed, detail: "响应编码失败")
     }
 
     /// 编码彻底失败时的预编码保底信封(load 时算一次;此固定输入实际不会编码失败)。
     /// 用它替代手拼 JSON 字符串:保底信封也走 Codable。
     private static let fallbackFailure: Data = {
-        let response = WireResponse<CapabilityListResult>.failure(WireError(code: "encode_failed", detail: "响应编码失败"))
+        let response = WireResponse<CapabilityListResult>.failure(WireError(code: WireErrorCode.encodeFailed, detail: "响应编码失败"))
         return (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
     }()
 

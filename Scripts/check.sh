@@ -15,6 +15,13 @@
 #   * AAHostTestKit 加 Registry 纯逻辑测试(假件 seam),由门禁生成的 runner 执行。
 #   * 断言从 01 的 aa 占位(RiskLevel.parse)替换为 02 真断言:注册表纯逻辑 + list E2E(起真宿主)。
 #
+# 03 票增量:
+#   * AAContracts 加 JSONValue / ParameterSpec / 退出码表(AAExitCode)/ WireErrorCode / describe·call 线协议。
+#   * AAHostRuntime 的 Registry 加 invoke(集中校验 + 风险路由)+ 两个 demo(safe/echo、normal/note.set)。
+#   * AAHostMacOS 的 UDSServer 路由补 describe/call;aa 补 describe/call 子命令 + 退出码映射 + 帮助里的退出码表。
+#   * 阶段 B 增:describe/call E2E、schema 校验失败(6)、未知能力(6)、业务失败(5)、用法错(1)、
+#     超时(3,借 python3 假监听器 + AA_TIMEOUT_SECONDS)、host 不可达(4)、帮助退出码表逐码断言。
+#
 # 接口契约(11 票换成 swift build + swift test 引擎时保持不变):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
@@ -47,9 +54,13 @@ KILLPAT="$HOST_BIN"
 
 SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
 
-# 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket。
+# 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
+TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
+
+# 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
+  pkill -f "timeout_listener.py" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
 }
 trap cleanup EXIT
@@ -223,8 +234,112 @@ else
   echo "FAIL: 宿主未就绪,跳过 list --json 断言(计为失败)"; FAIL=$((FAIL+1))
 fi
 
+# --- 断言组 2':describe / call 纵切 E2E(退出码 0/5/6 逐码)---
+if [ "$SOCK_UP" -eq 1 ]; then
+  echo "--- 断言组 2':describe / call E2E(03 票主体)---"
+
+  # (2d) describe demo.echo --json:退出 0 + 输出含结构化 parameters(name/type/required),足以构造调用
+  OUT="$("$BIN/aa" capabilities describe demo.echo --json 2>/dev/null)"; RC=$?
+  echo "    describe 输出: $OUT"
+  assert_exit 0 $RC "describe demo.echo --json 退出码=0"
+  assert_contains "$OUT" '"parameters"' "describe 输出含 parameters 键"
+  assert_contains "$OUT" '"name":"message"' "describe 参数含 name=message"
+  assert_contains "$OUT" '"type":"string"' "describe 参数含 type=string"
+  assert_contains "$OUT" '"required":true' "describe 参数含 required=true(足以让 agent 构造调用)"
+
+  # (2e) safe call 成功:call demo.echo --input '{"message":"hi"}' → 退出 0 + 回显 hi
+  OUT="$("$BIN/aa" capabilities call demo.echo --input '{"message":"hi"}' --json 2>/dev/null)"; RC=$?
+  echo "    echo 输出: $OUT"
+  assert_exit 0 $RC "call demo.echo(safe)退出码=0"
+  assert_contains "$OUT" '"echo":"hi"' "call demo.echo 结果含回显 echo=hi"
+
+  # (2f) normal call 成功且零 GUI:call demo.note.set → 退出 0 + set=true(headless 下自然无 GUI 阻塞)
+  OUT="$("$BIN/aa" capabilities call demo.note.set --input '{"key":"k","value":"v"}' --json 2>/dev/null)"; RC=$?
+  echo "    note.set 输出: $OUT"
+  assert_exit 0 $RC "call demo.note.set(normal)退出码=0(零 GUI 打断)"
+  assert_contains "$OUT" '"set":true' "call demo.note.set 结果含 set=true"
+
+  # (2g) schema 校验失败:缺必填 message → 退出 6 + 统一错误信封含 error.code=missing_parameter
+  OUT="$("$BIN/aa" capabilities call demo.echo --input '{}' --json 2>/dev/null)"; RC=$?
+  echo "    缺参输出: $OUT"
+  assert_exit 6 $RC "call 缺必填参数退出码=6(协议/校验错)"
+  assert_contains "$OUT" '"code":"missing_parameter"' "缺参走统一 JSON 错误信封(error.code=missing_parameter)"
+
+  # (2h) schema 校验失败:类型不符(message 给数字)→ 退出 6 + error.code=type_mismatch
+  OUT="$("$BIN/aa" capabilities call demo.echo --input '{"message":123}' --json 2>/dev/null)"; RC=$?
+  echo "    类型不符输出: $OUT"
+  assert_exit 6 $RC "call 参数类型不符退出码=6"
+  assert_contains "$OUT" '"code":"type_mismatch"' "类型不符走统一错误信封(error.code=type_mismatch)"
+
+  # (2i) 未知能力 → 退出 6 + error.code=unknown_capability
+  OUT="$("$BIN/aa" capabilities call demo.nope --input '{}' --json 2>/dev/null)"; RC=$?
+  echo "    未知能力输出: $OUT"
+  assert_exit 6 $RC "call 未知能力退出码=6"
+  assert_contains "$OUT" '"code":"unknown_capability"' "未知能力 error.code=unknown_capability"
+
+  # (2j) 业务失败:message=='boom' → 退出 5 + error.code=capability_failed
+  OUT="$("$BIN/aa" capabilities call demo.echo --input '{"message":"boom"}' --json 2>/dev/null)"; RC=$?
+  echo "    业务失败输出: $OUT"
+  assert_exit 5 $RC "call 业务失败退出码=5"
+  assert_contains "$OUT" '"code":"capability_failed"' "业务失败 error.code=capability_failed"
+
+  # (2k) 用法错(客户端侧):--input 非法 JSON → 退出 1(未触达宿主语义)
+  ERR="$("$BIN/aa" capabilities call demo.echo --input 'not-json' --json 2>&1 >/dev/null)"; RC=$?
+  assert_exit 1 $RC "call --input 非法 JSON 退出码=1(用法错)"
+  assert_contains "$ERR" "合法 JSON" "非法 --input 有明确 stderr 提示"
+
+  # (2k2) 用法错:call 缺 <id> → 退出 1
+  "$BIN/aa" capabilities call >/dev/null 2>&1; RC=$?
+  assert_exit 1 $RC "call 缺 <id> 退出码=1(用法错)"
+else
+  echo "FAIL: 宿主未就绪,跳过 describe/call E2E(计为失败)"; FAIL=$((FAIL+1))
+fi
+
 # 清场:杀宿主 + 删 socket(trap 亦会兜底)
 pkill -f "$KILLPAT" 2>/dev/null
+sleep 1
+rm -f "$SOCK"
+
+# --- 断言组 2'':超时(退出码 3)—— 借 python3「只 accept 不回应」假监听器 + 短超时 ---
+echo "--- 断言组 2'':超时 E2E(退出码 3)---"
+cat > "$TIMEOUT_LISTENER" <<'PY'
+import socket, os, sys, time
+p = sys.argv[1]
+try:
+    os.unlink(p)
+except FileNotFoundError:
+    pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(p)
+s.listen(4)
+# 只 accept、绝不回写 → 客户端 SO_RCVTIMEO 到点判超时。被 pkill 收场。
+while True:
+    try:
+        c, _ = s.accept()
+        # 保持连接开着但不响应;睡一会儿即可(会被清场杀掉)。
+        time.sleep(60)
+    except Exception:
+        break
+PY
+python3 "$TIMEOUT_LISTENER" "$SOCK" >/dev/null 2>&1 &
+LISTENER_PID=$!
+disown "$LISTENER_PID" 2>/dev/null || true
+# 等假监听器就绪
+LIS_UP=0
+for _ in $(seq 1 50); do
+  [ -S "$SOCK" ] && { LIS_UP=1; break; }
+  kill -0 "$LISTENER_PID" 2>/dev/null || break
+  sleep 0.2
+done
+if [ "$LIS_UP" -eq 1 ]; then
+  # 短超时(1s)后应判超时 → 退出码 3
+  ERR="$(AA_TIMEOUT_SECONDS=1 "$BIN/aa" capabilities call demo.echo --input '{"message":"hi"}' --json 2>&1 >/dev/null)"; RC=$?
+  assert_exit 3 $RC "连上但宿主不回应 → 退出码=3(超时)"
+  assert_contains "$ERR" "超时" "超时有明确 stderr 提示"
+else
+  echo "FAIL: 假监听器未就绪,跳过超时断言(计为失败)"; FAIL=$((FAIL+1))
+fi
+pkill -f "timeout_listener.py" 2>/dev/null
 sleep 1
 rm -f "$SOCK"
 
@@ -245,6 +360,18 @@ fi
 # (3b) 编译期守卫:上面阶段 A 已用「仅 SDK/Contracts/UISystem 的 -I」编过 PluginProxy,能到这里即已证明。
 echo "PASS: PluginProxy 已在受限 -I(无 Host* 模块)下编译成功 —— 编译期证明不需要 Host*"
 PASS=$((PASS+1))
+
+# --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
+echo "--- 断言组 4:aa --help 退出码语义表(逐码)---"
+HELP="$("$BIN/aa" --help 2>&1)"; RC=$?
+assert_exit 0 $RC "aa --help 退出码=0"
+assert_contains "$HELP" "0  成功" "帮助含退出码 0=成功"
+assert_contains "$HELP" "1  用法错" "帮助含退出码 1=用法错"
+assert_contains "$HELP" "2  denied" "帮助含退出码 2=denied(04 票)"
+assert_contains "$HELP" "3  超时" "帮助含退出码 3=超时"
+assert_contains "$HELP" "4  宿主不可达" "帮助含退出码 4=宿主不可达"
+assert_contains "$HELP" "5  能力业务失败" "帮助含退出码 5=能力业务失败"
+assert_contains "$HELP" "6  协议/校验错" "帮助含退出码 6=协议/校验错"
 
 echo
 echo "========================================"
