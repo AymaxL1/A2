@@ -11,17 +11,24 @@
 /// - `type`:简单类型串,取值 `"string" | "number" | "bool" | "object" | "array"`(与 `JSONValue.typeName` 对齐)。
 /// - `required`:是否必填(宿主侧集中校验缺失即报 `missing_parameter`)。
 /// - `description`:一句话人/agent 可读说明。
+/// - `allowedValues`:可选的**取值域约束**(09 票新增,对 03 契约的向后兼容加法)。非空时,入参值必须在其中,
+///   否则宿主侧集中校验报 `invalid_params`(→ 退出码 6);nil/空 = 不约束取值。仅对 string 值生效(枚举取值域,
+///   如 `proxy.mode.set` 的 mode∈[rule,global,direct])。describe 输出它,好让 agent 不读源码就知道合法取值。
+///   Codable 可选字段:老宿主/老客户端缺此键解码得 nil(decodeIfPresent),编码时 nil 整键省略(encodeIfPresent),向后兼容。
 public struct ParameterSpec: Codable, Sendable, Equatable {
     public let name: String
     public let type: String
     public let required: Bool
     public let description: String
+    public let allowedValues: [String]?
 
-    public init(name: String, type: String, required: Bool, description: String) {
+    public init(name: String, type: String, required: Bool, description: String,
+                allowedValues: [String]? = nil) {
         self.name = name
         self.type = type
         self.required = required
         self.description = description
+        self.allowedValues = allowedValues
     }
 }
 

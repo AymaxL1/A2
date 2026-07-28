@@ -44,9 +44,52 @@ public enum RegistryConformanceTests {
         runDescribeTests(&report)
         runInvokeTests(&report)
         runDangerousConfirmTests(&report)
+        runAllowedValuesTests(&report)
         runContractRoundTripTests(&report)
         runExitCodeMappingTests(&report)
         return report
+    }
+
+    // ④' 09 票:ParameterSpec.allowedValues 取值域校验(集中在 Registry.validate,纯逻辑,可假件驱动)。
+    //    非空 allowedValues + 入参不在其中 → invalid_params(→ 退出码 6);在其中 → 放行执行 handler。
+    private static func runAllowedValuesTests(_ report: inout TestReport) {
+        let cap = Capability(
+            descriptor: CapabilityDescriptor(
+                id: "fake.mode", risk: .normal, summary: "假件:带 allowedValues 的枚举参数",
+                parameters: [
+                    ParameterSpec(name: "mode", type: "string", required: true, description: "枚举",
+                                  allowedValues: ["rule", "global", "direct"])
+                ]
+            ),
+            handler: { input in .success(.object(["mode": input?.objectValue?["mode"] ?? .null])) }
+        )
+        let registry = Registry(capabilities: [cap])
+
+        // 非法取值 → invalid_params(退出码 6),且 handler 不执行(返回的是失败)。
+        report.check(errorCode(registry.invoke(capabilityID: "fake.mode", input: .object(["mode": .string("bogus")])))
+                        == WireErrorCode.invalidParams,
+                     "09 allowedValues:非法取值(bogus)→ invalid_params(退出码6)")
+        report.check(AAExitCode.forErrorCode(WireErrorCode.invalidParams) == AAExitCode.protocolError,
+                     "09 allowedValues:invalid_params 映射退出码 6")
+
+        // 合法取值 → 放行执行。
+        switch registry.invoke(capabilityID: "fake.mode", input: .object(["mode": .string("global")])) {
+        case .success(let out):
+            report.check(out.objectValue?["mode"]?.stringValue == "global", "09 allowedValues:合法取值(global)放行执行")
+        case .failure:
+            report.check(false, "09 allowedValues:合法取值不应失败")
+        }
+
+        // 无 allowedValues 的参数(向后兼容):任意 string 取值放行(不因加法而收紧既有能力)。
+        let free = Registry(capabilities: [
+            Capability(descriptor: CapabilityDescriptor(id: "fake.free", risk: .safe, summary: "无取值域约束",
+                        parameters: [ParameterSpec(name: "x", type: "string", required: true, description: "自由")]),
+                       handler: { _ in .success(.object(["ok": .bool(true)])) })
+        ])
+        switch free.invoke(capabilityID: "fake.free", input: .object(["x": .string("anything")])) {
+        case .success: report.check(true, "09 allowedValues:未声明 allowedValues 的参数不约束取值(向后兼容)")
+        case .failure: report.check(false, "09 allowedValues:无约束参数任意取值应放行")
+        }
     }
 
     // ① list:默认注册表 + 假件 seam 透传

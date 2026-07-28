@@ -72,29 +72,35 @@ public final class FakeProcessPort: ProcessPort, @unchecked Sendable {
     }
 }
 
-/// 可编程假 HTTPPort。按 URL 后缀(路径)返回预置响应;记录请求序列。
+/// 可编程假 HTTPPort。按 URL 后缀(路径)+ 可选 method 返回预置响应;记录请求序列(含 body)。
 /// `@unchecked Sendable`:内部状态由 lock 串行化保护。
 public final class FakeHTTPPort: HTTPPort, @unchecked Sendable {
     private let lock = NSLock()
-    private var responses: [(suffix: String, resp: HTTPResponse)] = []
+    /// 预置响应表:URL 后缀 + 可选 method(nil=任意方法)→ 响应。
+    /// method 维度是 09 票新增:GET /configs 与 PUT /configs 后缀相同,靠 method 区分,避免误配。
+    private var responses: [(suffix: String, method: String?, resp: HTTPResponse)] = []
 
-    /// 请求记录(方法 + URL),供断言「REST 客户端确实按预期打了哪些路径」。
-    public private(set) var requests: [(method: String, url: String)] = []
+    /// 请求记录(方法 + URL + body),供断言「REST 客户端确实按预期打了哪些路径 / 写了什么 body」。
+    /// (09 票新增 body:mode.set / node.select 需核验 PUT body 内容,如 {"mode":"global"} / {"name":"NODE-B"}。)
+    public private(set) var requests: [(method: String, url: String, body: Data?)] = []
 
     public init() {}
 
-    /// 预置一个响应:URL 以 `pathSuffix` 结尾时返回该 JSON。
-    public func setResponse(pathSuffix: String, statusCode: Int = 200, json: String) {
+    /// 预置一个响应:URL 以 `pathSuffix` 结尾(且 method 匹配,nil=任意)时返回该 JSON。
+    public func setResponse(pathSuffix: String, method: String? = nil, statusCode: Int = 200, json: String = "") {
         lock.lock(); defer { lock.unlock() }
-        responses.append((pathSuffix, HTTPResponse(statusCode: statusCode, body: Data(json.utf8))))
+        responses.append((pathSuffix, method, HTTPResponse(statusCode: statusCode, body: Data(json.utf8))))
     }
 
     public enum FakeError: Error, Equatable { case noPreset(String) }
 
     public func send(method: String, url: String, body: Data?) throws -> HTTPResponse {
         lock.lock(); defer { lock.unlock() }
-        requests.append((method, url))
-        for entry in responses where url.hasSuffix(entry.suffix) {
+        requests.append((method, url, body))
+        // 按「路径」后缀匹配:先剥掉 query(如 /group/<g>/delay?url=&timeout= 的 ?… 部分),
+        // 否则带 query 的 URL 不以 "/delay" 结尾会漏配。method 维度另做精确区分(GET/PUT 同路径)。
+        let pathPart = url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? url
+        for entry in responses where pathPart.hasSuffix(entry.suffix) && (entry.method == nil || entry.method == method) {
             return entry.resp
         }
         throw FakeError.noPreset(url)

@@ -40,6 +40,14 @@
 #     未绕过(D1b);docs agents-md grep(组5);install-cli 幂等/覆盖/缺目录 + canonical 相对链接判 already-installed +
 #     --uninstall 幂等/拒误删(组6)。install-cli 只碰 $BUILD 下临时 --prefix,绝不碰真实 /usr/local/bin。
 #
+# 09 票增量(控制面能力包:模式/节点/组/测速):
+#   * PluginProxy.MihomoRESTClient 加三扩展(PATCH /configs 切模式 / PUT /proxies/<g> 选节点 / GET /group/<g>/delay 按组测速,超时如实标注;动词对齐真核)。
+#   * ProxyPlugin.capabilities() 加四能力:proxy.groups.list(safe)/ proxy.latency.test(safe)/ proxy.mode.set(normal)/ proxy.node.select(normal),各带 cliAlias。
+#   * AAContracts.ParameterSpec 加可选 allowedValues(向后兼容);Registry.validate 据它做取值域校验(非法→invalid_params→退出码6)。
+#   * Scripts/fake-mihomo.py 升级为**有状态**(内存维护 mode 与各组 now;PUT 改、GET 读回;/group/<g>/delay 含超时节点)。
+#   * 阶段 B 增:1e 纯逻辑(REST 写读构造/解析 + 四能力风险级/别名/allowedValues + 取值域校验);
+#     CP E2E(改后读回 mode/now 生效 + 逐节点测速含超时 + normal 零 GUI + number 强转 inf/nan→1)。
+#
 # 接口契约(11 票换成 swift build + swift test 引擎时保持不变):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
@@ -230,6 +238,49 @@ assert_exit() {  # $1 期望码  $2 实际码  $3 描述
   fi
 }
 
+# ============ E2E 宿主生命周期助手(消除就绪竞态,累积负载下稳)============
+# 根因(09 排查):E2E 宿主是 AppKit accessory app,其启动含 NSApplication + 状态栏项(触达 WindowServer)。
+#   在一整轮门禁的累积负载下(多轮编译 + 反复起停宿主 + python stub + pkill),AppKit 启动偶尔慢于旧的 20s 就绪窗口,
+#   于是「socket 未在窗口内出现」被记成一条模糊 FAIL(如 dangerous deny 组的「宿主未就绪」)。这不是能力逻辑问题,是就绪竞态。
+# 修法(不靠盲加 sleep):① 起下一个宿主前,轮询确认上一个**真死**(kill -0 失败为止)+ 删残留 socket + 清默认持久化标记,杜绝重叠争用与跨 E2E 污染;
+#   ② 就绪窗口放宽到 40s 并**区分「启动即死」与「起得过慢」**,两种都立刻 dump 宿主日志(不再混成一条模糊 FAIL,便于定位)。
+
+# 彻底停掉本次构建的宿主(+ 可选 stub),轮询等其真死(带上限 15s),再删残留 socket 与**默认**持久化标记。
+# 取代此前的盲 `sleep 1`。注:只清 $AA_TAKEOVER_STATE_PATH(默认标记);08 各剧本用独立的 $SHSTATE,由其自身逻辑管理,不受此影响。
+teardown_hosts() {  # $1(可选)= also-stub:同时停 fake mihomo stub 并等其真死(避免残 stub 占 MIHOMO_PORT 的小竞态)
+  local also_stub="no"
+  [ "${1:-}" = "also-stub" ] && also_stub="yes"
+  pkill -f "$KILLPAT" 2>/dev/null
+  [ "$also_stub" = "yes" ] && pkill -f "$KILLPAT_STUB" 2>/dev/null
+  local i
+  for i in $(seq 1 150); do
+    if pgrep -f "$KILLPAT" >/dev/null 2>&1; then sleep 0.1; continue; fi
+    if [ "$also_stub" = "yes" ] && pgrep -f "$KILLPAT_STUB" >/dev/null 2>&1; then sleep 0.1; continue; fi
+    break   # 宿主(及 also-stub 时的 stub)均已真死
+  done
+  rm -f "$SOCK"
+  rm -f "$AA_TAKEOVER_STATE_PATH" 2>/dev/null   # 清默认标记:非接管类 E2E 宿主启动自愈恒 decision=clean,快速就绪、零跨 E2E 污染
+}
+
+# 轮询等宿主就绪(socket 出现)。$1=宿主 PID。置全局 SOCK_UP(1=就绪 / 0=失败)。返回 0/1 便于调用方分支。
+# 窗口 40s(200×0.2);区分「启动即死」(kill -0 失败)与「存活但过慢」(窗口耗尽),两种都 dump 宿主日志。
+wait_host_ready() {  # $1 = HOST_PID
+  local pid="$1" i
+  SOCK_UP=0
+  for i in $(seq 1 200); do
+    [ -S "$SOCK" ] && { SOCK_UP=1; return 0; }
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "    [就绪探测] 宿主(pid=$pid)启动即退出(socket 未出现)——是启动失败,非「慢」。宿主日志:"
+      sed 's/^/      /' "$HOSTLOG" 2>/dev/null
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "    [就绪探测] 宿主(pid=$pid)存活但 40s 内 socket 未出现(启动过慢)。宿主日志:"
+  sed 's/^/      /' "$HOSTLOG" 2>/dev/null
+  return 1
+}
+
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
 echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
 OUT="$("$TESTRUNNER" 2>&1)"; RC=$?
@@ -294,12 +345,28 @@ assert_contains "$OUT" "08 修盲杀:自愈后系统代理不再指向死端口(
 assert_contains "$OUT" "08 修清标记 bug:还原失败 → 保留持久化标记(clearCount=0),下次启动重试" "修清标记:还原失败→保留标记待重试(不留死端口后清标记)"
 assert_contains "$OUT" "08 修误判:读当前系统代理失败 → deferred(保守中止,不误判用户改过)" "修误判:读代理失败→deferred 保留标记,不误判 userChanged"
 
+# 09 票纯逻辑断言(同一 runner 输出;ProxyConformanceTests 09 子测 + RegistryConformanceTests allowedValues):
+#   控制面 REST 写/读(mode.set/node.select 构造对的 PUT;groups.list 解析;latency 逐节点 + 超时标注)+ 四能力风险级/别名/allowedValues。
+echo "--- 断言组 1e:09 控制面能力包纯逻辑(REST 写读 + 能力暴露 + allowedValues 校验)---"
+assert_contains "$OUT" "09 groups.list:解析出分组 PROXY(含候选节点 STUB-NODE/NODE-B/SLOW-NODE)" "09 纯逻辑:groups.list 解析组/候选"
+assert_contains "$OUT" "09 groups.list:PROXY 当前选中 now=STUB-NODE" "09 纯逻辑:groups.list 解析 now"
+assert_contains "$OUT" "09 mode.set:构造对的 PATCH /configs(body mode=global)" "09 纯逻辑:mode.set 构造对的 PATCH /configs(body;真核动词)"
+assert_contains "$OUT" "09 node.select:构造对的 PUT /proxies/PROXY(body name=NODE-B)" "09 纯逻辑:node.select 构造对的 PUT /proxies/<g>(body)"
+assert_contains "$OUT" "09 latency:逐节点延迟解析(STUB-NODE=120ms)" "09 纯逻辑:latency 逐节点延迟解析"
+assert_contains "$OUT" "09 latency:超时节点如实标注(SLOW-NODE delayMs=nil, timeout=true)" "09 纯逻辑:latency 超时节点如实标注"
+assert_contains "$OUT" "09 能力暴露:proxy.groups.list=safe cliAlias[proxy,groups] 无入参" "09 纯逻辑:groups.list=safe + cliAlias"
+assert_contains "$OUT" "09 能力暴露:proxy.latency.test=safe cliAlias[proxy,ping]" "09 纯逻辑:latency.test=safe + cliAlias"
+assert_contains "$OUT" "09 能力暴露:proxy.mode.set=normal cliAlias[proxy,mode]" "09 纯逻辑:mode.set=normal + cliAlias"
+assert_contains "$OUT" "09 能力暴露:proxy.mode.set 的 mode 声明 allowedValues[rule,global,direct]" "09 纯逻辑:mode 参数带 allowedValues"
+assert_contains "$OUT" "09 能力暴露:proxy.node.select=normal cliAlias[proxy,node]" "09 纯逻辑:node.select=normal + cliAlias"
+assert_contains "$OUT" "09 allowedValues:非法取值(bogus)→ invalid_params(退出码6)" "09 纯逻辑:allowedValues 非法值→invalid_params"
+assert_contains "$OUT" "09 allowedValues:合法取值(global)放行执行" "09 纯逻辑:allowedValues 合法值放行"
+assert_contains "$OUT" "09 防呆:超大有限 timeout(1e300)→ invalid_params(不 Int(Double) 越界崩宿主)" "09 纯逻辑:latency timeout 越界防呆(不崩,invalid_params)"
+
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
-# 先清场:确保无旧宿主 / 旧 socket(与 trap 双保险)
-pkill -f "$KILLPAT" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+# 先清场:确保无旧宿主 / 旧 socket(轮询等真死 + 删残留,取代盲 sleep)
+teardown_hosts
 
 # (2a) 宿主未运行 → aa 明确错误 + 非零退出码(host 不可达=4)
 ERR="$("$BIN/aa" capabilities list 2>&1 >/dev/null)"; RC=$?
@@ -322,13 +389,8 @@ HOST_PID=$!
 # 从 job 表摘除:pkill 清场时 shell 不再打印 "Terminated: 15"(PID 仍有效,kill -0 / pkill 照常工作)。
 disown "$HOST_PID" 2>/dev/null || true
 
-# poll 等 socket 出现(上限 20s,别死等);若宿主中途退出即报错
-SOCK_UP=0
-for _ in $(seq 1 100); do
-  [ -S "$SOCK" ] && { SOCK_UP=1; break; }
-  kill -0 "$HOST_PID" 2>/dev/null || break
-  sleep 0.2
-done
+# 就绪等待(窗口 40s;区分启动即死 vs 起得慢,失败自带日志 dump)
+wait_host_ready "$HOST_PID"
 
 # (2b) 宿主进程起来 + UDS 在监听(状态栏视觉可见属人工/快照,此处以「进程活着 + socket 在监听」代证)
 if [ "$SOCK_UP" -eq 1 ] && kill -0 "$HOST_PID" 2>/dev/null; then
@@ -467,10 +529,8 @@ else
   echo "FAIL: 宿主未就绪,跳过 describe/call E2E(计为失败)"; FAIL=$((FAIL+1))
 fi
 
-# 清场:杀宿主 + 删 socket(trap 亦会兜底)
-pkill -f "$KILLPAT" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+# 清场:杀宿主 + 删 socket(轮询等真死;trap 亦会兜底)
+teardown_hosts
 
 # --- 断言组 2''':dangerous 宿主确认纵切 E2E(04 票主体:无人值守两分支 + 反向不可绕过)---
 echo "--- 断言组 2''':dangerous 宿主确认 E2E(04 票)---"
@@ -495,20 +555,14 @@ s.close()
 PY
 
 # 起宿主(带指定 AA_CONFIRM_AUTO)并等 socket 就绪。置全局 HOST_PID / SOCK_UP。$1=模式(deny/approve)。
+# 无内核/无接管:teardown_hosts 已清默认标记 → 启动自愈恒 clean → 快速就绪(dangerous E2E 不涉及接管)。
 start_host_confirm() {
   local mode="$1"
-  pkill -f "$KILLPAT" 2>/dev/null
-  sleep 1
-  rm -f "$SOCK"
+  teardown_hosts
   AA_CONFIRM_AUTO="$mode" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
   disown "$HOST_PID" 2>/dev/null || true
-  SOCK_UP=0
-  for _ in $(seq 1 100); do
-    [ -S "$SOCK" ] && { SOCK_UP=1; break; }
-    kill -0 "$HOST_PID" 2>/dev/null || break
-    sleep 0.2
-  done
+  wait_host_ready "$HOST_PID"
 }
 
 # (D1) AA_CONFIRM_AUTO=deny 起宿主 → aa call demo.wipe → 退出码 2(denied)
@@ -564,11 +618,9 @@ else
   echo "FAIL: approve 宿主未就绪,跳过 approve 断言(计为失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
 
-# 清场:杀宿主 + 删 socket(trap 亦兜底)
-pkill -f "$KILLPAT" 2>/dev/null
+# 清场:杀宿主 + 删 socket(轮询等真死;trap 亦兜底)
 pkill -f "raw_uds_client.py" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+teardown_hosts
 
 # --- 断言组 2'':超时(退出码 3)—— 借 python3「只 accept 不回应」假监听器 + 短超时 ---
 echo "--- 断言组 2'':超时 E2E(退出码 3)---"
@@ -610,8 +662,7 @@ else
   echo "FAIL: 假监听器未就绪,跳过超时断言(计为失败)"; FAIL=$((FAIL+1))
 fi
 pkill -f "timeout_listener.py" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+teardown_hosts
 
 # --- 断言组 P:proxy.status 内核生命周期 E2E(06 票主体:真子进程 fake mihomo stub + 真 localhost REST)---
 echo "--- 断言组 P:proxy.status 内核生命周期 E2E(06 票)---"
@@ -622,20 +673,13 @@ MIHOMO_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1"
 echo "    fake mihomo 控制端口 = $MIHOMO_PORT"
 
 # 起宿主并注入内核 env:AA_MIHOMO_KERNEL_PATH → stub;AA_MIHOMO_CONTROL_PORT → 空闲端口。置全局 HOST_PID/SOCK_UP。
+# teardown_hosts also-stub 已清默认标记 → 启动自愈恒 clean → 快速就绪(P/CP 场景不预置接管态)。
 start_host_kernel() {
-  pkill -f "$KILLPAT" 2>/dev/null
-  pkill -f "$KILLPAT_STUB" 2>/dev/null
-  sleep 1
-  rm -f "$SOCK"
+  teardown_hosts also-stub
   AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
   disown "$HOST_PID" 2>/dev/null || true
-  SOCK_UP=0
-  for _ in $(seq 1 100); do
-    [ -S "$SOCK" ] && { SOCK_UP=1; break; }
-    kill -0 "$HOST_PID" 2>/dev/null || break
-    sleep 0.2
-  done
+  wait_host_ready "$HOST_PID"
 }
 
 # —— 场景 A:健康检查 + status 真实呈现(内核存活→反映真实;内核死亡→如实未运行且退出码 0)——
@@ -712,28 +756,20 @@ else
   echo "FAIL: proxy 场景B 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
 
-# 清场:杀宿主 + stub(trap 亦兜底)
-pkill -f "$KILLPAT" 2>/dev/null
-pkill -f "$KILLPAT_STUB" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+# 清场:杀宿主 + stub(轮询等真死;trap 亦兜底)
+teardown_hosts also-stub
 
 # —— 场景 C:SIGTERM-忽略型内核经 terminate 仍被 SIGKILL 兜底回收(暴露"发完 SIGTERM 立刻 unrecord"的孤儿洞)——
 # 内核以 --ignore-sigterm 运行(装 handler 吞掉 SIGTERM);宿主收 SIGUSR1 → 优雅退出 → reclaimKernel →
 # ProcessPort.terminate:SIGTERM 被忽略 → 有界等待后 SIGKILL 兜底 → 内核被回收。旧 bug(发完 SIGTERM 立刻 unrecord)
 # 会让该内核既不被 terminate 的 SIGKILL 兜到(未升级)、又从缓冲摘除(退出钩子够不着)→ 孤儿。修后必被回收、无孤儿。
 echo "--- 断言组 P-C:SIGTERM-忽略型内核的 terminate SIGKILL 兜底 ---"
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub
 AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_MIHOMO_KERNEL_EXTRA_ARGS="--ignore-sigterm" \
   "$HOST_BIN" > "$HOSTLOG" 2>&1 &
 HOST_PID=$!
 disown "$HOST_PID" 2>/dev/null || true
-SOCK_UP=0
-for _ in $(seq 1 100); do
-  [ -S "$SOCK" ] && { SOCK_UP=1; break; }
-  kill -0 "$HOST_PID" 2>/dev/null || break
-  sleep 0.2
-done
+wait_host_ready "$HOST_PID"
 if [ "$SOCK_UP" -eq 1 ]; then
   READY=0
   for _ in $(seq 1 50); do
@@ -766,11 +802,113 @@ else
   echo "FAIL: proxy 场景C 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
 
-# 清场:杀宿主 + stub(trap 亦兜底)
-pkill -f "$KILLPAT" 2>/dev/null
-pkill -f "$KILLPAT_STUB" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+# 清场:杀宿主 + stub(轮询等真死;trap 亦兜底)
+teardown_hosts also-stub
+
+# --- 断言组 CP:控制面能力包 E2E(09 票主体:有状态 fake stub「改后读回」+ 逐节点测速 + normal 零 GUI + number 强转)---
+# 姿态:start_host_kernel 起「宿主 + 有状态 fake mihomo stub」;**不设 AA_CONFIRM_AUTO**——mode.set/node.select 为 normal,
+#   若误走 dangerous 确认会在 headless 挂起(→ 客户端超时退出码3);它们快速退出码0 即证明「normal 零 GUI 确认」。
+#   CP 四能力只经 RESTClient 读/写内核,绝不触达 networksetup(真件被注入但从不被调用),不碰真系统。
+echo "--- 断言组 CP:控制面能力包 E2E(09 票:模式/节点/组/测速,改后读回)---"
+start_host_kernel
+if [ "$SOCK_UP" -eq 1 ]; then
+  READY=0
+  for _ in $(seq 1 50); do
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  if [ "$READY" -eq 1 ]; then echo "PASS: CP 内核 REST 就绪(控制面可读写)"; PASS=$((PASS+1)); else echo "FAIL: CP 内核 REST 未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1)); fi
+
+  # (CP0) 元数据:四能力风险级 + cliAlias + allowedValues(经 wire 下发,读=safe / 改状态=normal)。
+  DGL="$("$BIN/aa" capabilities describe proxy.groups.list --json 2>/dev/null)"
+  assert_contains "$DGL" '"risk":"safe"' "CP0 proxy.groups.list 风险档=safe(只读)"
+  assert_contains "$DGL" '"cliAlias":["proxy","groups"]' "CP0 proxy.groups.list cliAlias=[proxy,groups]"
+  DLT="$("$BIN/aa" capabilities describe proxy.latency.test --json 2>/dev/null)"
+  assert_contains "$DLT" '"risk":"safe"' "CP0 proxy.latency.test 风险档=safe(只读)"
+  assert_contains "$DLT" '"cliAlias":["proxy","ping"]' "CP0 proxy.latency.test cliAlias=[proxy,ping]"
+  assert_contains "$DLT" '"name":"timeout"' "CP0 proxy.latency.test 声明 timeout 参数(number 强转基石)"
+  DMS="$("$BIN/aa" capabilities describe proxy.mode.set --json 2>/dev/null)"
+  assert_contains "$DMS" '"risk":"normal"' "CP0 proxy.mode.set 风险档=normal(改状态,零 GUI 确认)"
+  assert_contains "$DMS" '"cliAlias":["proxy","mode"]' "CP0 proxy.mode.set cliAlias=[proxy,mode]"
+  assert_contains "$DMS" '"allowedValues":["rule","global","direct"]' "CP0 proxy.mode.set 描述含 allowedValues(agent 可知合法取值)"
+  DNS="$("$BIN/aa" capabilities describe proxy.node.select --json 2>/dev/null)"
+  assert_contains "$DNS" '"risk":"normal"' "CP0 proxy.node.select 风险档=normal(改状态,零 GUI 确认)"
+  assert_contains "$DNS" '"cliAlias":["proxy","node"]' "CP0 proxy.node.select cliAlias=[proxy,node]"
+
+  # (CP1) aa proxy groups(别名→proxy.groups.list):列出组/候选/当前选中(now)。
+  GRP="$("$BIN/aa" proxy groups --json 2>/dev/null)"; GRPRC=$?
+  echo "    aa proxy groups 输出: $GRP"
+  assert_exit 0 $GRPRC "aa proxy groups(safe)退出码=0"
+  assert_contains "$GRP" '"name":"PROXY"' "CP1 groups 列出分组 PROXY"
+  assert_contains "$GRP" '"now":"STUB-NODE"' "CP1 groups 反映当前选中 now=STUB-NODE(初始)"
+  assert_contains "$GRP" '"all":["STUB-NODE","NODE-B","SLOW-NODE"]' "CP1 groups 列出该组候选节点"
+
+  # (CP2) aa proxy mode --mode global(别名→proxy.mode.set,normal,不设 AA_CONFIRM_AUTO 仍不挂):退出0 → 经 status 读回 mode==global(生效)。
+  MSET="$("$BIN/aa" proxy mode --mode global --json 2>/dev/null)"; MSRC=$?
+  echo "    aa proxy mode --mode global 输出: $MSET"
+  assert_exit 0 $MSRC "aa proxy mode --mode global(normal)退出码=0(零 GUI 确认,不阻塞/不超时)"
+  assert_contains "$MSET" '"set":true' "CP2 mode.set 报告已切换(set=true)"
+  MRB="$("$BIN/aa" proxy status --json 2>/dev/null)"
+  echo "    切模式后 proxy status 读回: $MRB"
+  assert_contains "$MRB" '"mode":"global"' "CP2 改后读回:proxy.status 反映 mode==global(经 REST 读回,生效)"
+
+  # (CP2b) 取值域约束:aa proxy mode --mode bogus → invalid_params(退出码6);内核状态不被改动(仍 global)。
+  MBAD="$("$BIN/aa" proxy mode --mode bogus --json 2>/dev/null)"; MBRC=$?
+  echo "    aa proxy mode --mode bogus 输出: $MBAD"
+  assert_exit 6 $MBRC "CP2b mode.set 非法取值(bogus,不在 allowedValues)→ 退出码=6"
+  assert_contains "$MBAD" '"code":"invalid_params"' "CP2b 非法取值走统一错误信封 error.code=invalid_params"
+  MRB2="$("$BIN/aa" proxy status --json 2>/dev/null)"
+  assert_contains "$MRB2" '"mode":"global"' "CP2b 非法取值被校验层拦下,未触达内核(mode 仍 global)"
+
+  # (CP3) aa proxy node --group PROXY --node NODE-B(别名→proxy.node.select,normal):退出0 → 经 groups/status 读回该组 now==NODE-B。
+  NSEL="$("$BIN/aa" proxy node --group PROXY --node NODE-B --json 2>/dev/null)"; NSRC=$?
+  echo "    aa proxy node --group PROXY --node NODE-B 输出: $NSEL"
+  assert_exit 0 $NSRC "aa proxy node(normal)退出码=0(零 GUI 确认,不阻塞/不超时)"
+  assert_contains "$NSEL" '"selected":true' "CP3 node.select 报告已选中(selected=true)"
+  GRB="$("$BIN/aa" proxy groups --json 2>/dev/null)"
+  echo "    选节点后 aa proxy groups 读回: $GRB"
+  assert_contains "$GRB" '"now":"NODE-B"' "CP3 改后读回:proxy.groups.list 反映 PROXY now==NODE-B(生效)"
+  SRB="$("$BIN/aa" proxy status --json 2>/dev/null)"
+  assert_contains "$SRB" '"node":"NODE-B"' "CP3 改后读回:proxy.status 反映当前节点==NODE-B(经 REST 读回)"
+
+  # (CP4) aa proxy ping --group PROXY(别名→proxy.latency.test,safe):返回逐节点延迟,超时节点如实标注。
+  PING="$("$BIN/aa" proxy ping --group PROXY --json 2>/dev/null)"; PINGRC=$?
+  echo "    aa proxy ping --group PROXY 输出: $PING"
+  assert_exit 0 $PINGRC "aa proxy ping(safe)退出码=0"
+  assert_contains "$PING" '"delayMs":120,"node":"STUB-NODE"' "CP4 测速:逐节点延迟(STUB-NODE=120ms)"
+  assert_contains "$PING" '"node":"SLOW-NODE","timeout":true' "CP4 测速:超时节点如实标注(SLOW-NODE timeout=true)"
+  assert_contains "$PING" '"delayMs":null,"node":"SLOW-NODE"' "CP4 测速:超时节点 delayMs=null(不臆造 0)"
+
+  # (CP5) number 参数强转 E2E(补 05 缺口):--timeout 5000 正确强转为 number;--timeout inf/nan → 退出码1(isFinite 钳制首次真被行使)。
+  PT="$("$BIN/aa" proxy ping --group PROXY --timeout 5000 --json 2>/dev/null)"; PTRC=$?
+  assert_exit 0 $PTRC "CP5 aa proxy ping --timeout 5000(number 强转正确)退出码=0"
+  assert_contains "$PT" '"node":"STUB-NODE"' "CP5 --timeout 5000 强转成功、正常返回测速结果"
+  "$BIN/aa" proxy ping --group PROXY --timeout inf --json >/dev/null 2>&1; PIRC=$?
+  assert_exit 1 $PIRC "CP5 aa proxy ping --timeout inf → 退出码=1(非有限 number 被 isFinite 钳制)"
+  "$BIN/aa" proxy ping --group PROXY --timeout nan --json >/dev/null 2>&1; PNRC=$?
+  assert_exit 1 $PNRC "CP5 aa proxy ping --timeout nan → 退出码=1(非有限 number 被 isFinite 钳制)"
+
+  # (CP5b) 宿主侧越界防呆(修 Int(Double) trap DoS 洞):经 capabilities call --input 原样 JSON(绕过 CLI 强转,直击宿主 handler)
+  #   传超大**有限** timeout=1e300(CLI 只钳 isFinite、不钳范围,故此洞在宿主侧)→ 宿主**不崩**、返回 invalid_params(退出码6)。
+  OVF="$("$BIN/aa" capabilities call proxy.latency.test --input '{"group":"PROXY","timeout":1e300}' --json 2>/dev/null)"; OVFRC=$?
+  echo "    超大 timeout(1e300)输出: $OVF"
+  assert_exit 6 $OVFRC "CP5b 超大有限 timeout(1e300)→ 退出码=6(宿主侧越界防呆,非 Int(Double) trap 崩)"
+  assert_contains "$OVF" '"code":"invalid_params"' "CP5b 越界 timeout 返回 invalid_params(而非崩宿主)"
+  # 反证宿主仍活:随后再发正常请求应成功(证明宿主没被这次越界请求 DoS 崩)。
+  ALIVE="$("$BIN/aa" proxy status --json 2>/dev/null)"; ALIVERC=$?
+  assert_exit 0 $ALIVERC "CP5b 越界请求后宿主仍存活(status 退出码=0,未被 DoS 崩溃)"
+  assert_contains "$ALIVE" '"running":true' "CP5b 越界请求后宿主仍正常服务(running=true)"
+
+  # (CP6) 别名 ≡ call 底座:aa proxy groups ≡ capabilities call proxy.groups.list(同路由同输出)。
+  CG="$("$BIN/aa" capabilities call proxy.groups.list --json 2>/dev/null)"; CGRC=$?
+  assert_exit 0 $CGRC "CP6 capabilities call proxy.groups.list 退出码=0"
+  if [ "$GRB" = "$CG" ] && [ -n "$CG" ]; then echo "PASS: CP6 aa proxy groups ≡ capabilities call proxy.groups.list 逐字节一致(别名同底座)"; PASS=$((PASS+1)); else echo "FAIL: CP6 别名与 call 输出不一致(alias='$GRB' vs call='$CG')"; FAIL=$((FAIL+1)); fi
+else
+  echo "FAIL: CP 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# 清场:杀宿主 + stub(轮询等真死;trap 亦兜底)
+teardown_hosts also-stub
 
 # --- 断言组 SP:系统代理接管/还原 E2E(07 票主体:文件后端假 NetworkConfigPort + fake mihomo stub,绝不碰真 networksetup)---
 # 姿态:宿主经 env(AA_NETWORKSETUP_FAKE_STATE)注入文件后端假 NetworkConfigPort,读写 $BUILD 下的 JSON 状态文件;
@@ -778,7 +916,7 @@ rm -f "$SOCK"
 #   宿主**不设 AA_CONFIRM_AUTO**——enable/disable 为 normal,若误走 dangerous 确认会在 headless 挂起(超时退出码3);
 #   它们快速退出码0 即证明 normal 零确认(不弹窗、不阻塞)。绝不设置真 networksetup。
 echo "--- 断言组 SP:系统代理接管/还原 E2E(07 票)---"
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub
 
 # 假 networksetup 初始状态(接管前快照):Wi-Fi 全关;Ethernet 原本就有第三方代理(HTTP/HTTPS→203.0.113.9:8080,SOCKS 关)。
 NETFAKE="$BUILD/netfake-state.json"
@@ -796,12 +934,7 @@ AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSE
   "$HOST_BIN" > "$HOSTLOG" 2>&1 &
 HOST_PID=$!
 disown "$HOST_PID" 2>/dev/null || true
-SOCK_UP=0
-for _ in $(seq 1 100); do
-  [ -S "$SOCK" ] && { SOCK_UP=1; break; }
-  kill -0 "$HOST_PID" 2>/dev/null || break
-  sleep 0.2
-done
+wait_host_ready "$HOST_PID"
 
 # 语义对比助手:比较状态文件与接管前初始快照是否等价(python 归一)。
 netfake_equals_initial() {
@@ -880,18 +1013,15 @@ else
   echo "FAIL: SP 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
 
-# 清场:杀宿主 + stub(trap 亦兜底)
-pkill -f "$KILLPAT" 2>/dev/null
-pkill -f "$KILLPAT_STUB" 2>/dev/null
-sleep 1
-rm -f "$SOCK"
+# 清场:杀宿主 + stub(轮询等真死;trap 亦兜底)
+teardown_hosts also-stub
 
 # --- 断言组 SH:崩溃自愈 E2E(08 票主体:文件后端假 NetworkConfigPort + fake stub + 持久化临时区,kill -9 剧本,绝不碰真系统)---
 # 姿态:整条剧本用 kill -9 强杀宿主(atexit/信号退出钩子**都不跑**)——留下「代理指向死端口 + 持久化接管态标记 + 孤儿内核」。
 #   重启宿主 → 启动早期自愈跑一次:reap 上世代孤儿内核 → 恢复接管(重启内核+重指存活端口)或还原快照(降级直连)或
 #   (用户改过)只清标记。**硬不变式**:任一自愈路径后系统代理都不指向死端口。持久化写 $BUILD 临时区(per-launch env),绝不碰真 AppSupport。
 echo "--- 断言组 SH:崩溃自愈 E2E(08 票 kill -9 剧本)---"
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub
 
 SHNET="$BUILD/selfheal-netfake.json"
 SHSTATE="$BUILD/selfheal-takeover.json"
@@ -915,15 +1045,14 @@ sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-initial.json" 2>/dev/null
 # 建立「一个崩溃世代」:起宿主(内核 stub + 假网络 + 独立持久化文件)→ 等 REST 就绪 → proxy on 接管 →
 #   捕获内核 stub pid 为 $ORPHAN_PID → kill -9 宿主(退出钩子不跑)。留:代理指向死端口 + 持久化标记 + 孤儿内核。返回非 0 表示前置失败。
 crash_generation() {
-  pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+  teardown_hosts also-stub          # 轮询等上一剧本宿主真死 + 清默认标记(本剧本用独立 $SHSTATE,不受影响)
   write_shnet_initial
   rm -f "$SHSTATE"
   AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSETUP_FAKE_STATE="$SHNET" \
     AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
   disown "$HOST_PID" 2>/dev/null || true
-  SOCK_UP=0
-  for _ in $(seq 1 100); do [ -S "$SOCK" ] && { SOCK_UP=1; break; }; kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.2; done
+  wait_host_ready "$HOST_PID" || true
   [ "$SOCK_UP" -eq 1 ] || return 1
   READY=0
   for _ in $(seq 1 50); do
@@ -943,13 +1072,12 @@ crash_generation() {
 # 关键:先删被 kill -9 的上世代留下的**陈旧 socket 文件**(kill -9 不清 UDS 文件),否则「socket 存在」会假就绪——
 #   自愈在 UDS server 启动**之前**同步跑完,故新 socket 出现 == 自愈已完成且开始服务(SOCK_UP 才是可靠就绪信号)。
 start_restart_host() {
-  rm -f "$SOCK"
+  rm -f "$SOCK"   # 只删陈旧 socket;**绝不 pkill**——上世代孤儿 stub 须存活,供本世代自愈 reap
   # 用 env 施加 env 变量:从 "$@" 展开来的 NAME=VALUE 无法被 bash 当赋值处理,必须交给 env 命令解析。
   env "$@" AA_NETWORKSETUP_FAKE_STATE="$SHNET" AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
   disown "$HOST_PID" 2>/dev/null || true
-  SOCK_UP=0
-  for _ in $(seq 1 200); do [ -S "$SOCK" ] && { SOCK_UP=1; break; }; kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.2; done
+  wait_host_ready "$HOST_PID" || true
 }
 
 # —— 剧本 A:接管 → kill -9 → 重启(带内核)→ 恢复接管(reap 孤儿 + 重启内核 + 重指存活端口)——
@@ -982,7 +1110,7 @@ if crash_generation; then
 else
   echo "FAIL: 剧本A crash_generation 未成功建立残留接管态(前置失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub   # 剧本间清场:轮询等宿主+stub 真死(取代盲 sleep 1)
 
 # —— 剧本 B:接管 → kill -9 → 重启(不带内核)→ 还原快照(内核不可重启 → 降级直连,精确复原)——
 if crash_generation; then
@@ -1003,7 +1131,7 @@ if crash_generation; then
 else
   echo "FAIL: 剧本B crash_generation 未成功(前置失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub   # 剧本间清场:轮询等宿主+stub 真死(取代盲 sleep 1)
 
 # —— 剧本 C:接管 → kill -9 → 用户手动把代理改成别的第三方 → 重启 → 只清陈旧标记、绝不覆盖用户设置 ——
 if crash_generation; then
@@ -1031,7 +1159,7 @@ sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-userchanged.json" 2>/dev/n
 else
   echo "FAIL: 剧本C crash_generation 未成功(前置失败)"; FAIL=$((FAIL+1))
 fi
-pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+teardown_hosts also-stub   # 剧本间清场:轮询等宿主+stub 真死(取代盲 sleep 1)
 rm -f "$SHSTATE" "$AA_TAKEOVER_STATE_PATH"
 
 # --- 断言组 3:PluginProxy 不依赖任何 Host*(01 票铁律,继续把关)---

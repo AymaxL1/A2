@@ -201,7 +201,9 @@ public final class Registry: Sendable {
     /// - 有参数声明 → input 须为对象;非对象(且提供了)→ `type_mismatch`;缺失/为 null 且有必填 → `missing_parameter`。
     /// - 逐参数:必填缺失/为 null → `missing_parameter`;存在但类型不符 → `type_mismatch`;可选缺省放行。
     ///
-    /// V1 策略(有意的宽松取舍,非漏校验):**只拒绝「缺必填 / 类型不符」两类**;
+    /// - 取值域(09 票):参数声明 `allowedValues` 且入参 string 值不在其中 → `invalid_params`(→ 退出码 6)。
+    ///
+    /// V1 策略(有意的宽松取舍,非漏校验):**只拒绝「缺必填 / 类型不符 / 取值域外」三类**;
     /// 对声明外的多余/未知输入字段一律**静默放行**(只遍历 params、不反向遍历 input 的键)。
     /// 理由:向前兼容(老宿主收到新客户端多带的字段不至于硬失败),且 V1 不上重量级 JSON Schema(YAGNI)。
     /// 若将来需要「拒绝未知字段」的严格模式,再在此加开关,不改现有调用方。
@@ -241,6 +243,14 @@ public final class Registry: Sendable {
             if !Registry.typeMatches(value: value, expected: p.type) {
                 return WireError(code: WireErrorCode.typeMismatch,
                                  detail: "参数 \(p.name) 类型应为 \(p.type),实际为 \(value.typeName)")
+            }
+            // 09 票:取值域约束(allowedValues 非空且入参值不在其中 → invalid_params → 退出码 6)。
+            // 仅对 string 值生效(allowedValues 是 [String],用于枚举取值域,如 mode∈[rule,global,direct])。
+            // 类型已在上面校验为 string;此处只需核验取值是否在允许集内。可选参数缺省不会走到这里(上面已 continue)。
+            if let allowed = p.allowedValues, !allowed.isEmpty,
+               let s = value.stringValue, !allowed.contains(s) {
+                return WireError(code: WireErrorCode.invalidParams,
+                                 detail: "参数 \(p.name) 取值 \"\(s)\" 非法;允许取值: \(allowed.joined(separator: ", "))")
             }
         }
         return nil

@@ -367,8 +367,13 @@ public final class ProxyPlugin: @unchecked Sendable {
     /// 暴露给宿主注册的能力集:
     ///   * `proxy.status`(safe 只读:内核状态);
     ///   * `proxy.system.enable`(normal:接管系统代理;cliAlias `aa proxy on`);
-    ///   * `proxy.system.disable`(normal:还原系统代理;cliAlias `aa proxy off`)。
-    /// handler 每次调用时读「当前状态」——故内核死亡/重启、接管/还原都能被如实反映。
+    ///   * `proxy.system.disable`(normal:还原系统代理;cliAlias `aa proxy off`);
+    ///   * `proxy.groups.list`(safe 只读:组/节点/当前选中;cliAlias `aa proxy groups`);
+    ///   * `proxy.latency.test`(safe 只读:按组测速,超时如实标注;cliAlias `aa proxy ping`);
+    ///   * `proxy.mode.set`(normal:切模式 rule/global/direct;cliAlias `aa proxy mode`);
+    ///   * `proxy.node.select`(normal:按组选节点;cliAlias `aa proxy node`)。
+    /// handler 每次调用时读/写「当前状态」——故内核死亡/重启、接管/还原、切模式/选节点都能被如实反映;
+    /// safe/normal 均直执行(normal 零 GUI 打断)。内核未运行/控制面未就绪时,写/读经 RESTClient 抛错 → 收敛为业务失败(退出码 5),绝不崩。
     public func capabilities() -> [PluginCapability] {
         let processPort = self.processPort
         let restClient = self.restClient
@@ -417,6 +422,141 @@ public final class ProxyPlugin: @unchecked Sendable {
                         return .failure(WireError(code: WireErrorCode.capabilityFailed, detail: "插件已释放"))
                     }
                     return self.disableSystemProxy()
+                }
+            ),
+            // ============ 09 票:控制面能力包(模式/节点/组/测速)============
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.groups.list",
+                    risk: .safe,
+                    summary: "列出代理分组:每组的候选节点(all)与当前选中(now)(safe 只读)",
+                    schemaSummary: "input: {} → output: { groups: [{ name, type, now?, all: [String] }] }",
+                    parameters: [],
+                    cliAlias: ["proxy", "groups"]
+                ),
+                handler: { _ in
+                    do {
+                        let groups = try restClient.groups()
+                        let arr: [JSONValue] = groups.map { g in
+                            .object([
+                                "name": .string(g.name),
+                                "type": .string(g.type),
+                                "now": g.now.map { JSONValue.string($0) } ?? .null,
+                                "all": .array(g.all.map { JSONValue.string($0) })
+                            ])
+                        }
+                        return .success(.object(["groups": .array(arr)]))
+                    } catch {
+                        return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                                  detail: "读取代理分组失败(内核未运行或控制面未就绪): \(error)"))
+                    }
+                }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.latency.test",
+                    risk: .safe,
+                    summary: "按组 URL 测速:返回该组逐节点延迟,超时节点如实标注(timeout=true, delayMs=null)(safe 只读)",
+                    schemaSummary: "input: { group: String, timeout?: Number=5000, url?: String } → output: { group, url, results: [{ node, delayMs?, timeout }] }",
+                    parameters: [
+                        ParameterSpec(name: "group", type: "string", required: true, description: "目标代理分组名(必填;见 proxy.groups.list)"),
+                        ParameterSpec(name: "timeout", type: "number", required: false, description: "单节点超时毫秒(可选,默认 5000)"),
+                        ParameterSpec(name: "url", type: "string", required: false, description: "测试 URL(可选,默认 http://www.gstatic.com/generate_204)")
+                    ],
+                    cliAlias: ["proxy", "ping"]
+                ),
+                handler: { input in
+                    let obj = input?.objectValue
+                    guard let group = obj?["group"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 group"))
+                    }
+                    // 防呆(修 DoS 洞):timeout 是 JSONValue.number(Double)。裸 UDS 直连 / --timeout 1e300 可传超大**有限**数,
+                    // `Int(Double)` 越界会 runtime trap → 宿主崩(客户端借此 DoS 宿主)。故在宿主侧收敛:只接受 1...600000 毫秒;
+                    // 非有限 / 越界 → invalid_params(退出码 6),绝不 Int(Double) 越界。缺省(未传)→ 默认 5000。
+                    var timeout = 5000
+                    if case let .number(n)? = obj?["timeout"] {
+                        guard n.isFinite, n >= 1, n <= 600_000 else {
+                            return .failure(WireError(code: WireErrorCode.invalidParams,
+                                                      detail: "timeout 须为 1..600000 毫秒的有限数,得到 \(n)(拒绝越界 Int 转换以防宿主崩溃)"))
+                        }
+                        timeout = Int(n)   // n 已钳在 [1,600000],Int(_:) 安全不越界
+                    }
+                    let url = obj?["url"]?.stringValue ?? "http://www.gstatic.com/generate_204"
+                    do {
+                        let results = try restClient.testGroupLatency(group: group, testURL: url, timeoutMs: timeout)
+                        let arr: [JSONValue] = results.map { r in
+                            .object([
+                                "node": .string(r.node),
+                                "delayMs": r.delayMs.map { JSONValue.number(Double($0)) } ?? .null,
+                                "timeout": .bool(r.timedOut)
+                            ])
+                        }
+                        return .success(.object([
+                            "group": .string(group),
+                            "url": .string(url),
+                            "results": .array(arr)
+                        ]))
+                    } catch {
+                        return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                                  detail: "按组测速失败(内核未运行/控制面未就绪/分组不存在): \(error)"))
+                    }
+                }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.mode.set",
+                    risk: .normal,
+                    summary: "切换代理模式:rule(规则)/ global(全局)/ direct(直连)(normal 可逆,零 GUI 确认)",
+                    schemaSummary: "input: { mode: rule|global|direct } → output: { mode, set: true }",
+                    parameters: [
+                        ParameterSpec(name: "mode", type: "string", required: true,
+                                      description: "目标模式,取值 rule|global|direct(必填)",
+                                      allowedValues: ["rule", "global", "direct"])
+                    ],
+                    cliAlias: ["proxy", "mode"]
+                ),
+                handler: { input in
+                    // mode 的取值合法性(allowedValues)已由宿主 Registry 集中校验把关;此处 input 必含合法 mode。
+                    guard let mode = input?.objectValue?["mode"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 mode"))
+                    }
+                    do {
+                        try restClient.setMode(mode)
+                        return .success(.object(["mode": .string(mode), "set": .bool(true)]))
+                    } catch {
+                        return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                                  detail: "切换模式失败(内核未运行或控制面未就绪): \(error)"))
+                    }
+                }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.node.select",
+                    risk: .normal,
+                    summary: "按组选节点:把指定分组的当前选中切到指定节点(normal 可逆,零 GUI 确认)",
+                    schemaSummary: "input: { group: String, node: String } → output: { group, node, selected: true }",
+                    parameters: [
+                        ParameterSpec(name: "group", type: "string", required: true, description: "目标代理分组名(必填;见 proxy.groups.list)"),
+                        ParameterSpec(name: "node", type: "string", required: true, description: "要选中的节点名(必填;须为该组候选之一)")
+                    ],
+                    cliAlias: ["proxy", "node"]
+                ),
+                handler: { input in
+                    let obj = input?.objectValue
+                    guard let group = obj?["group"]?.stringValue, let node = obj?["node"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 group/node"))
+                    }
+                    do {
+                        try restClient.selectNode(group: group, node: node)
+                        return .success(.object([
+                            "group": .string(group),
+                            "node": .string(node),
+                            "selected": .bool(true)
+                        ]))
+                    } catch {
+                        return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                                  detail: "选择节点失败(内核未运行/控制面未就绪/分组或节点不存在): \(error)"))
+                    }
                 }
             )
         ]

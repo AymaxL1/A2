@@ -26,6 +26,8 @@ public enum ProxyConformanceTests {
         testRESTClientParsing(&report)
         testStatusDomainLogic(&report)
         testPluginCapabilityExposure(&report)
+        // 09 票:控制面能力包(模式/节点/组/测速)REST 写读 + 能力暴露纯逻辑。
+        testControlPlaneCapabilities(&report)
         // 07 票:系统代理接管/还原纯逻辑(SystemProxyConformanceTests.swift 内的扩展方法)。
         testSystemProxyTakeoverRestore(&report)
         // 08 票:崩溃自愈判定纯逻辑 + 执行编排(CrashRecoveryConformanceTests.swift 内的扩展方法)。
@@ -133,7 +135,7 @@ public enum ProxyConformanceTests {
         let net = FakeNetworkConfigPort(initial: [])
         let plugin = ProxyPlugin(processPort: pp, httpPort: http, networkConfigPort: net, kernelPath: nil, controlPort: 9090)
         let caps = plugin.capabilities()
-        report.check(caps.count == 3, "插件能力:ProxyPlugin 暴露 3 条能力(proxy.status + system.enable + system.disable)")
+        report.check(caps.count == 7, "插件能力:ProxyPlugin 暴露 7 条能力(status + system.enable/disable + 09 groups/latency/mode/node)")
 
         let status = caps.first { $0.descriptor.id == "proxy.status" }?.descriptor
         report.check(status?.risk == .safe, "插件能力:proxy.status 风险档为 safe")
@@ -159,6 +161,113 @@ public enum ProxyConformanceTests {
             }
         } else {
             report.check(false, "插件能力:应能取到 proxy.status 的 handler")
+        }
+    }
+
+    // ⑤ 09 票:控制面 REST 写/读扩展 + 四能力暴露(注入 FakeHTTPPort 预置响应,纯逻辑,不起真内核)。
+    private static func testControlPlaneCapabilities(_ report: inout TestReport) {
+        // 测试用 /proxies:两组(GLOBAL now="" / PROXY now=STUB-NODE),PROXY 三候选(含一个将超时的 SLOW-NODE)。
+        let proxiesJSON = #"""
+        {"proxies":{
+          "DIRECT":{"type":"Direct"},
+          "GLOBAL":{"type":"Selector","now":"","all":["PROXY","DIRECT"]},
+          "PROXY":{"type":"Selector","now":"STUB-NODE","all":["STUB-NODE","NODE-B","SLOW-NODE"]}
+        }}
+        """#
+
+        // —— (a) groups() 解析组/候选/now ——
+        let httpG = FakeHTTPPort()
+        httpG.setResponse(pathSuffix: "/proxies", method: "GET", json: proxiesJSON)
+        let restG = MihomoRESTClient(http: httpG, port: 9090)
+        let groups = (try? restG.groups()) ?? []
+        let proxyGroup = groups.first { $0.name == "PROXY" }
+        report.check(proxyGroup != nil && proxyGroup?.all == ["STUB-NODE", "NODE-B", "SLOW-NODE"],
+                     "09 groups.list:解析出分组 PROXY(含候选节点 STUB-NODE/NODE-B/SLOW-NODE)")
+        report.check(proxyGroup?.now == "STUB-NODE", "09 groups.list:PROXY 当前选中 now=STUB-NODE")
+        report.check(groups.first { $0.name == "GLOBAL" }?.now == nil,
+                     "09 groups.list:空 now 归一为 nil(GLOBAL now=\"\"→nil)")
+
+        // —— (b) setMode 构造对的 PATCH /configs(body mode=global)——(真核约定 PATCH,非 PUT)
+        let httpM = FakeHTTPPort()
+        httpM.setResponse(pathSuffix: "/configs", method: "PATCH", statusCode: 204)
+        let restM = MihomoRESTClient(http: httpM, port: 9090)
+        let modeOK = (try? restM.setMode("global")) != nil
+        let patchConfigs = httpM.requests.first { $0.method == "PATCH" && $0.url.hasSuffix("/configs") }
+        var modeBodyOK = false
+        if let b = patchConfigs?.body, let j = try? JSONDecoder().decode(JSONValue.self, from: b) {
+            modeBodyOK = j.objectValue?["mode"]?.stringValue == "global"
+        }
+        report.check(modeOK && patchConfigs != nil && modeBodyOK,
+                     "09 mode.set:构造对的 PATCH /configs(body mode=global)")
+
+        // —— (c) selectNode 构造对的 PUT /proxies/<group>(body name=NODE-B)——
+        let httpN = FakeHTTPPort()
+        httpN.setResponse(pathSuffix: "/proxies/PROXY", method: "PUT", statusCode: 204)
+        let restN = MihomoRESTClient(http: httpN, port: 9090)
+        let selOK = (try? restN.selectNode(group: "PROXY", node: "NODE-B")) != nil
+        let putProxies = httpN.requests.first { $0.method == "PUT" && $0.url.hasSuffix("/proxies/PROXY") }
+        var nodeBodyOK = false
+        if let b = putProxies?.body, let j = try? JSONDecoder().decode(JSONValue.self, from: b) {
+            nodeBodyOK = j.objectValue?["name"]?.stringValue == "NODE-B"
+        }
+        report.check(selOK && putProxies != nil && nodeBodyOK,
+                     "09 node.select:构造对的 PUT /proxies/PROXY(body name=NODE-B)")
+
+        // —— (d) testGroupLatency 逐节点延迟 + 超时如实标注(SLOW-NODE 从 delay map 缺席=超时)——
+        let httpL = FakeHTTPPort()
+        httpL.setResponse(pathSuffix: "/proxies", method: "GET", json: proxiesJSON)
+        httpL.setResponse(pathSuffix: "/delay", method: "GET",
+                          json: #"{"STUB-NODE":120,"NODE-B":340}"#)   // SLOW-NODE 缺席 → 超时
+        let restL = MihomoRESTClient(http: httpL, port: 9090)
+        let results = (try? restL.testGroupLatency(group: "PROXY", testURL: "http://example/generate_204", timeoutMs: 5000)) ?? []
+        report.check(results.count == 3 && results.map { $0.node } == ["STUB-NODE", "NODE-B", "SLOW-NODE"],
+                     "09 latency:逐候选节点对齐输出(3 个,顺序同 all)")
+        report.check(results.first { $0.node == "STUB-NODE" }?.delayMs == 120,
+                     "09 latency:逐节点延迟解析(STUB-NODE=120ms)")
+        let slow = results.first { $0.node == "SLOW-NODE" }
+        report.check(slow?.delayMs == nil && slow?.timedOut == true,
+                     "09 latency:超时节点如实标注(SLOW-NODE delayMs=nil, timeout=true)")
+        // 测速 URL 构建含 group 段与 query。
+        report.check(httpL.requests.contains { $0.url.contains("/group/PROXY/delay?url=") && $0.url.contains("timeout=5000") },
+                     "09 latency:GET /group/PROXY/delay?url=&timeout=5000 URL 构建正确")
+
+        // —— (e) 四能力暴露:风险级 + cliAlias + 参数 schema(含 mode 的 allowedValues)——
+        let pp = FakeProcessPort()
+        let net = FakeNetworkConfigPort(initial: [])
+        let plugin = ProxyPlugin(processPort: pp, httpPort: FakeHTTPPort(), networkConfigPort: net, kernelPath: nil, controlPort: 9090)
+        let caps = plugin.capabilities()
+        func desc(_ id: String) -> CapabilityDescriptor? { caps.first { $0.descriptor.id == id }?.descriptor }
+
+        let gl = desc("proxy.groups.list")
+        report.check(gl?.risk == .safe && gl?.cliAlias == ["proxy", "groups"] && gl?.parameters.isEmpty == true,
+                     "09 能力暴露:proxy.groups.list=safe cliAlias[proxy,groups] 无入参")
+        let lt = desc("proxy.latency.test")
+        report.check(lt?.risk == .safe && lt?.cliAlias == ["proxy", "ping"], "09 能力暴露:proxy.latency.test=safe cliAlias[proxy,ping]")
+        report.check(lt?.parameters.first { $0.name == "timeout" }?.type == "number",
+                     "09 能力暴露:proxy.latency.test 的 timeout 声明为 number(强转基石)")
+        report.check(lt?.parameters.first { $0.name == "group" }?.required == true,
+                     "09 能力暴露:proxy.latency.test 的 group 必填")
+        let ms = desc("proxy.mode.set")
+        report.check(ms?.risk == .normal && ms?.cliAlias == ["proxy", "mode"], "09 能力暴露:proxy.mode.set=normal cliAlias[proxy,mode]")
+        report.check(ms?.parameters.first { $0.name == "mode" }?.allowedValues == ["rule", "global", "direct"],
+                     "09 能力暴露:proxy.mode.set 的 mode 声明 allowedValues[rule,global,direct]")
+        let ns = desc("proxy.node.select")
+        report.check(ns?.risk == .normal && ns?.cliAlias == ["proxy", "node"], "09 能力暴露:proxy.node.select=normal cliAlias[proxy,node]")
+        report.check(ns?.parameters.map { $0.name } == ["group", "node"] && ns?.parameters.allSatisfy { $0.required } == true,
+                     "09 能力暴露:proxy.node.select 参数 group+node 均必填")
+
+        // —— (f) 宿主侧防呆:超大**有限** timeout(1e300)→ handler 返回 invalid_params,绝不 `Int(Double)` 越界 trap 崩宿主 ——
+        //   守卫在 handler 早于任何 REST 调用触发,故 FakeHTTPPort 无预置也不会打到网络。
+        if let latencyHandler = caps.first(where: { $0.descriptor.id == "proxy.latency.test" })?.handler {
+            switch latencyHandler(.object(["group": .string("PROXY"), "timeout": .number(1e300)])) {
+            case .failure(let err):
+                report.check(err.code == WireErrorCode.invalidParams,
+                             "09 防呆:超大有限 timeout(1e300)→ invalid_params(不 Int(Double) 越界崩宿主)")
+            case .success:
+                report.check(false, "09 防呆:超大 timeout(1e300)应被拒为 invalid_params,而非放行")
+            }
+        } else {
+            report.check(false, "09 防呆:应能取到 proxy.latency.test 的 handler")
         }
     }
 }

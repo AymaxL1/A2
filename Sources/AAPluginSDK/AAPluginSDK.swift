@@ -101,6 +101,7 @@ public struct HTTPResponse: Sendable, Equatable {
 public enum HTTPMethod {
     public static let get = "GET"
     public static let put = "PUT"
+    public static let patch = "PATCH"
     public static let post = "POST"
 }
 
