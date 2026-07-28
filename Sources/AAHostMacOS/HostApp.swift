@@ -2,11 +2,34 @@
 //
 // 入口用 @main @MainActor struct(顶层代码非 MainActor 上下文,不能在 main.swift 顶层构造 @MainActor 对象;S1/S2 已验证)。
 // socket 路径读 Contracts 常量(AAPaths),父目录启动时自建,旧 socket 由 server bind 前 unlink。
-// 本票(02)只做 list:菜单栏只读展示已注册能力 + UDS 应答 list;dangerous 确认弹窗归 03 票。
+//
+// 04 票:宿主向 Registry 注入 dangerous 确认回调(真 GUI 确认)。实现照 S2 spike 已真机点验的线程模型:
+//   后台连接处理线程需弹窗时 `DispatchQueue.main.sync` 同步切主线程 → `NSApp.activate` → critical `NSAlert`
+//   `runModal` → 「确认执行」=true /「取消」=false,再把 Bool 带回后台线程写响应(无死锁)。
 
 import AppKit
 import AAContracts
 import AAHostRuntime
+
+/// dangerous 确认的 test-only 自动化档位(读环境变量 `AA_CONFIRM_AUTO`)。
+///
+/// ⚠️ **test-only,12/13 真机分发前必须移除或编译期门控**:headless check.sh 靠它无人值守跑 deny/approve 两分支
+///    (不弹窗、即时返回),绝不能让生产默认放行。安全缺省是 `.interactive`——未设该变量时走真 NSAlert,
+///    人不点就阻塞(天然 fail-safe,不会静默批准)。
+private enum AutoConfirm {
+    case approve       // AA_CONFIRM_AUTO=approve → 回调直接返 true(不弹窗)
+    case deny          // AA_CONFIRM_AUTO=deny    → 回调直接返 false(不弹窗)
+    case interactive   // 未设 → 走真 NSAlert(生产缺省)
+
+    /// 每次确认时按需读取(进程级环境变量,后台线程读取安全)。
+    static func current() -> AutoConfirm {
+        switch ProcessInfo.processInfo.environment["AA_CONFIRM_AUTO"] {
+        case "approve": return .approve
+        case "deny":    return .deny
+        default:        return .interactive
+        }
+    }
+}
 
 /// 宿主日志助手:每行后 fflush(stdout 重定向到文件时为块缓冲,不 flush 会看不到实时日志)。
 /// 串行化避免多线程 print 交错(accept/handle 都在后台线程)。
@@ -27,11 +50,28 @@ func hostFatal(_ msg: String) -> Never {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let registry = Registry()
+    // registry 在 applicationDidFinishLaunching 里构造(需注入引用 self 的确认回调,故不能在属性初始化时建)。
+    var registry: Registry!
     var server: UDSServer!
     var statusItem: NSStatusItem!
 
+    /// 可选无人值守自动拒绝定时器秒数(手动/真机跑用,防夜里留挂着的对话框)。读 `AA_AUTO_DENY_SECONDS`。
+    /// 仅在 `.interactive`(真弹窗)分支生效;headless 门禁用的是 `AA_CONFIRM_AUTO`(不弹窗),二者不冲突。
+    ///
+    /// ⚠️ **test-only,与 `AA_CONFIRM_AUTO` 同口径:12/13 真机分发前必须移除或编译期门控**。
+    ///    方向上安全(缺省 nil = 不自动决定;设了也只会到点 deny,绝不自动批准),但不该随产品出厂。
+    let autoDenySeconds: Double? = {
+        if let s = ProcessInfo.processInfo.environment["AA_AUTO_DENY_SECONDS"], let v = Double(s) { return v }
+        return nil
+    }()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 0) 构造注册表并注入 dangerous 确认回调。回调 @Sendable:被后台连接处理线程调用,内部再切主线程弹窗。
+        //    捕获 weak self(AppDelegate 为 @MainActor → Sendable),避免宿主生命周期与闭包互持。
+        registry = Registry(confirmDangerous: { [weak self] descriptor in
+            self?.confirmDangerous(descriptor) ?? false
+        })
+
         // 1) socket 路径与父目录(路径常量集中在 Contracts.AAPaths);父目录建不出即快速失败,不带病常驻
         let sockPath = AAPaths.socketPath
         do {
@@ -54,6 +94,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
 
         NSApp.setActivationPolicy(.accessory) // 无 Dock 图标,菜单栏常驻
+        switch AutoConfirm.current() {
+        case .approve: hostLog("dangerous 确认模式: AA_CONFIRM_AUTO=approve(test-only 自动批准,不弹窗)")
+        case .deny:    hostLog("dangerous 确认模式: AA_CONFIRM_AUTO=deny(test-only 自动拒绝,不弹窗)")
+        case .interactive:
+            hostLog("dangerous 确认模式: interactive(真 NSAlert 确认)"
+                    + (autoDenySeconds.map { " · AA_AUTO_DENY_SECONDS=\($0)s 自动拒绝" } ?? ""))
+        }
         hostLog("启动完成。")
     }
 
@@ -73,6 +120,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    // ============ dangerous 宿主确认(注入进 Registry 的回调实现)============
+
+    /// dangerous 确认回调实现。从后台连接处理线程(经 Registry.invoke → 注入的 @Sendable 闭包)同步调用。
+    /// `nonisolated`:@Sendable 闭包处于非隔离上下文,不能同步调 @MainActor 方法;故本入口与切主线程桥都是 nonisolated,
+    ///   真正的 @MainActor 弹窗代码(showConfirmAlert)在主线程上经 `MainActor.assumeIsolated` 访问。
+    ///
+    /// ⚠️ **test-only env seam(`AA_CONFIRM_AUTO`)**:approve→true / deny→false,均不弹窗、即时返回,
+    ///    供 headless check.sh 无人值守跑两分支;未设 → 走真 NSAlert(生产缺省,fail-safe)。
+    ///    **12/13 真机分发前必须移除或编译期门控**(见 `AutoConfirm` 注释),绝不能让生产默认放行。
+    nonisolated private func confirmDangerous(_ descriptor: CapabilityDescriptor) -> Bool {
+        switch AutoConfirm.current() {
+        case .approve:
+            hostLog("AA_CONFIRM_AUTO=approve → 自动批准(test-only,不弹窗)[\(descriptor.id)]")
+            return true
+        case .deny:
+            hostLog("AA_CONFIRM_AUTO=deny → 自动拒绝(test-only,不弹窗)[\(descriptor.id)]")
+            return false
+        case .interactive:
+            return confirmDangerousOnMain(descriptor)
+        }
+    }
+
+    /// 后台线程入口:同步切回主线程弹窗并取回结果(阻塞本连接直到用户/自动决定)。照 S2 已真机点验的模型。
+    /// 主线程内用 `MainActor.assumeIsolated` 进入 @MainActor 隔离域调 showConfirmAlert(此时确在主线程,断言成立)。
+    nonisolated private func confirmDangerousOnMain(_ descriptor: CapabilityDescriptor) -> Bool {
+        let approved: Bool
+        if Thread.isMainThread {
+            approved = MainActor.assumeIsolated { self.showConfirmAlert(descriptor) }
+        } else {
+            approved = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { self.showConfirmAlert(descriptor) }
+            }
+        }
+        hostLog("dangerous 确认结果 [\(descriptor.id)]: \(approved ? "approved" : "denied")")
+        return approved
+    }
+
+    /// 主线程弹 dangerous 确认框(critical NSAlert)。accessory app 弹窗前必须 activate 带到前台。
+    /// 支持 `AA_AUTO_DENY_SECONDS` 定时自动拒绝(定时器须加进 `.modalPanel` 模式,否则模态循环里不触发)。
+    ///
+    /// 已知限制(记债,本票不改逻辑):并发的两个 dangerous 调用会在主线程嵌套 `runModal`,
+    /// auto-deny 定时器的 `stopModal` 停的是**最内层**模态会话,理论上可能误关到另一个弹窗。
+    /// 属性是 fail-safe——最坏只会**多 deny**,绝不会误批(误关等价于该会话被拒)。
+    /// 将来 dangerous 进入真实业务用例(如 10 票换订阅源)时,应把 dangerous 确认**串行化**
+    /// (同一时刻只允许一个确认 modal,如用串行队列/信号量把并发确认排队),从根上消除嵌套 modal。
+    private func showConfirmAlert(_ descriptor: CapabilityDescriptor) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "确认执行危险能力:\(descriptor.id)"
+        alert.informativeText = "\(descriptor.summary)\n\n这是 dangerous 档能力,确认只在宿主 GUI 完成,CLI 不会代你决定。"
+        alert.addButton(withTitle: "确认执行") // .alertFirstButtonReturn
+        alert.addButton(withTitle: "取消")      // .alertSecondButtonReturn
+
+        var timer: Timer?
+        if let secs = autoDenySeconds {
+            let t = Timer(timeInterval: secs, repeats: false) { _ in
+                hostLog("自动拒绝计时到(\(secs)s),关闭弹窗")
+                NSApp.stopModal(withCode: .alertSecondButtonReturn)
+            }
+            RunLoop.main.add(t, forMode: .modalPanel)
+            RunLoop.main.add(t, forMode: .default)
+            timer = t
+        }
+
+        let resp = alert.runModal()
+        timer?.invalidate()
+        return resp == .alertFirstButtonReturn // 只有「确认执行」= true;其余(含定时自动拒绝)= false
     }
 }
 

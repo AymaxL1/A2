@@ -3,8 +3,13 @@
 //
 // 本票(03)在 02 的 list 纯逻辑测试上追加:
 //   * invoke 全路径:未知能力 / 缺必填 / 类型不符 / 业务失败 / safe 成功 / normal 成功(零 GUI);
-//   * describe 拿到 parameters;dangerous 分支返回 not_implemented(留 seam 给 04);
-//   * JSONValue 经 Codable 往返稳定;退出码映射表(AAExitCode.forErrorCode)逐码正确。
+//   * describe 拿到 parameters;JSONValue 经 Codable 往返稳定;退出码映射表(AAExitCode.forErrorCode)逐码正确。
+//
+// 04 票追加(dangerous 宿主确认的纯逻辑证明,不起宿主 / 不碰 GUI):确认策略是 Runtime 纯逻辑,可用假件驱动三分支——
+//   * 假 confirm 返 true  → dangerous invoke 执行 handler 成功;
+//   * 假 confirm 返 false → denied,且 handler 绝不执行;
+//   * confirm 为 nil(无 GUI 可用)→ fail-closed denied,且 handler 绝不执行(安全保底断言)。
+// 「绝不执行」用注入计数器的假 handler 反证(拒绝分支计数须为 0)。
 // 全程不起真宿主、不碰 UDS、不 import AppKit。
 
 import Foundation
@@ -38,7 +43,7 @@ public enum RegistryConformanceTests {
         runListTests(&report)
         runDescribeTests(&report)
         runInvokeTests(&report)
-        runDangerousSeamTest(&report)
+        runDangerousConfirmTests(&report)
         runContractRoundTripTests(&report)
         runExitCodeMappingTests(&report)
         return report
@@ -50,6 +55,8 @@ public enum RegistryConformanceTests {
         report.check(!caps.isEmpty, "默认注册表 list() 非空")
         report.check(caps.contains { $0.id == "demo.echo" }, "list() 含 demo.echo")
         report.check(caps.contains { $0.id == "demo.note.set" }, "list() 含 demo.note.set(normal demo)")
+        report.check(caps.contains { $0.id == "demo.wipe" && $0.risk == .dangerous },
+                     "list() 含 demo.wipe(dangerous demo,04 票新增)")
         if let echo = caps.first(where: { $0.id == "demo.echo" }) {
             report.check(echo.risk == .safe, "demo.echo 风险档为 safe")
             report.check(echo.schemaSummary != nil, "demo.echo 携带 schemaSummary")
@@ -122,12 +129,39 @@ public enum RegistryConformanceTests {
         }
     }
 
-    // ④ dangerous seam:注入一个 dangerous 假件,invoke 到它返回 not_implemented(留给 04)
-    private static func runDangerousSeamTest(_ report: inout TestReport) {
-        let registry = Registry(capabilities: [fakeCapability(id: "fake.danger", risk: .dangerous)])
-        report.check(errorCode(registry.invoke(capabilityID: "fake.danger", input: nil))
-                        == WireErrorCode.notImplemented,
-                     "invoke dangerous 能力 → not_implemented(04 票 seam)")
+    // ④ dangerous 宿主确认(04 票安全核):确认策略是 Runtime 纯逻辑,用假 confirm 驱动三分支。
+    //    「绝不执行」用注入计数器的假 handler 反证:拒绝分支计数须为 0,批准分支计数须为 1。
+    private static func runDangerousConfirmTests(_ report: inout TestReport) {
+        // 构造一个 dangerous 假件:handler 每被调一次即 bump 计数,并回执哨兵成功值。
+        func makeRegistry(confirm: ConfirmDangerous?, counter: CallCounter) -> Registry {
+            let cap = Capability(
+                descriptor: CapabilityDescriptor(id: "fake.danger", risk: .dangerous, summary: "假件危险能力"),
+                handler: { _ in counter.bump(); return .success(.object(["executed": .bool(true)])) }
+            )
+            return Registry(capabilities: [cap], confirmDangerous: confirm)
+        }
+
+        // 分支①:假 confirm 返 true → 批准 → 执行 handler 成功,且恰执行一次。
+        let c1 = CallCounter()
+        switch makeRegistry(confirm: { _ in true }, counter: c1).invoke(capabilityID: "fake.danger", input: nil) {
+        case .success(let out):
+            report.check(out.objectValue?["executed"] == .bool(true), "dangerous + 假 confirm=true → 执行 handler 成功")
+        case .failure:
+            report.check(false, "dangerous + 假 confirm=true 应成功执行")
+        }
+        report.check(c1.count == 1, "假 confirm=true 时 handler 恰执行一次")
+
+        // 分支②:假 confirm 返 false → denied,且 handler 绝不执行。
+        let c2 = CallCounter()
+        report.check(errorCode(makeRegistry(confirm: { _ in false }, counter: c2).invoke(capabilityID: "fake.danger", input: nil))
+                        == WireErrorCode.denied, "dangerous + 假 confirm=false → denied")
+        report.check(c2.count == 0, "假 confirm=false 时 handler 绝不执行(未被绕过)")
+
+        // 分支③(安全保底):confirm 为 nil(无 GUI 可用)→ fail-closed denied,且 handler 绝不执行。
+        let c3 = CallCounter()
+        report.check(errorCode(makeRegistry(confirm: nil, counter: c3).invoke(capabilityID: "fake.danger", input: nil))
+                        == WireErrorCode.denied, "dangerous + confirm=nil → fail-closed denied(无 GUI 可用时拒绝执行)")
+        report.check(c3.count == 0, "confirm=nil 时 handler 绝不执行(fail-closed 保底)")
     }
 
     // ⑤ 契约往返:RiskLevel 与 JSONValue 经 JSON 编解码稳定
@@ -153,6 +187,13 @@ public enum RegistryConformanceTests {
     }
 
     // ============ 助手 ============
+
+    /// 执行计数器(证明 dangerous handler「是否真被执行」)。
+    /// `@unchecked Sendable`:测试同步单线程驱动,无并发访问;仅为满足 `@Sendable` handler 可捕获引用类型。
+    private final class CallCounter: @unchecked Sendable {
+        private(set) var count = 0
+        func bump() { count += 1 }
+    }
 
     /// 构造一个只用于 list/seam 测试的假件能力(handler 回显固定值)。
     private static func fakeCapability(id: String, risk: RiskLevel) -> Capability {

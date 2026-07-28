@@ -4,13 +4,24 @@
 //
 // 03 票:注册表从「只有 descriptor」升级为「descriptor + handler」。invoke 是宿主侧集中校验的唯一入口
 // (客户端不可绕过):①未知能力 ②schema 校验(必填/类型)③按 risk 路由 ④业务错误结构化。
-// safe/normal 直接执行 handler(normal 零 GUI 打断);dangerous 本票不做,留 seam 给 04 票(确认回调注入)。
+// safe/normal 直接执行 handler(normal 零 GUI 打断);dangerous 03 只留 seam。
+//
+// 04 票:把 dangerous seam 填实为「宿主确认纵切」的安全核。确认策略是本层纯逻辑(安全核在 Runtime,平台无关可单测):
+//   * 注入点 `confirmDangerous`(宿主注入真 GUI 确认;测试注入假件)。
+//   * invoke 的 dangerous 分支在路由层强制确认——任何请求路径(aa / 裸 UDS 直连)都必经此处,不可绕过。
+//   * 三分支:nil(无 GUI 可用)→ fail-closed denied 绝不执行;false → denied;true → 执行 handler。
 
 import AAContracts
 
 /// 能力处理器:纯闭包,吃 input(可空,已过 schema 校验)吐输出或业务错误。
 /// - `@Sendable`:handler 不得捕获可变状态(demo 用不可变/值语义),从而 `Capability`/`Registry` 天然 Sendable。
 public typealias CapabilityHandler = @Sendable (JSONValue?) -> Result<JSONValue, WireError>
+
+/// dangerous 能力的宿主确认回调:吃描述符(供 GUI 展示 id/summary),吐 Bool(true=批准执行 / false=拒绝)。
+/// - 由宿主(AAHostMacOS)注入真实 GUI 确认(主线程 NSAlert);测试注入假件(直接返 true/false)。
+/// - `@Sendable`:确认回调会被后台连接处理线程调用(宿主实现内部再 `DispatchQueue.main.sync` 切主线程弹窗),
+///   标 `@Sendable` 才能让持有它的 `Registry` 维持 `Sendable`(03 立的「不可变存储 → 天然 Sendable」不变式)。
+public typealias ConfirmDangerous = @Sendable (CapabilityDescriptor) -> Bool
 
 /// 一个已注册能力 = 描述符 + 处理器。
 public struct Capability: Sendable {
@@ -39,9 +50,8 @@ public enum InvokeOutcome: Sendable, Equatable {
 /// - 构造注入即「测试基建的 seam」:AAHostTestKit 可注入自定义能力集(含假 handler)直接驱动 invoke,
 ///   不起真宿主、不碰 UDS、不 import AppKit。
 public final class Registry: Sendable {
-    /// 03 票 demo 能力集:一条 safe(`demo.echo`)+ 一条 normal(`demo.note.set`)。
-    /// 两者都带结构化 parameters,让 agent 经 describe 即可构造合法调用。dangerous demo 本票不注册
-    /// (invoke 的 dangerous 分支仍留 seam,见下)。
+    /// demo 能力集:一条 safe(`demo.echo`)+ 一条 normal(`demo.note.set`)+ 一条 dangerous(`demo.wipe`,04 票新增)。
+    /// 三者都带结构化 parameters,让 agent 经 describe 即可构造合法调用。
     public static let demoCapabilities: [Capability] = [
         Capability(
             descriptor: CapabilityDescriptor(
@@ -86,15 +96,42 @@ public final class Registry: Sendable {
                 }
                 return .success(.object(["set": .bool(true), "key": k, "value": v]))
             }
+        ),
+        Capability(
+            descriptor: CapabilityDescriptor(
+                id: "demo.wipe",
+                risk: .dangerous,
+                summary: "危险操作演示:清除目标(dangerous——须经宿主 GUI 最终确认后方可执行;拒绝则不执行)",
+                schemaSummary: "input: { target?: String } → output: { wiped: true, target }",
+                parameters: [
+                    // target 设为可选:让 `aa capabilities call demo.wipe`(不带 input)也能触发确认路径;
+                    // 校验层无必填参数即放行,确认才是唯一门槛。
+                    ParameterSpec(name: "target", type: "string", required: false,
+                                  description: "可选:声明要清除的目标名(仅演示,不做真实副作用)")
+                ]
+            ),
+            handler: { input in
+                // 只有在宿主确认「批准」后,invoke 才会调到这里(见下 dangerous 分支)。demo 不做真实破坏,
+                // 只回执一个「已执行」的结构化结果,证明批准分支确实执行了 handler。
+                let target = input?.objectValue?["target"]?.stringValue ?? "(未指定)"
+                return .success(.object(["wiped": .bool(true), "target": .string(target)]))
+            }
         )
     ]
 
     private let capabilities: [Capability]
     private let byID: [String: Capability]
+    /// dangerous 确认回调(注入点)。nil 表示「无 GUI 确认通道可用」——invoke 对 dangerous 能力 fail-closed 拒绝。
+    /// 宿主注入真 GUI 确认;测试注入假件。存储为不可变 `let` + `@Sendable` 闭包,维持 `Registry` 的 Sendable 不变式。
+    private let confirmDangerous: ConfirmDangerous?
 
-    /// - Parameter capabilities: 待注册的能力集,缺省为 `demoCapabilities`。
-    public init(capabilities: [Capability] = Registry.demoCapabilities) {
+    /// - Parameters:
+    ///   - capabilities: 待注册的能力集,缺省为 `demoCapabilities`。
+    ///   - confirmDangerous: dangerous 能力的确认回调(缺省 nil → 无 GUI 时 fail-closed 拒绝执行)。
+    public init(capabilities: [Capability] = Registry.demoCapabilities,
+                confirmDangerous: ConfirmDangerous? = nil) {
         self.capabilities = capabilities
+        self.confirmDangerous = confirmDangerous
         var map = [String: Capability]()
         for c in capabilities { map[c.descriptor.id] = c }
         self.byID = map
@@ -133,10 +170,26 @@ public final class Registry: Sendable {
                 return .failure(bizErr)
             }
         case .dangerous:
-            // 本票不做:dangerous 需宿主 GUI 最终确认。留 seam 给 04 票(注入确认回调后在此路由)。
-            // 03 未注册任何 dangerous demo;此分支仅为防御性 seam(有人注入 dangerous 能力时明确不静默执行)。
-            return .failure(WireError(code: WireErrorCode.notImplemented,
-                                      detail: "dangerous 能力的宿主确认留待 04 票: \(capabilityID)"))
+            // dangerous 档:安全核在路由层强制「宿主确认」。此处是任何请求路径的唯一必经点
+            // (aa 与裸 UDS 直连都汇到 invoke),客户端无法绕过确认。三分支(顺序即安全语义):
+            //   ① confirmDangerous 为 nil(无 GUI 可用)→ fail-closed:直接 denied,绝不执行 handler(保底安全属性)。
+            //   ② 回调返回 false(用户/自动拒绝)→ denied,绝不执行。
+            //   ③ 回调返回 true(用户批准)→ 执行 handler,返回其结果(成功或业务错误)。
+            guard let confirm = confirmDangerous else {
+                return .failure(WireError(code: WireErrorCode.denied,
+                                          detail: "dangerous 能力被拒:无 GUI 确认通道可用(fail-closed),拒绝执行 \(capabilityID)"))
+            }
+            guard confirm(cap.descriptor) else {
+                return .failure(WireError(code: WireErrorCode.denied,
+                                          detail: "dangerous 能力被拒:宿主确认未通过 \(capabilityID)"))
+            }
+            // 批准后才执行 handler(与 safe/normal 相同的成功/业务错误收敛)。
+            switch cap.handler(input) {
+            case .success(let output):
+                return .success(output)
+            case .failure(let bizErr):
+                return .failure(bizErr)
+            }
         }
     }
 

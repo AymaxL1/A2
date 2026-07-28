@@ -22,6 +22,15 @@
 #   * 阶段 B 增:describe/call E2E、schema 校验失败(6)、未知能力(6)、业务失败(5)、用法错(1)、
 #     超时(3,借 python3 假监听器 + AA_TIMEOUT_SECONDS)、host 不可达(4)、帮助退出码表逐码断言。
 #
+# 04 票增量(dangerous 宿主确认纵切):
+#   * AAHostRuntime.Registry 填实 dangerous 分支(注入 confirmDangerous;nil→fail-closed denied / false→denied / true→执行),
+#     并注册 dangerous demo 能力 demo.wipe。
+#   * AAHostMacOS 注入真 GUI 确认(NSAlert)+ test-only env seam AA_CONFIRM_AUTO(approve/deny 不弹窗即时返回)。
+#   * AAHostTestKit 加三分支纯逻辑断言(含「confirm=nil fail-closed 绝不执行」保底 + 计数器反证)。
+#   * 阶段 B 增:纯逻辑三分支断言;E2E 无人值守两分支(AA_CONFIRM_AUTO=deny→exit2 / approve→exit0);
+#     反向不可绕过(裸 UDS python3 直连构造 capabilities.call demo.wipe → 仍 denied、未执行)。
+#   * headless 下 GUI 弹窗不能真阻塞:靠 AA_CONFIRM_AUTO 让回调不弹窗即时返回,check.sh 不会挂在对话框上。
+#
 # 接口契约(11 票换成 swift build + swift test 引擎时保持不变):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
@@ -61,6 +70,7 @@ TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
+  pkill -f "raw_uds_client.py" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
 }
 trap cleanup EXIT
@@ -186,6 +196,10 @@ OUT="$("$TESTRUNNER" 2>&1)"; RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 assert_exit 0 $RC "registry-tests 全绿退出码"
 assert_contains "$OUT" "demo.echo" "纯逻辑测试覆盖 demo.echo"
+# 04 票安全核三分支(纯逻辑,假件驱动,不起宿主):
+assert_contains "$OUT" "假 confirm=true 时 handler 恰执行一次" "纯逻辑:dangerous+confirm=true → 执行 handler"
+assert_contains "$OUT" "假 confirm=false → denied" "纯逻辑:dangerous+confirm=false → denied"
+assert_contains "$OUT" "handler 绝不执行(fail-closed 保底)" "纯逻辑:confirm=nil → fail-closed 绝不执行(安全保底)"
 assert_contains "$OUT" "failed=0" "纯逻辑测试无失败项"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
@@ -297,6 +311,92 @@ fi
 
 # 清场:杀宿主 + 删 socket(trap 亦会兜底)
 pkill -f "$KILLPAT" 2>/dev/null
+sleep 1
+rm -f "$SOCK"
+
+# --- 断言组 2''':dangerous 宿主确认纵切 E2E(04 票主体:无人值守两分支 + 反向不可绕过)---
+echo "--- 断言组 2''':dangerous 宿主确认 E2E(04 票)---"
+
+# 裸 UDS 直连客户端(python3):连 socket → 写一行 JSON 请求 → 读一行响应 → 打印。用于「绕过 aa 直连」反向证明。
+RAW_CLIENT="$BUILD/raw_uds_client.py"
+cat > "$RAW_CLIENT" <<'PY'
+import socket, sys
+sock_path, req = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(10)
+s.connect(sock_path)
+s.sendall((req + "\n").encode("utf-8"))
+buf = b""
+while b"\n" not in buf:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    buf += chunk
+sys.stdout.write(buf.decode("utf-8", "replace"))
+s.close()
+PY
+
+# 起宿主(带指定 AA_CONFIRM_AUTO)并等 socket 就绪。置全局 HOST_PID / SOCK_UP。$1=模式(deny/approve)。
+start_host_confirm() {
+  local mode="$1"
+  pkill -f "$KILLPAT" 2>/dev/null
+  sleep 1
+  rm -f "$SOCK"
+  AA_CONFIRM_AUTO="$mode" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+  HOST_PID=$!
+  disown "$HOST_PID" 2>/dev/null || true
+  SOCK_UP=0
+  for _ in $(seq 1 100); do
+    [ -S "$SOCK" ] && { SOCK_UP=1; break; }
+    kill -0 "$HOST_PID" 2>/dev/null || break
+    sleep 0.2
+  done
+}
+
+# (D1) AA_CONFIRM_AUTO=deny 起宿主 → aa call demo.wipe → 退出码 2(denied)
+start_host_confirm deny
+if [ "$SOCK_UP" -eq 1 ]; then
+  OUT="$("$BIN/aa" capabilities call demo.wipe --json 2>/dev/null)"; RC=$?
+  echo "    deny 分支输出: $OUT"
+  assert_exit 2 $RC "AA_CONFIRM_AUTO=deny → aa call demo.wipe 退出码=2(denied)"
+  assert_contains "$OUT" '"code":"denied"' "deny 分支统一错误信封 error.code=denied"
+  # 反证「未执行」:deny 分支 aa 响应里绝不能出现 handler 成功标志 wiped(与裸 UDS D3 同等严谨度)
+  if printf '%s' "$OUT" | grep -qF -- '"wiped"'; then
+    echo "FAIL: deny 分支 aa 响应竟出现 wiped —— 疑似 handler 被执行!"; FAIL=$((FAIL+1))
+  else
+    echo "PASS: deny 分支 aa 响应未出现执行结果 wiped(handler 绝不执行)"; PASS=$((PASS+1))
+  fi
+
+  # (D3) 反向不可绕过:裸 UDS 直连(python3)构造 capabilities.call demo.wipe → 仍 denied、未执行
+  RAW="$(python3 "$RAW_CLIENT" "$SOCK" '{"op":"capabilities.call","capability":"demo.wipe","input":{}}' 2>&1)"
+  echo "    裸 UDS 直连响应: $RAW"
+  assert_contains "$RAW" '"code":"denied"' "裸 UDS 直连 demo.wipe 仍被 denied(绕过 aa 也躲不过确认)"
+  assert_contains "$RAW" '"ok":false' "裸 UDS 直连响应 ok=false"
+  # 反证「未执行」:响应里绝不能出现 handler 成功标志 wiped(用显式 grep 退出码判,杜绝假绿)
+  if printf '%s' "$RAW" | grep -qF -- '"wiped"'; then
+    echo "FAIL: 裸 UDS 直连 demo.wipe 竟出现 wiped —— 疑似绕过确认执行了!"; FAIL=$((FAIL+1))
+  else
+    echo "PASS: 裸 UDS 直连 demo.wipe 未出现执行结果 wiped(确认未被绕过、未执行)"; PASS=$((PASS+1))
+  fi
+else
+  echo "FAIL: deny 宿主未就绪,跳过 deny/反向断言(计为失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# (D2) AA_CONFIRM_AUTO=approve 起宿主 → aa call demo.wipe → 退出码 0 + 结果 wiped=true(handler 执行成功)
+start_host_confirm approve
+if [ "$SOCK_UP" -eq 1 ]; then
+  OUT="$("$BIN/aa" capabilities call demo.wipe --input '{"target":"disk0"}' --json 2>/dev/null)"; RC=$?
+  echo "    approve 分支输出: $OUT"
+  assert_exit 0 $RC "AA_CONFIRM_AUTO=approve → aa call demo.wipe 退出码=0(批准执行)"
+  assert_contains "$OUT" '"wiped":true' "approve 分支结果 wiped=true(批准后 handler 执行成功)"
+  assert_contains "$OUT" '"target":"disk0"' "approve 分支结果回执 target=disk0"
+else
+  echo "FAIL: approve 宿主未就绪,跳过 approve 断言(计为失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# 清场:杀宿主 + 删 socket(trap 亦兜底)
+pkill -f "$KILLPAT" 2>/dev/null
+pkill -f "raw_uds_client.py" 2>/dev/null
 sleep 1
 rm -f "$SOCK"
 

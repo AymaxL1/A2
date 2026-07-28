@@ -6,7 +6,7 @@
 // 锁定表(不要改动语义/数值):
 //   0 成功
 //   1 用法错(客户端侧 CLI 参数错/本地错,未触达宿主语义)
-//   2 denied(dangerous 被拒;本票不产生,留给 04 票)
+//   2 denied(dangerous 被拒:宿主确认未通过 / 无 GUI 可用时 fail-closed)
 //   3 超时
 //   4 宿主不可达
 //   5 能力业务失败(能力执行了但返回错误)
@@ -18,7 +18,7 @@ public enum AAExitCode {
     public static let success: Int32 = 0
     /// 1 用法错(CLI 参数/本地错,未触达宿主语义)。
     public static let usage: Int32 = 1
-    /// 2 denied(dangerous 被拒;04 票实现,本票不产生)。
+    /// 2 denied(dangerous 被拒:宿主确认未通过 / 无 GUI 可用时 fail-closed)。
     public static let denied: Int32 = 2
     /// 3 超时。
     public static let timeout: Int32 = 3
@@ -34,7 +34,7 @@ public enum AAExitCode {
     public static let semantics: [(code: Int32, label: String)] = [
         (success,           "成功"),
         (usage,             "用法错(CLI 参数/本地错,未触达宿主语义)"),
-        (denied,            "denied(dangerous 被拒;04 票实现,本票不产生)"),
+        (denied,            "denied(dangerous 被拒:宿主确认未通过 / 无 GUI 可用时 fail-closed)"),
         (timeout,           "超时"),
         (hostUnreachable,   "宿主不可达"),
         (capabilityFailure, "能力业务失败(能力执行了但返回错误)"),
