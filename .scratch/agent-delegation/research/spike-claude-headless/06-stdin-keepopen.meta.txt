@@ -1,0 +1,7 @@
+cmd: cd '/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-claude-headless/sandbox/s6' && '/usr/local/bin/claude' -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions --model sonnet --effort low < <(printf '%s\n' '{"type":"user","message":{"role":"user","content":"Reply with the word OK"}}'; sleep 120)
+cap_secs: 45
+waited_secs: 45
+natural_exit: no
+sigkill_needed: no(TERM足够)
+exit_code: 143
+duration_s: 48

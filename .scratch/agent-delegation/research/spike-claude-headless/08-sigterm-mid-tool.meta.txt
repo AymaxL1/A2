@@ -1,0 +1,13 @@
+--- process tree just before SIGTERM (pgid=42755) ---
+  PID  PPID  PGID STAT COMMAND
+42755 42751 42755 SN   bash -c cd '/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-claude-headless/sandbox/s8' && '/usr/local/bin/claude' -p 'Run the shell command: sleep 8 -- then reply with the word OK' --output-format stream-json --verbose --permission-mode bypassPermissions --model sonnet --effort low < /dev/null
+42757 42755 42755 SN   /usr/local/bin/claude -p Run the shell command: sleep 8 -- then reply with the word OK --output-format stream-json --verbose --permission-mode bypassPermissions --model sonnet --effort low
+--- process tree scan AFTER kill (searching leftover pgid=42755 members, should be empty) ---
+  PID  PPID  PGID STAT COMMAND
+--- broader scan for any leftover 'sleep 8' anywhere (orphan check) ---
+cmd: cd '/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-claude-headless/sandbox/s8' && '/usr/local/bin/claude' -p 'Run the shell command: sleep 8 -- then reply with the word OK' --output-format stream-json --verbose --permission-mode bypassPermissions --model sonnet --effort low < /dev/null
+term_sent_after_s: 6
+graceful_exit_before_sigkill: yes
+sigkill_needed: no
+exit_code: 143
+total_duration_s: 6

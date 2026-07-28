@@ -34,6 +34,9 @@ Label: wayfinder:map
 - **会话续接**:V1 不做 resume;session-id 拿到就记进任务工作区元数据(为将来留门);失败重跑一律全新会话。
 - **任务产物**:每次委托一个任务工作区目录,内部结构单独设计(03 票,可维护性为纲)。
 - [03 任务工作区目录结构](issues/03-task-workspace-design.md) — 已定稿:根 `~/.aa/agent-tasks/`,目录名即 task-id(时间+slug+hex4);meta.json 单一真相源(schema_version 演进);raw/normalized 双日志流永不互写;主产物 `report.html`(agent 直写自包含 HTML,文本兜底,通知直开);手动 prune 只删终态;详见[结构提案](research/task-workspace-proposal.md)。
+- [01 Claude headless spike](issues/01-spike-claude-headless.md) — 实测(8 次真调, [findings](research/spike-claude-headless/findings.md)):5 型顶层事件(`tool_result` 顶层 type 竟是 `user`);`session_id` 首条 `system/init` 即定;stream-json 写完 prompt **进程不自退**,需显式关 stdin;bypass 是**能力开关非安全开关且仅两档**(全放行/无差别拒,无「仅 cwd」中间档);不加 bypass = 同步自动拒(合成 `is_error` tool_result + `permission_denials[]`),**非挂起**;`control_request` 8 次零命中(与 multica 报告分歧,判为版本漂移,V1 免实现留兜底);中断进程组 SIGTERM <1s 净退 exit 143,但**先补 `[Request interrupted]` 再落 result**,drain 要读到底;终态**不能只看 subtype**(model 错时 exit1 但 subtype 仍 success),须联合 `is_error`/`terminal_reason`;**cwd 非安全边界**(`../` 与 `/tmp` 越界写全成功);无头子进程**默认继承宿主机全部插件/技能面**,须 `--tools`/`--strict-mcp-config` 收紧。
+- [02 Codex exec spike](issues/02-spike-codex-exec.md) — 实测(8 次真调, [findings](research/spike-codex-exec/findings.md)):扁平 NDJSON(`thread.started`/`turn.*`/`item.*`);**session id 就是首行 `thread.started.thread_id`**(不必等文件落盘,比 multica 等 rollout 简单);**每任务独立 `$CODEX_HOME`(只拷 `auth.json` 不拷 `config.toml`)隔离实测可行且 fail-closed**(缺 auth 直接 401 不回退真身份)——委托 codex 不污染用户全局配置的姿态确定;`sandbox_mode` 走 `-s` flag 或 `-c` 覆盖;**审批被拒是「静默空气墙」**(连 `item.started` 都不出现,无可编程识别的拒绝事件,只能事后 diff FS);**workspace-write 真的拦 cwd 上级越界写**(codex 有真沙箱);中断进程组 SIGTERM 整树瞬死 exit -15,**中断不产终态 JSON**须适配层自标 aborted;失败 exit1 错因需 parse 双层编码 JSON,**stderr 有 ERROR 非失败判据**(alpha 构建噪音);**exec 无条件读 stdin 须显式 `stdin=/dev/null`** 否则静默挂起;失败网络重连可达 40+s,看门狗留余量。
+- **⚠️ 两家三处行为不对称(适配层核心存在理由,须写进 spec 约束)**:①**沙箱边界**——Codex `workspace-write` 有真 OS 沙箱拦越界写,Claude cwd 完全不设防;②**操作被拒信号**——Claude 合成 `is_error` tool_result(可识别),Codex 静默无事件(只能事后 diff FS),归一化层须专门抹平这个不对称;③**终态语义**——Claude 须联合多字段判定、Codex 错因藏在双层编码 JSON 里,退出码都不直接携带错因。→ 双层信任模型不能对两家用同一套假设:OS/文件层「委托即授权」对 Claude 需额外 OS 级隔离(sandbox-exec)或在 spec 显式声明「任务目录外不设防」的信任假设,对 Codex 可借其原生 sandbox_mode。
 
 ## Not yet specified
 
@@ -42,6 +45,8 @@ Label: wayfinder:map
 - **per-op 审批上抛**:把 agent 过程内权限请求异步转发宿主 GUI(multica 明确没做的那块)——双层模型跑通后的 Phase 2 方向。
 - **模型目录/CLI 自省**:multica 式 `(provider, executable, version)` 缓存的模型/档位探测。
 - **agent 探测与版本兜底**:本机没装/版本过旧的检测与引导(multica MinVersions 类机制)。
+- **Claude 侧 OS 级隔离(01 spike 新增)**:Claude cwd 非安全边界,「委托即授权」要真关住任务目录须上 sandbox-exec 或等价手段——V1 是接受「任务目录外不设防」的信任假设并写明,还是上 OS 隔离?spec 阶段(04 票)须裁,可能牵出独立票。
+- **被委托 agent 的能力面收紧(01 spike 新增)**:无头 claude 默认继承宿主机全部插件/技能/自定义 agent 面(`Task`/`SendMessage` 等)——委托时该给多大工具面?硬编码最小集 / 按任务声明 / 白名单?这是新的安全维度,04 票 sharpen。
 
 ## Out of scope
 

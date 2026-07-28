@@ -1,0 +1,31 @@
+{
+  "scenario": "exec1-baseline-readonly-default",
+  "cmd": [
+    "/Users/heqianbin/.codex/plugins/.plugin-appserver/codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "List the files in the current directory using ls -la, then reply with ONLY the integer count of entries (excluding . and ..). No other text."
+  ],
+  "cwd": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/sandbox",
+  "codex_home": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home",
+  "env_overrides_intentional": {
+    "CODEX_HOME": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home"
+  },
+  "timeout_s": 90.0,
+  "interrupt_after_s": null,
+  "interrupt_signal": null,
+  "start_iso": "2026-07-29T02:43:15+0800",
+  "end_iso": "2026-07-29T02:44:00+0800",
+  "duration_s": 45.142,
+  "returncode": 0,
+  "returncode_meaning": "normal exit",
+  "interrupt_actually_sent": false,
+  "interrupt_sent_at_s": null,
+  "escalated_to_sigkill": false,
+  "leftover_processes_in_pgid_after_exit": [],
+  "stdout_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec1-baseline-readonly-default.stdout.jsonl",
+  "stderr_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec1-baseline-readonly-default.stderr.txt",
+  "stdout_lines": 6,
+  "stderr_bytes": 215
+}

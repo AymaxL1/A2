@@ -1,0 +1,31 @@
+{
+  "scenario": "exec7-no-auth-isolation-check",
+  "cmd": [
+    "/Users/heqianbin/.codex/plugins/.plugin-appserver/codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "Say hi."
+  ],
+  "cwd": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/sandbox",
+  "codex_home": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home",
+  "env_overrides_intentional": {
+    "CODEX_HOME": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home_noauth"
+  },
+  "timeout_s": 45.0,
+  "interrupt_after_s": null,
+  "interrupt_signal": null,
+  "start_iso": "2026-07-29T02:52:40+0800",
+  "end_iso": "2026-07-29T02:53:24+0800",
+  "duration_s": 43.439,
+  "returncode": 1,
+  "returncode_meaning": "normal exit",
+  "interrupt_actually_sent": false,
+  "interrupt_sent_at_s": null,
+  "escalated_to_sigkill": false,
+  "leftover_processes_in_pgid_after_exit": [],
+  "stdout_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec7-no-auth-isolation-check.stdout.jsonl",
+  "stderr_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec7-no-auth-isolation-check.stderr.txt",
+  "stdout_lines": 14,
+  "stderr_bytes": 1508
+}

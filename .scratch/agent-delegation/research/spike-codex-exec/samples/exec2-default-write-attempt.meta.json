@@ -1,0 +1,31 @@
+{
+  "scenario": "exec2-default-write-attempt",
+  "cmd": [
+    "/Users/heqianbin/.codex/plugins/.plugin-appserver/codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "Using the shell, run exactly this command: echo hello > exec2-write-test.txt -- then run: cat exec2-write-test.txt -- Report the exit code of the first command and the output of the second, even if either fails. Do not retry with a different approach if the first command fails, just report it."
+  ],
+  "cwd": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/sandbox",
+  "codex_home": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home",
+  "env_overrides_intentional": {
+    "CODEX_HOME": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home"
+  },
+  "timeout_s": 90.0,
+  "interrupt_after_s": null,
+  "interrupt_signal": null,
+  "start_iso": "2026-07-29T02:44:55+0800",
+  "end_iso": "2026-07-29T02:45:36+0800",
+  "duration_s": 41.316,
+  "returncode": 0,
+  "returncode_meaning": "normal exit",
+  "interrupt_actually_sent": false,
+  "interrupt_sent_at_s": null,
+  "escalated_to_sigkill": false,
+  "leftover_processes_in_pgid_after_exit": [],
+  "stdout_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec2-default-write-attempt.stdout.jsonl",
+  "stderr_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec2-default-write-attempt.stderr.txt",
+  "stdout_lines": 7,
+  "stderr_bytes": 986
+}
