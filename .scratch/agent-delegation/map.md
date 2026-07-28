@@ -38,6 +38,8 @@ Label: wayfinder:map
 - [02 Codex exec spike](issues/02-spike-codex-exec.md) — 实测(8 次真调, [findings](research/spike-codex-exec/findings.md)):扁平 NDJSON(`thread.started`/`turn.*`/`item.*`);**session id 就是首行 `thread.started.thread_id`**(不必等文件落盘,比 multica 等 rollout 简单);**每任务独立 `$CODEX_HOME`(只拷 `auth.json` 不拷 `config.toml`)隔离实测可行且 fail-closed**(缺 auth 直接 401 不回退真身份)——委托 codex 不污染用户全局配置的姿态确定;`sandbox_mode` 走 `-s` flag 或 `-c` 覆盖;**审批被拒是「静默空气墙」**(连 `item.started` 都不出现,无可编程识别的拒绝事件,只能事后 diff FS);**workspace-write 真的拦 cwd 上级越界写**(codex 有真沙箱);中断进程组 SIGTERM 整树瞬死 exit -15,**中断不产终态 JSON**须适配层自标 aborted;失败 exit1 错因需 parse 双层编码 JSON,**stderr 有 ERROR 非失败判据**(alpha 构建噪音);**exec 无条件读 stdin 须显式 `stdin=/dev/null`** 否则静默挂起;失败网络重连可达 40+s,看门狗留余量。
 - **⚠️ 两家三处行为不对称(适配层核心存在理由,须写进 spec 约束)**:①**沙箱边界**——Codex `workspace-write` 有真 OS 沙箱拦越界写,Claude cwd 完全不设防;②**操作被拒信号**——Claude 合成 `is_error` tool_result(可识别),Codex 静默无事件(只能事后 diff FS),归一化层须专门抹平这个不对称;③**终态语义**——Claude 须联合多字段判定、Codex 错因藏在双层编码 JSON 里,退出码都不直接携带错因。→ 双层信任模型不能对两家用同一套假设:OS/文件层「委托即授权」对 Claude 需额外 OS 级隔离(sandbox-exec)或在 spec 显式声明「任务目录外不设防」的信任假设,对 Codex 可借其原生 sandbox_mode。
 
+- [04 产出适配层 spec](issues/04-write-spec.md) — **图目的地达成**:[spec.md](spec.md) 定稿 + /to-tickets 拆出 7 张实施票 `impl/01–07`(tracer-bullet)。依赖图:01 骨架→02/03/04/06 并行→05→07 收口。两处 spec 收敛:验收 b 用 demo 能力演示双层信任(不硬绑未落地的 mihomo 09/10 写能力)、测试走 TestReport 同构(禁 import Testing,随 11 票迁 swift-testing)。骨架事实:AAAgentCore 自有 AgentPort(样板 SystemProcessPort 反孤儿)。
+
 ## Not yet specified
 
 - **插件经宿主委托**(北极星第二步):插件侧调用契约、发起方确认强度(插件发起 ≈ 拉起任意代码执行,倾向 dangerous 档)、与注册表的关系——等宿主委托 spec 定型后 sharpen。

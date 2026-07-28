@@ -1,6 +1,6 @@
 # 04: 产出《宿主调用本地 agent 适配层》spec
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 01, 02, 03
 
@@ -15,3 +15,11 @@ Blocked by: 01, 02, 03
 3. 测试决策沿用仓库三层 seam 价值观:AAAgentCore 纯逻辑打 Fake Port(swift-testing 主体)、试驾 CLI E2E 脚本、验证环标注 vfsoverlay 可验/需 Xcode。
 4. Out of scope 继承 map 同名节。
 5. spec 落 `.scratch/agent-delegation/spec.md`,随后拆实施票(拆票属于 spec 之后的动作,不在本票内)。
+
+## Answer
+
+图的目的地达成。spec 定稿于 [spec.md](../spec.md)(/to-spec 综合 14 决议 + 两 spike 实测 + 骨架摸底,无新面试)。随后 /to-tickets 拆出 7 张实施票 `impl/01–07`(tracer-bullet 垂直切片)。
+
+spec 阶段两处收敛(执行既定「并行红线」,非新决策):①验收 b 用已跑通的 demo 能力(demo.note.set/demo.wipe)演示双层信任机制,不硬绑尚未落地的 mihomo 写能力(09/10 票);②测试走手写 TestReport 同构模式接 check.sh,禁止 import Testing,swift-testing 随 v1-core-proxy 11 票统一迁移。骨架摸底另确认:AAAgentCore 有自己的 AgentPort(样板 SystemProcessPort 反孤儿),不复用 AAPluginSDK.ProcessPort。
+
+实施票依赖图:01 骨架(无阻塞)→ 02/03/04/06 并行(blocked by 01)→ 05(blocked by 01,04)→ 07 CLI 收口(blocked by 02,03,04,05,06)。
