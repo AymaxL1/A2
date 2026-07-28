@@ -31,6 +31,15 @@
 #     反向不可绕过(裸 UDS python3 直连构造 capabilities.call demo.wipe → 仍 denied、未执行)。
 #   * headless 下 GUI 弹窗不能真阻塞:靠 AA_CONFIRM_AUTO 让回调不弹窗即时返回,check.sh 不会挂在对话框上。
 #
+# 05 票增量(agent-first 命令面与接入引导,纯 CLI 层,无宿主/注册表改动):
+#   * aa 增:域子命令(注册表元数据驱动,先 describe 取 schema→按声明类型强转 --参数[number 钳制 inf/nan]→走 call 底座
+#     performCall)、aa docs agents-md(接入片段)、aa install-cli(符号链接入 PATH,幂等/--prefix/--force/--uninstall,
+#     符号链接比较 canonical 化)、宿主未运行 UX 正式化(--json 时 stdout 机读 host_unreachable 信封 + stderr 人读 + 退出码 4)。
+#   * 阶段 B 增:宿主未运行 --json 信封(2a2);域子命令≡call 逐字节一致 + 多级动词 + 缺参同契约 + string 强转按声明类型分派 +
+#     选项值不吞旗标 + 未知参数=1 + 未知域=1 且机读 unknown_command 信封(2''''组);dangerous 域子命令 deny 仍走确认层
+#     未绕过(D1b);docs agents-md grep(组5);install-cli 幂等/覆盖/缺目录 + canonical 相对链接判 already-installed +
+#     --uninstall 幂等/拒误删(组6)。install-cli 只碰 $BUILD 下临时 --prefix,绝不碰真实 /usr/local/bin。
+#
 # 接口契约(11 票换成 swift build + swift test 引擎时保持不变):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
@@ -214,6 +223,16 @@ ERR="$("$BIN/aa" capabilities list 2>&1 >/dev/null)"; RC=$?
 assert_exit 4 $RC "宿主未运行时 aa capabilities list 退出码=4(host 不可达)"
 assert_contains "$ERR" "host 不可达" "宿主未运行时 stderr 有明确错误"
 
+# (2a2) 05 票:宿主未运行 UX 正式化 —— --json 时 stdout 机读错误信封(host_unreachable)+ stderr 人读提示 + 退出码 4。
+#       这套对所有需要连宿主的命令一致生效(此处用 call 代证;域子命令/describe 同走 roundTrip 底座)。
+"$BIN/aa" capabilities call demo.echo --json >"$BUILD/hostdown.out" 2>"$BUILD/hostdown.err"; RC=$?
+HD_OUT="$(cat "$BUILD/hostdown.out")"; HD_ERR="$(cat "$BUILD/hostdown.err")"
+echo "    宿主未运行 call --json: stdout=$HD_OUT | stderr=$HD_ERR"
+assert_exit 4 $RC "宿主未运行时 call --json 退出码=4"
+assert_contains "$HD_OUT" '"code":"host_unreachable"' "宿主未运行时 --json stdout 机读错误信封(host_unreachable)"
+assert_contains "$HD_OUT" '"ok":false' "宿主未运行时 --json 信封 ok=false"
+assert_contains "$HD_ERR" "宿主未运行" "宿主未运行时 stderr 人读提示含启动指引"
+
 # 起宿主(accessory app,stdout/stderr 收进日志)
 "$HOST_BIN" > "$HOSTLOG" 2>&1 &
 HOST_PID=$!
@@ -305,6 +324,62 @@ if [ "$SOCK_UP" -eq 1 ]; then
   # (2k2) 用法错:call 缺 <id> → 退出 1
   "$BIN/aa" capabilities call >/dev/null 2>&1; RC=$?
   assert_exit 1 $RC "call 缺 <id> 退出码=1(用法错)"
+
+  # --- 05 票:域子命令 ≡ call 底座(同路由、同输出、同退出码)---
+  echo "--- 断言组 2'''':域子命令 ≡ call 底座(05 票)---"
+
+  # (2L) aa demo echo --message hi 与 capabilities call demo.echo --input '{"message":"hi"}' 逐字节一致 + 都 exit 0
+  DOUT="$("$BIN/aa" demo echo --message hi --json 2>/dev/null)"; DRC=$?
+  COUT="$("$BIN/aa" capabilities call demo.echo --input '{"message":"hi"}' --json 2>/dev/null)"; CRC=$?
+  echo "    域子命令输出=$DOUT | call 底座输出=$COUT"
+  assert_exit 0 $DRC "域子命令 aa demo echo --message hi 退出码=0"
+  assert_exit 0 $CRC "对照 call demo.echo 退出码=0"
+  if [ "$DOUT" = "$COUT" ] && [ -n "$DOUT" ]; then
+    echo "PASS: 域子命令与 call 底座输出逐字节一致($DOUT)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 域子命令与 call 输出不一致(域='$DOUT' vs call='$COUT')"; FAIL=$((FAIL+1))
+  fi
+  # (2L2) 参数类型强转(string):--message hi 按 schema 声明的 string 强转进 input,回显正确
+  assert_contains "$DOUT" '"echo":"hi"' "域子命令 string 参数强转正确(echo=hi)"
+
+  # (2L2b) 强转按 schema 声明类型分派:message 声明为 string,故 --message inf 原样承载为字符串 "inf"
+  #        (不误当 number 解析;这也间接把守 number 分支的 inf/nan 不会误漏到 string 参数上)。
+  DINF="$("$BIN/aa" demo echo --message inf --json 2>/dev/null)"; DRCI=$?
+  assert_exit 0 $DRCI "域子命令 --message inf(string 参数)退出码=0(按声明类型分派,不当 number)"
+  assert_contains "$DINF" '"echo":"inf"' "string 参数 inf 原样承载为字符串(强转 schema-type-driven)"
+  # NOTE(05,强转覆盖边界):number(inf/nan→退出码1)、bool、object/array 分支需"非 string 声明参数"才能 E2E 驱动;
+  #   demo 注册表参数全为 string 且本票不改注册表 → 这三类分支无法在此 E2E 断言。isFinite 钳制已在 coerceArgument 落地
+  #   (非有限 number→failUsage 退出码1,杜绝旧 bug:inf/nan 经 JSONEncoder 抛错被误报退出码4);待 06/09 引入真实
+  #   number/bool 参数时补 E2E。此处以 string 分派证明强转"按声明类型"工作。
+  echo "    NOTE(05): number/bool/object/array 强转分支待 06/09 的真实类型参数补 E2E(demo 全 string,本票不改注册表)"
+
+  # (2L2c) 选项值不能是下一个旗标:aa demo echo --message --json → 缺值用法错(退出码 1),不把 --json 吞成值
+  "$BIN/aa" demo echo --message --json >/dev/null 2>&1; RCF=$?
+  assert_exit 1 $RCF "域子命令选项值为旗标(--message --json)→ 退出码=1(不吞旗标当值)"
+
+  # (2L2d) 未知 --参数(能力未声明)→ 退出码 1(badArgument)
+  "$BIN/aa" demo echo --nope x --json >/dev/null 2>&1; RCU=$?
+  assert_exit 1 $RCU "域子命令未知 --参数(未声明)→ 退出码=1"
+
+  # (2L3) 多级动词映射:aa demo note set → demo.note.set,并执行(set=true)
+  DOUT2="$("$BIN/aa" demo note set --key k --value v --json 2>/dev/null)"; DRC2=$?
+  echo "    多级域子命令输出=$DOUT2"
+  assert_exit 0 $DRC2 "多级域子命令 aa demo note set 退出码=0(映射 demo.note.set)"
+  assert_contains "$DOUT2" '"set":true' "多级域子命令映射到 demo.note.set 并执行(set=true)"
+
+  # (2L4) 域子命令校验错也走同一退出码契约:demo echo 缺必填(不带 --message)→ 退出 6 + missing_parameter(与 call 一致)
+  DOUT3="$("$BIN/aa" demo echo --json 2>/dev/null)"; DRC3=$?
+  assert_exit 6 $DRC3 "域子命令缺必填参数退出码=6(与 call 底座同契约)"
+  assert_contains "$DOUT3" '"code":"missing_parameter"' "域子命令缺参走同一 error.code=missing_parameter"
+
+  # (2M) 未知域/动词 → 退出码 1(用法错,非协议错 6)+ 机读 unknown_command 信封 + 可发现提示(区别于 call 未知能力=6)
+  UOUT="$("$BIN/aa" bogusdomain frobnicate --json 2>"$BUILD/unknown.err")"; URC=$?
+  UERR="$(cat "$BUILD/unknown.err")"
+  echo "    未知域 stdout=$UOUT | stderr=$UERR"
+  assert_exit 1 $URC "未知域子命令退出码=1(人体工学层用法错,非协议错 6)"
+  assert_contains "$UOUT" '"code":"unknown_command"' "未知域 --json stdout 机读信封 error.code=unknown_command"
+  assert_contains "$UOUT" '"ok":false' "未知域 --json 信封 ok=false"
+  assert_contains "$UERR" "aa capabilities list" "未知域给出可发现提示(指向 aa capabilities list)"
 else
   echo "FAIL: 宿主未就绪,跳过 describe/call E2E(计为失败)"; FAIL=$((FAIL+1))
 fi
@@ -377,6 +452,18 @@ if [ "$SOCK_UP" -eq 1 ]; then
     echo "FAIL: 裸 UDS 直连 demo.wipe 竟出现 wiped —— 疑似绕过确认执行了!"; FAIL=$((FAIL+1))
   else
     echo "PASS: 裸 UDS 直连 demo.wipe 未出现执行结果 wiped(确认未被绕过、未执行)"; PASS=$((PASS+1))
+  fi
+
+  # (D1b) 05 票:dangerous 域子命令与 call 同底座 → 同样经路由层确认,不得绕过。
+  #        deny 下 `aa demo wipe --target …`(域形式)→ 仍 denied 退出码 2 且未执行(与 D1 对 call 一致)。
+  DW="$("$BIN/aa" demo wipe --target disk9 --json 2>/dev/null)"; DWRC=$?
+  echo "    dangerous 域子命令(deny)输出: $DW"
+  assert_exit 2 $DWRC "dangerous 域子命令 aa demo wipe(deny)退出码=2(经确认层,未绕过)"
+  assert_contains "$DW" '"code":"denied"' "dangerous 域子命令 deny 走同一确认层 error.code=denied"
+  if printf '%s' "$DW" | grep -qF -- '"wiped"'; then
+    echo "FAIL: dangerous 域子命令 deny 竟出现 wiped —— 疑似绕过确认!"; FAIL=$((FAIL+1))
+  else
+    echo "PASS: dangerous 域子命令 deny 未出现 wiped(域入口未绕过确认)"; PASS=$((PASS+1))
   fi
 else
   echo "FAIL: deny 宿主未就绪,跳过 deny/反向断言(计为失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
@@ -472,6 +559,70 @@ assert_contains "$HELP" "3  超时" "帮助含退出码 3=超时"
 assert_contains "$HELP" "4  宿主不可达" "帮助含退出码 4=宿主不可达"
 assert_contains "$HELP" "5  能力业务失败" "帮助含退出码 5=能力业务失败"
 assert_contains "$HELP" "6  协议/校验错" "帮助含退出码 6=协议/校验错"
+
+# --- 断言组 5:aa docs agents-md 接入片段(05 票;纯文档,无需宿主)---
+echo "--- 断言组 5:aa docs agents-md 接入片段(05 票)---"
+DOCS="$("$BIN/aa" docs agents-md 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "aa docs agents-md 退出码=0"
+assert_contains "$DOCS" "prefix_rule" "docs 含 Codex prefix_rule 信任配置示例(S3 沙箱姿态)"
+assert_contains "$DOCS" "require_escalated" "docs 含 require_escalated(沙箱外执行的提权声明)"
+assert_contains "$DOCS" "capabilities call" "docs 含发现/调用命令(capabilities call/list/describe)"
+assert_contains "$DOCS" "When to use" "docs 含「何时用本 CLI」段"
+assert_contains "$DOCS" "dangerous" "docs 含 dangerous 语义说明"
+assert_contains "$DOCS" "exit code" "docs 含退出码语义(exit code 契约)"
+
+# --- 断言组 6:aa install-cli 幂等/覆盖(05 票;临时目录,绝不碰真实 /usr/local/bin)---
+echo "--- 断言组 6:aa install-cli 幂等/覆盖(05 票,临时目录)---"
+IP1="$BUILD/install-prefix1"; mkdir -p "$IP1"
+"$BIN/aa" install-cli --prefix "$IP1" >/dev/null 2>&1; RC=$?
+assert_exit 0 $RC "install-cli 首次 --prefix 退出码=0"
+if [ -L "$IP1/aa" ]; then
+  echo "PASS: install-cli 建了符号链接 $IP1/aa"; PASS=$((PASS+1))
+else
+  echo "FAIL: install-cli 未建符号链接 $IP1/aa"; FAIL=$((FAIL+1))
+fi
+"$IP1/aa" --help >/dev/null 2>&1; RC=$?
+assert_exit 0 $RC "经符号链接调用 aa --help 成功(链接指向可用的真 aa)"
+IOUT="$("$BIN/aa" install-cli --prefix "$IP1" --json 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "install-cli 幂等重跑退出码=0"
+assert_contains "$IOUT" "already-installed" "install-cli 幂等重跑报告 already-installed(no-op)"
+# 指向别处 → 无 --force 报错;--force 覆盖成功
+IP2="$BUILD/install-prefix2"; mkdir -p "$IP2"; ln -s /bin/ls "$IP2/aa"
+"$BIN/aa" install-cli --prefix "$IP2" >/dev/null 2>&1; RC=$?
+assert_exit 1 $RC "install-cli 目标指向别处且无 --force → 退出码=1(明确报告)"
+"$BIN/aa" install-cli --prefix "$IP2" --force >/dev/null 2>&1; RC=$?
+assert_exit 0 $RC "install-cli --force 覆盖成功 退出码=0"
+"$IP2/aa" --help >/dev/null 2>&1; RC=$?
+assert_exit 0 $RC "--force 覆盖后符号链接指向真 aa(卸载/覆盖行为明确)"
+# 目标目录不存在 → 明确错误(退出码 1)
+"$BIN/aa" install-cli --prefix "$BUILD/no-such-dir" >/dev/null 2>&1; RC=$?
+assert_exit 1 $RC "install-cli 目标目录不存在 → 退出码=1(明确错误)"
+
+# (hard bug2 修复)canonical 化比较:相对符号链接指向同一 aa → 判 already-installed(不逼 --force)。
+#   $BIN=$BUILD/bin;从 $IPCANON 用相对路径 ../bin/aa 指向同一真 aa,字面≠已 canonical 的 source,但解析后应相等。
+IPCANON="$BUILD/install-canon"; mkdir -p "$IPCANON"
+( cd "$IPCANON" && ln -s "../bin/aa" "aa" )
+CANOUT="$("$BIN/aa" install-cli --prefix "$IPCANON" --json 2>/dev/null)"; RC=$?
+echo "    相对链接 install 输出: $CANOUT"
+assert_exit 0 $RC "install-cli 相对链接指向同一 aa → 退出码=0(canonical 化)"
+assert_contains "$CANOUT" "already-installed" "install-cli canonical 化后相对链接判 already-installed(hard bug2 修复:不误判指向别处)"
+
+# --- --uninstall 幂等 + 拒误删(仍只用临时 prefix)---
+IPUN="$BUILD/install-uninst"; mkdir -p "$IPUN"
+"$BIN/aa" install-cli --prefix "$IPUN" >/dev/null 2>&1; RC=$?
+assert_exit 0 $RC "install-cli(--uninstall 前置)安装退出码=0"
+UOUT="$("$BIN/aa" install-cli --uninstall --prefix "$IPUN" --json 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "install-cli --uninstall 退出码=0"
+assert_contains "$UOUT" "uninstalled" "--uninstall 删除本 aa 链接(action=uninstalled)"
+if [ -e "$IPUN/aa" ]; then echo "FAIL: --uninstall 后链接仍在"; FAIL=$((FAIL+1)); else echo "PASS: --uninstall 后链接已删除"; PASS=$((PASS+1)); fi
+UOUT2="$("$BIN/aa" install-cli --uninstall --prefix "$IPUN" --json 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "install-cli --uninstall 幂等重跑(目标不存在)退出码=0"
+assert_contains "$UOUT2" "not-installed" "--uninstall 幂等 no-op(action=not-installed)"
+# 拒误删:指向别处的链接(非本 aa)→ 退出码 1 且不删
+IPFOREIGN="$BUILD/install-foreign"; mkdir -p "$IPFOREIGN"; ln -s /bin/ls "$IPFOREIGN/aa"
+"$BIN/aa" install-cli --uninstall --prefix "$IPFOREIGN" >/dev/null 2>&1; RC=$?
+assert_exit 1 $RC "install-cli --uninstall 拒删非本 aa 链接 → 退出码=1"
+if [ -L "$IPFOREIGN/aa" ]; then echo "PASS: --uninstall 未误删指向别处的链接(不误删非自己建的)"; PASS=$((PASS+1)); else echo "FAIL: --uninstall 误删了别处链接"; FAIL=$((FAIL+1)); fi
 
 echo
 echo "========================================"
