@@ -10,6 +10,8 @@
 import AppKit
 import AAContracts
 import AAHostRuntime
+import AAPluginSDK
+import PluginProxy
 
 /// dangerous 确认的 test-only 自动化档位(读环境变量 `AA_CONFIRM_AUTO`)。
 ///
@@ -54,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var registry: Registry!
     var server: UDSServer!
     var statusItem: NSStatusItem!
+    /// 代理插件(V1 内封栈:宿主静态装配,不搞动态加载)。持有内核句柄,随宿主启停。
+    var proxyPlugin: ProxyPlugin!
+    /// test/dev seam:SIGUSR1 → 优雅退出的 DispatchSource(exercise applicationWillTerminate→reclaimKernel→terminate 完整回收路径)。
+    var gracefulQuitSource: DispatchSourceSignal?
 
     /// 可选无人值守自动拒绝定时器秒数(手动/真机跑用,防夜里留挂着的对话框)。读 `AA_AUTO_DENY_SECONDS`。
     /// 仅在 `.interactive`(真弹窗)分支生效;headless 门禁用的是 `AA_CONFIRM_AUTO`(不弹窗),二者不冲突。
@@ -66,9 +72,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 0) 构造注册表并注入 dangerous 确认回调。回调 @Sendable:被后台连接处理线程调用,内部再切主线程弹窗。
-        //    捕获 weak self(AppDelegate 为 @MainActor → Sendable),避免宿主生命周期与闭包互持。
-        registry = Registry(confirmDangerous: { [weak self] descriptor in
+        // 0a) V1 内封栈:构造真 Host Port(ProcessPort/HTTPPort)→ 装配 ProxyPlugin(注入)→ 经 ProcessPort 拉起内核。
+        //     内核可执行路径从 env 读:E2E 指向 fake stub;真实指向将来入库的 mihomo(锁版入库是用户决策,留用户)。
+        //     未配置 AA_MIHOMO_KERNEL_PATH → 不拉起任何进程(绝不下载/启动真 mihomo),proxy.status 会如实报未运行。
+        let processPort = SystemProcessPort()   // 反孤儿退出钩子在此进程级安装一次(atexit + 信号)
+        let httpPort = SocketHTTPPort()
+        let env = ProcessInfo.processInfo.environment
+        let kernelPath = env["AA_MIHOMO_KERNEL_PATH"]                 // nil = 不拉起内核
+        let controlPort = Int(env["AA_MIHOMO_CONTROL_PORT"] ?? "") ?? 9090
+        // 默认拉起参数 `--port <控制端口>`(对齐 fake stub);E2E 可经 AA_MIHOMO_KERNEL_EXTRA_ARGS 追加(如 --ignore-sigterm)。
+        // 真 mihomo 的参数/配置形态(-d/-f + config 里的 external-controller)入库时由用户决定,留用户。
+        var kernelArgs = ["--port", String(controlPort)]
+        if let extra = env["AA_MIHOMO_KERNEL_EXTRA_ARGS"], !extra.isEmpty {
+            kernelArgs += extra.split(separator: " ").map(String.init)
+        }
+        let plugin = ProxyPlugin(processPort: processPort, httpPort: httpPort,
+                                 kernelPath: kernelPath, controlPort: controlPort, kernelArgs: kernelArgs)
+        self.proxyPlugin = plugin
+        if let kp = kernelPath {
+            if plugin.launchKernel() {
+                hostLog("mihomo 内核已拉起(随宿主启停): \(kp) · 控制端口 \(controlPort)")
+            } else {
+                hostLog("mihomo 内核拉起失败: \(kp)(proxy.status 将如实报未运行)")
+            }
+        } else {
+            hostLog("未配置 AA_MIHOMO_KERNEL_PATH,不拉起内核;proxy.status 将如实报未运行。"
+                    + "真 mihomo 锁版入库留用户决策。")
+        }
+
+        // 0b) 构造注册表:demo 能力 + 插件能力(proxy.status),并注入 dangerous 确认回调。
+        //     回调 @Sendable:被后台连接处理线程调用,内部再切主线程弹窗。捕获 weak self 避免互持。
+        //     插件产 [PluginCapability](只依赖 SDK/Contracts),宿主零成本适配成 Registry 的 Capability(handler 形状一致)。
+        let pluginCaps = plugin.capabilities().map { Capability(descriptor: $0.descriptor, handler: $0.handler) }
+        registry = Registry(capabilities: Registry.demoCapabilities + pluginCaps,
+                            confirmDangerous: { [weak self] descriptor in
             self?.confirmDangerous(descriptor) ?? false
         })
 
@@ -101,7 +138,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hostLog("dangerous 确认模式: interactive(真 NSAlert 确认)"
                     + (autoDenySeconds.map { " · AA_AUTO_DENY_SECONDS=\($0)s 自动拒绝" } ?? ""))
         }
+        // test/dev seam:SIGUSR1 → 优雅退出。用 DispatchSource(非 raw handler,安全)在主线程调 NSApp.terminate,
+        //   完整走 applicationWillTerminate → reclaimKernel → ProcessPort.terminate 的回收路径(供 headless E2E 验证
+        //   「terminate 对 SIGTERM-忽略型内核仍 SIGKILL 兜底、无孤儿」)。须先 SIG_IGN 让默认处置不抢先杀进程。
+        //   不与 SystemProcessPort 的 SIGTERM/SIGINT/SIGHUP raw handler 冲突(信号号不同)。12/13 分发前按需保留/门控。
+        signal(SIGUSR1, SIG_IGN)
+        let quitSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        quitSource.setEventHandler { NSApp.terminate(nil) }
+        quitSource.resume()
+        self.gracefulQuitSource = quitSource
+
         hostLog("启动完成。")
+    }
+
+    /// 宿主优雅退出(菜单退出 / NSApplication.terminate)时回收内核。被 kill/pkill 的强制退出由
+    /// SystemProcessPort 的 atexit/信号钩子兜底(见 SystemProcessPort.swift 的反孤儿设计)——两条路径都保证零孤儿。
+    func applicationWillTerminate(_ notification: Notification) {
+        proxyPlugin?.reclaimKernel()
     }
 
     private func setupStatusItem() {

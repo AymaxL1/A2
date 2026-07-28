@@ -70,6 +70,13 @@ SOCK="$HOME/Library/Application Support/AA/aa.sock"
 # 只盯本次构建的绝对路径,避免误杀用户机上别处同名的 aahost 进程。
 KILLPAT="$HOST_BIN"
 
+# 06 票:fake mihomo stub(测试替身,非真 mihomo)——供 proxy.status E2E 由宿主 ProcessPort 拉起/回收。
+# 反孤儿断言与清场都按此模式兜底(杀宿主 + 杀 stub)。
+# stub 以**绝对路径**入 argv(宿主 Process executableURL = $STUB),故 pkill/pgrep 盯绝对路径,
+# 沿用本仓库「只盯本次构建绝对路径、避免误杀用户机上同名进程」的约定(02 票同款,不用裸文件名)。
+STUB="$ROOT/Scripts/fake-mihomo.py"
+KILLPAT_STUB="$STUB"
+
 SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
 
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
@@ -78,6 +85,7 @@ TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 # 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
+  pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
@@ -120,33 +128,41 @@ echo "==== 阶段 A:按拓扑序编译全部 target ===="
 # ① 零依赖底座(含线协议 Codable + UDS 路径常量)
 build_lib AAContracts
 
-# ② 只依赖 Contracts
+# ② 只依赖 Contracts(06 票:AAPluginSDK 现含 ProcessPort/HTTPPort 两个宿主 Port 协议 + PluginCapability)
 build_lib AAPluginSDK
 build_lib AAHostRuntime   # 含 Registry(纯逻辑)
 build_lib AAUISystem
 
-# ③ 假件(库)+ 宿主(库,但门禁单独把它编成可执行做冒烟;@main 是过桥,终态是 12 票 XcodeGen app 壳)
+# ③ PluginProxy —— 受限搜索路径:只放 SDK/Contracts/UISystem,故意不放任何 Host* 模块。
+#    若它能在这条受限 -I 下编过,即从编译期证明「PluginProxy 不需要 Host*」(01 票铁律,06 票继续把关:
+#    新增的 ProcessPort/HTTPPort 协议在 SDK,故插件仍只靠 SDK 即可编过)。
+#    06 票起 PluginProxy 需被 AAHostTestKit(测试)与 AAHostMacOS(宿主装配)链接,故这里除 .swiftmodule 外也产 .o。
+#    先于 AAHostTestKit / AAHostMacOS 编译(二者都 import PluginProxy)。
+echo "-- 编译库 target: PluginProxy(受限 -I:仅 SDK/Contracts/UISystem,无 Host*;产 .o + module)"
+cp "$MODULES/AAContracts.swiftmodule" "$MODULES/AAPluginSDK.swiftmodule" "$MODULES/AAUISystem.swiftmodule" "$PPMODS/" \
+  || { echo "FAIL: 准备 PluginProxy 受限模块目录失败"; exit 1; }
+swiftc "${SWIFTC_COMMON[@]}" -wmo \
+  -parse-as-library \
+  -module-name PluginProxy \
+  -c -o "$OBJ/PluginProxy.o" \
+  -emit-module-path "$MODULES/PluginProxy.swiftmodule" \
+  -I "$PPMODS" \
+  Sources/PluginProxy/*.swift \
+  || { echo "FAIL: 编译 PluginProxy(受限 -I)失败 —— 它可能意外依赖了 Host* 或其它未提供模块"; exit 1; }
+
+# ④ 假件 + 06 票纯逻辑测试(AAHostTestKit 现依赖 AAPluginSDK + PluginProxy:Port 假件 + RESTClient/status 测试)
 build_lib AAHostTestKit
+
+# ⑤ 宿主(库,但门禁单独把它编成可执行做冒烟;@main 是过桥,终态是 12 票 XcodeGen app 壳)。
+#    06 票:宿主装配 ProxyPlugin(注入真 SystemProcessPort/SocketHTTPPort),故链接补 AAPluginSDK.o / PluginProxy.o / AAUISystem.o。
 echo "-- 编译可执行 target: AAHostMacOS(库→冒烟可执行;AppKit,首次编译约 30s)"
 swiftc "${SWIFTC_COMMON[@]}" \
   -parse-as-library \
   -I "$MODULES" \
   -o "$HOST_BIN" \
-  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" \
+  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
   Sources/AAHostMacOS/*.swift \
   || { echo "FAIL: 编译 AAHostMacOS 失败"; exit 1; }
-
-# ③ PluginProxy —— 受限搜索路径:只放 SDK/Contracts/UISystem,故意不放任何 Host* 模块。
-#    若它能在这条受限 -I 下编过,即从编译期证明「PluginProxy 不需要 Host*」(01 票铁律)。
-echo "-- 编译库 target: PluginProxy(受限 -I:仅 SDK/Contracts/UISystem,无 Host*)"
-cp "$MODULES/AAContracts.swiftmodule" "$MODULES/AAPluginSDK.swiftmodule" "$MODULES/AAUISystem.swiftmodule" "$PPMODS/" \
-  || { echo "FAIL: 准备 PluginProxy 受限模块目录失败"; exit 1; }
-swiftc "${SWIFTC_COMMON[@]}" \
-  -emit-module -emit-module-path "$MODULES/PluginProxy.swiftmodule" \
-  -module-name PluginProxy \
-  -I "$PPMODS" \
-  Sources/PluginProxy/*.swift \
-  || { echo "FAIL: 编译 PluginProxy(受限 -I)失败 —— 它可能意外依赖了 Host* 或其它未提供模块"; exit 1; }
 
 # ④ CLI 可执行:@main 入口需 -parse-as-library;链接其依赖 AAContracts.o;产真二进制。
 echo "-- 编译可执行 target: aa"
@@ -162,19 +178,26 @@ swiftc "${SWIFTC_COMMON[@]}" \
 #    这里只是入口 shim(main.swift 顶层代码,不需 -parse-as-library)。链接 TestKit + Runtime + Contracts。
 echo "-- 编译测试 runner: registry-tests(驱动 AAHostTestKit.RegistryConformanceTests)"
 cat > "$RUNNER/main.swift" <<'SWIFT'
-// 门禁自动生成:Registry 纯逻辑测试的入口 shim(断言逻辑在 AAHostTestKit)。
+// 门禁自动生成:纯逻辑测试的入口 shim(断言逻辑在 AAHostTestKit)。
+// 06 票:除 RegistryConformanceTests 外,追加 ProxyConformanceTests(Port 假件 / RESTClient / proxy.status 域逻辑)。
 import AAHostTestKit
 import Foundation
-let report = RegistryConformanceTests.run()
-for line in report.lines { print(line) }
-print("REGISTRY_TESTS passed=\(report.passed) failed=\(report.failed)")
+let r1 = RegistryConformanceTests.run()
+for line in r1.lines { print(line) }
+let r2 = ProxyConformanceTests.run()
+for line in r2.lines { print(line) }
+print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
+print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
+let failed = r1.failed + r2.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed) failed=\(failed)")
 fflush(stdout)
-exit(report.failed == 0 ? 0 : 1)
+exit(failed == 0 ? 0 : 1)
 SWIFT
 swiftc "${SWIFTC_COMMON[@]}" \
   -I "$MODULES" \
   -o "$TESTRUNNER" \
   "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAHostTestKit.o" \
+  "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
   "$RUNNER/main.swift" \
   || { echo "FAIL: 编译 registry-tests runner 失败"; exit 1; }
 
@@ -210,6 +233,20 @@ assert_contains "$OUT" "假 confirm=true 时 handler 恰执行一次" "纯逻辑
 assert_contains "$OUT" "假 confirm=false → denied" "纯逻辑:dangerous+confirm=false → denied"
 assert_contains "$OUT" "handler 绝不执行(fail-closed 保底)" "纯逻辑:confirm=nil → fail-closed 绝不执行(安全保底)"
 assert_contains "$OUT" "failed=0" "纯逻辑测试无失败项"
+
+# 06 票纯逻辑断言(同一 runner 输出;ProxyConformanceTests:Port 假件 / RESTClient / proxy.status 域逻辑)
+echo "--- 断言组 1b:06 票插件域逻辑纯逻辑(ProxyConformanceTests)---"
+assert_contains "$OUT" "PROXY_TESTS passed=" "06 纯逻辑套件已运行(ProxyConformanceTests)"
+assert_contains "$OUT" "假 ProcessPort:拉起后探活为真" "①ProcessPort 假件:拉起→探活为真"
+assert_contains "$OUT" "假 ProcessPort:终止后探活为假" "①ProcessPort 假件:终止→探活为假"
+assert_contains "$OUT" "假 ProcessPort:回收调用被记录(反孤儿可核验)" "①ProcessPort 假件:回收调用被记录"
+assert_contains "$OUT" "假 ProcessPort:外部死亡后探活为假(健康检查基石)" "①ProcessPort 假件:外部死亡可检测"
+assert_contains "$OUT" "REST 客户端:解析 /configs → mode=rule" "②REST 解析:mode"
+assert_contains "$OUT" "REST 客户端:解析 /configs → mixed-port=7890" "②REST 解析:监听端口"
+assert_contains "$OUT" "REST 客户端:解析 /proxies → 当前节点 STUB-NODE" "②REST 解析:当前节点"
+assert_contains "$OUT" "status 域逻辑:内核存活 → running=true" "③status 域逻辑:内核存活→反映真实"
+assert_contains "$OUT" "内核死亡 → running=false(如实未运行,不报错)" "③status 域逻辑:内核死亡→如实未运行(退出码 0)"
+assert_contains "$OUT" "无内核句柄 → running=false" "③status 域逻辑:无内核句柄→如实未运行"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
@@ -530,6 +567,165 @@ pkill -f "timeout_listener.py" 2>/dev/null
 sleep 1
 rm -f "$SOCK"
 
+# --- 断言组 P:proxy.status 内核生命周期 E2E(06 票主体:真子进程 fake mihomo stub + 真 localhost REST)---
+echo "--- 断言组 P:proxy.status 内核生命周期 E2E(06 票)---"
+chmod +x "$STUB" 2>/dev/null
+# 由 OS 分配一个空闲高位端口(避开常用端口 / 撞端口),交给内核 stub 监听、RESTClient 连接。
+MIHOMO_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null)"
+[ -z "$MIHOMO_PORT" ] && MIHOMO_PORT=48123
+echo "    fake mihomo 控制端口 = $MIHOMO_PORT"
+
+# 起宿主并注入内核 env:AA_MIHOMO_KERNEL_PATH → stub;AA_MIHOMO_CONTROL_PORT → 空闲端口。置全局 HOST_PID/SOCK_UP。
+start_host_kernel() {
+  pkill -f "$KILLPAT" 2>/dev/null
+  pkill -f "$KILLPAT_STUB" 2>/dev/null
+  sleep 1
+  rm -f "$SOCK"
+  AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+  HOST_PID=$!
+  disown "$HOST_PID" 2>/dev/null || true
+  SOCK_UP=0
+  for _ in $(seq 1 100); do
+    [ -S "$SOCK" ] && { SOCK_UP=1; break; }
+    kill -0 "$HOST_PID" 2>/dev/null || break
+    sleep 0.2
+  done
+}
+
+# —— 场景 A:健康检查 + status 真实呈现(内核存活→反映真实;内核死亡→如实未运行且退出码 0)——
+start_host_kernel
+if [ "$SOCK_UP" -eq 1 ]; then
+  # 等内核 REST 就绪(宿主拉起 stub、stub 绑定端口需一瞬):poll 直到 running:true(上限 ~10s)
+  READY=0
+  for _ in $(seq 1 50); do
+    # 等 REST 真就绪(apiReachable:true),而非仅进程存活(running:true 在拉起瞬间即真、但 stub 尚未绑定端口)。
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  if [ "$READY" -eq 1 ]; then
+    echo "PASS: 宿主经 ProcessPort 拉起 fake mihomo,REST 就绪(随宿主启停)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 内核 REST 未在时限内就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+
+  # (P1) aa proxy status --json:退出 0 + 真实(stub)状态(running/端口/mode/节点),经真 localhost REST 读取
+  SP="$("$BIN/aa" proxy status --json 2>/dev/null)"; PRC=$?
+  echo "    aa proxy status(内核存活)输出: $SP"
+  assert_exit 0 $PRC "aa proxy status --json(内核存活)退出码=0"
+  assert_contains "$SP" '"running":true' "proxy status 反映内核存活(running=true)"
+  assert_contains "$SP" '"mode":"rule"' "proxy status 经真 REST 反映真实模式(mode=rule)"
+  assert_contains "$SP" '"mixedPort":7890' "proxy status 反映监听端口(mixedPort=7890)"
+  assert_contains "$SP" '"node":"STUB-NODE"' "proxy status 反映当前节点(node=STUB-NODE)"
+
+  # (P1b) 域子命令 ≡ capabilities call 底座:两种入口结果一致
+  CP="$("$BIN/aa" capabilities call proxy.status --json 2>/dev/null)"; CPRC=$?
+  assert_exit 0 $CPRC "capabilities call proxy.status --json 退出码=0"
+  if [ "$SP" = "$CP" ] && [ -n "$SP" ]; then
+    echo "PASS: 域子命令 aa proxy status ≡ capabilities call proxy.status 逐字节一致"; PASS=$((PASS+1))
+  else
+    echo "FAIL: proxy 域子命令与 call 底座输出不一致(域='$SP' vs call='$CP')"; FAIL=$((FAIL+1))
+  fi
+
+  # (P2) 健康检查:杀内核(stub)但宿主仍活 → 死亡可检测 → status 如实未运行、退出码 0(非报错)
+  pkill -f "$KILLPAT_STUB" 2>/dev/null
+  sleep 2
+  SD="$("$BIN/aa" proxy status --json 2>/dev/null)"; DRC=$?
+  echo "    aa proxy status(内核已死)输出: $SD"
+  assert_exit 0 $DRC "内核死亡后 aa proxy status --json 退出码=0(如实呈现,非报错/非零)"
+  assert_contains "$SD" '"running":false' "健康检查:内核死亡可检测,status 反映真实存活(running=false)"
+else
+  echo "FAIL: proxy 场景A 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# —— 场景 B:反孤儿(宿主退出必回收内核,零孤儿 stub)——
+start_host_kernel
+if [ "$SOCK_UP" -eq 1 ]; then
+  READY=0
+  for _ in $(seq 1 50); do
+    # 等 REST 真就绪(apiReachable:true),而非仅进程存活(running:true 在拉起瞬间即真、但 stub 尚未绑定端口)。
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  STUB_PIDS="$(pgrep -f "$KILLPAT_STUB")"
+  echo "    场景B:宿主拉起的 fake mihomo pid(s)=[$STUB_PIDS]"
+  if [ -n "$STUB_PIDS" ]; then
+    echo "PASS: 宿主经 ProcessPort 拉起了 fake mihomo 子进程(pid: $STUB_PIDS)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 宿主未拉起 fake mihomo 子进程。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+  # 只杀宿主(SIGTERM,模拟宿主退出)——绝不直接碰 stub;stub 应被宿主退出钩子(atexit/信号)回收。
+  pkill -f "$KILLPAT" 2>/dev/null
+  sleep 2
+  LEFT="$(pgrep -f "$KILLPAT_STUB")"
+  if [ -z "$LEFT" ]; then
+    echo "PASS: 宿主退出后无孤儿 fake mihomo 进程(反孤儿回收生效,零孤儿)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 宿主退出后仍有孤儿 stub 进程: $LEFT"; FAIL=$((FAIL+1)); pkill -9 -f "$KILLPAT_STUB" 2>/dev/null
+  fi
+else
+  echo "FAIL: proxy 场景B 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# 清场:杀宿主 + stub(trap 亦兜底)
+pkill -f "$KILLPAT" 2>/dev/null
+pkill -f "$KILLPAT_STUB" 2>/dev/null
+sleep 1
+rm -f "$SOCK"
+
+# —— 场景 C:SIGTERM-忽略型内核经 terminate 仍被 SIGKILL 兜底回收(暴露"发完 SIGTERM 立刻 unrecord"的孤儿洞)——
+# 内核以 --ignore-sigterm 运行(装 handler 吞掉 SIGTERM);宿主收 SIGUSR1 → 优雅退出 → reclaimKernel →
+# ProcessPort.terminate:SIGTERM 被忽略 → 有界等待后 SIGKILL 兜底 → 内核被回收。旧 bug(发完 SIGTERM 立刻 unrecord)
+# 会让该内核既不被 terminate 的 SIGKILL 兜到(未升级)、又从缓冲摘除(退出钩子够不着)→ 孤儿。修后必被回收、无孤儿。
+echo "--- 断言组 P-C:SIGTERM-忽略型内核的 terminate SIGKILL 兜底 ---"
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_MIHOMO_KERNEL_EXTRA_ARGS="--ignore-sigterm" \
+  "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+HOST_PID=$!
+disown "$HOST_PID" 2>/dev/null || true
+SOCK_UP=0
+for _ in $(seq 1 100); do
+  [ -S "$SOCK" ] && { SOCK_UP=1; break; }
+  kill -0 "$HOST_PID" 2>/dev/null || break
+  sleep 0.2
+done
+if [ "$SOCK_UP" -eq 1 ]; then
+  READY=0
+  for _ in $(seq 1 50); do
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  STUB_PIDS="$(pgrep -f "$KILLPAT_STUB")"
+  echo "    场景C:SIGTERM-忽略型内核 pid(s)=[$STUB_PIDS]"
+  if [ -n "$STUB_PIDS" ]; then
+    echo "PASS: 宿主拉起 SIGTERM-忽略型 fake mihomo(REST 就绪)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 未拉起 SIGTERM-忽略型 stub。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+  # 触发宿主优雅退出(SIGUSR1)→ 走 applicationWillTerminate → reclaimKernel → ProcessPort.terminate 完整回收路径。
+  kill -USR1 "$HOST_PID" 2>/dev/null
+  # terminate:SIGTERM(被忽略)→ ~1.5s 有界等待 → SIGKILL 兜底 → 回收;再加宿主退出时间。给足 6s。
+  sleep 6
+  LEFTC="$(pgrep -f "$KILLPAT_STUB")"
+  if [ -z "$LEFTC" ]; then
+    echo "PASS: SIGTERM-忽略型内核经 terminate 被 SIGKILL 兜底回收,无孤儿(反孤儿兜底真生效)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: SIGTERM-忽略型内核成孤儿(terminate 兜底失效): $LEFTC"; FAIL=$((FAIL+1)); pkill -9 -f "$KILLPAT_STUB" 2>/dev/null
+  fi
+  if kill -0 "$HOST_PID" 2>/dev/null; then
+    echo "FAIL: 宿主收 SIGUSR1 后未退出"; FAIL=$((FAIL+1)); pkill -f "$KILLPAT" 2>/dev/null
+  else
+    echo "PASS: 宿主经 SIGUSR1 优雅退出(走完 terminate 回收路径)"; PASS=$((PASS+1))
+  fi
+else
+  echo "FAIL: proxy 场景C 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# 清场:杀宿主 + stub(trap 亦兜底)
+pkill -f "$KILLPAT" 2>/dev/null
+pkill -f "$KILLPAT_STUB" 2>/dev/null
+sleep 1
+rm -f "$SOCK"
+
 # --- 断言组 3:PluginProxy 不依赖任何 Host*(01 票铁律,继续把关)---
 echo "--- 断言组 3:PluginProxy 不依赖任何 Host* ---"
 # (3a) 源码级 grep 守卫:PluginProxy 源码不得 import 任何 Host* 模块。
@@ -547,6 +743,21 @@ fi
 # (3b) 编译期守卫:上面阶段 A 已用「仅 SDK/Contracts/UISystem 的 -I」编过 PluginProxy,能到这里即已证明。
 echo "PASS: PluginProxy 已在受限 -I(无 Host* 模块)下编译成功 —— 编译期证明不需要 Host*"
 PASS=$((PASS+1))
+
+# (3c) 06 票 Port 落点核验:ProcessPort/HTTPPort **协议**必须声明在 AAPluginSDK(插件只依赖 SDK),Host* 侧只能是实现/假件。
+PORT_DECL_SDK="$(grep -REn 'protocol[[:space:]]+(ProcessPort|HTTPPort)' Sources/AAPluginSDK/)"
+if [ -n "$PORT_DECL_SDK" ]; then
+  echo "PASS: ProcessPort/HTTPPort 协议声明在 AAPluginSDK(插件只依赖 SDK 即可用)"; PASS=$((PASS+1))
+else
+  echo "FAIL: 未在 AAPluginSDK 找到 ProcessPort/HTTPPort 协议声明"; FAIL=$((FAIL+1))
+fi
+PORT_DECL_HOST="$(grep -REn 'protocol[[:space:]]+(ProcessPort|HTTPPort)' Sources/AAHostMacOS/ Sources/AAHostRuntime/ Sources/AAHostTestKit/)"
+GREP_PORT_RC=$?
+if [ "$GREP_PORT_RC" -eq 1 ] && [ -z "$PORT_DECL_HOST" ]; then
+  echo "PASS: Host* 侧不声明 Port 协议(只提供真实现/假件),边界正确"; PASS=$((PASS+1))
+else
+  echo "FAIL: Port 协议不应声明在 Host*(命中: $PORT_DECL_HOST)"; FAIL=$((FAIL+1))
+fi
 
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
 echo "--- 断言组 4:aa --help 退出码语义表(逐码)---"
@@ -623,6 +834,16 @@ IPFOREIGN="$BUILD/install-foreign"; mkdir -p "$IPFOREIGN"; ln -s /bin/ls "$IPFOR
 "$BIN/aa" install-cli --uninstall --prefix "$IPFOREIGN" >/dev/null 2>&1; RC=$?
 assert_exit 1 $RC "install-cli --uninstall 拒删非本 aa 链接 → 退出码=1"
 if [ -L "$IPFOREIGN/aa" ]; then echo "PASS: --uninstall 未误删指向别处的链接(不误删非自己建的)"; PASS=$((PASS+1)); else echo "FAIL: --uninstall 误删了别处链接"; FAIL=$((FAIL+1)); fi
+
+# --- 断言组 R:跑完清场核验(无残留宿主 / stub / 假监听器)---
+echo "--- 断言组 R:跑完清场核验(无残留)---"
+sleep 1
+RES_HOST="$(pgrep -f "$KILLPAT")"
+RES_STUB="$(pgrep -f "$KILLPAT_STUB")"
+RES_LIS="$(pgrep -f "timeout_listener.py")"
+if [ -z "$RES_HOST" ]; then echo "PASS: 无残留宿主进程"; PASS=$((PASS+1)); else echo "FAIL: 残留宿主进程: $RES_HOST"; FAIL=$((FAIL+1)); fi
+if [ -z "$RES_STUB" ]; then echo "PASS: 无残留 fake mihomo stub 进程"; PASS=$((PASS+1)); else echo "FAIL: 残留 stub 进程: $RES_STUB"; FAIL=$((FAIL+1)); fi
+if [ -z "$RES_LIS" ]; then echo "PASS: 无残留超时假监听器进程"; PASS=$((PASS+1)); else echo "FAIL: 残留假监听器: $RES_LIS"; FAIL=$((FAIL+1)); fi
 
 echo
 echo "========================================"

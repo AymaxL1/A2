@@ -40,9 +40,13 @@ let package = Package(
         //   现阶段 Sources/AAHostMacOS/HostApp.swift 里塞的 @main 只是 vfsoverlay 过桥用(check.sh 单独把它编成可执行冒烟);
         //   正确终态归 12 票:把 @main 移进 XcodeGen app 壳、AppDelegate 转 public,本 target 保持库不变。
         //   因此这里保持 .target(库),不要改成 .executableTarget。
-        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts"]),
-        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts"]),
+        // 06 票:宿主 V1 内封栈——AAHostMacOS 装配 PluginProxy(注入真 Port),故新增 AAPluginSDK + PluginProxy 依赖。
+        //   注意方向:宿主依赖插件(合法);铁律只禁「插件依赖 Host*」,不禁「Host 依赖插件」。
+        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
+        // 06 票:AAHostTestKit 加 Port 假件 + 插件域逻辑纯逻辑测试,故新增 AAPluginSDK + PluginProxy 依赖(同样是「测试基建依赖插件」,合法)。
+        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
         // 铁律:PluginProxy 只依赖 SDK / Contracts / UISystem,绝不依赖任何 Host* target。
+        //   06 票新增的 ProcessPort/HTTPPort **协议**定在 AAPluginSDK(插件只依赖 SDK),真实现/假件在 Host* 侧——边界不破。
         .target(name: "PluginProxy", dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"]),
 
         // ④ CLI 可执行
