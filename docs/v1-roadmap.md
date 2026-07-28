@@ -1,7 +1,7 @@
 # V1 阶段路线（Mac-only / Swift 原生）
 
 > 定稿：2026-07-28。取代 [platform-framework-research.md](research/platform-framework-research.md) 的 §10（spike 清单）与 §11（分阶段路线）；该文档逐节处置清单见 [03 票](../.scratch/v1-mac-recharter/issues/03-tech-stack-decision.md) Answer。
-> 决策依据：`.scratch/v1-mac-recharter/`（地图与八张票）；正式决定见 `docs/adr/0001`–`0007`（现均 proposed）。
+> 决策依据：`.scratch/v1-mac-recharter/`（地图与八张票）；正式决定见 `docs/adr/0001`–`0007`（均 accepted）。
 
 ## 总览
 
@@ -37,6 +37,8 @@ workspace-write 沙箱下 `aa` 连宿主 UDS 是否放行。本 spike 只有结�
 
 **Phase 0 收尾：回退裁决（一次，之后不回头）**。仅结构性失败触发回退 Electron+TS：
 ① 宠物窗点透/多空间达不到 Electron 参照水平；② AI 在 Swift 上无法自主完成改-编-测循环（反复卡死需人拆解）；③ 本地 IPC 全被沙箱拦且无可接受备选。单纯「开发慢一点」不触发。
+
+**状态：回退裁决已完成（2026-07-28）——维持 Swift,V1 内封栈。** 三条硬门均未触发;硬门之外用户以新动机（进度/工具链/通用性）追加一轮 Electron 回退预研（electron-recon,七张 AFK 票 + E1 冒烟）,终裁不翻案（[ADR 0002 重评记录](adr/0002-swift-native-stack.md)、裁决全文 `.scratch/electron-recon/issues/09-final-ruling.md`）。Phase 0 剩余项 = 基建（SPM 骨架/XcodeGen/check.sh/最小签名仪式）,前置条件 = 装完整 Xcode.app（用户择时;本机 CLT 损坏,修好前 `swift build` 不可信）;期间纸面工作（spec/tickets/域模型）零 Xcode 先行。
 
 ## Phase 1 — 平台最小核 + 代理插件
 

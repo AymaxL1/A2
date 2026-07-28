@@ -40,3 +40,7 @@ V1 采用 **Swift 原生路线**：Swift/SwiftUI，AppKit 兜底（`NSStatusItem
 - **年度 SDK 升级纪律**：WWDC 后 pin SDK、计划内批量升级。
 
 后续工作：包边界与架构映射归 [07 票](../../.scratch/v1-mac-recharter/issues/07-swift-architecture-mapping.md)；测试策略与 spike 清单重排（候选：宠物悬浮窗、capability 纵切含 CLI、Sparkle 签名公证更新链、Codex↔CLI 沙箱实测）归 08 票。
+
+## 重评记录
+
+- **2026-07-28(electron-recon):维持原判,V1 内封栈。** Phase 0 三 spike 全过、三条回退硬门均未触发之后,用户以硬门之外的新动机(进度/工具链/通用性)发起一次性重评(七张 AFK 票 + E1 本机冒烟,材料见 [docs/research/electron-recon/](../research/electron-recon/README.md));终裁不翻案。「回退候选 Electron+TS」条款经本次重评**行使并了结**——V1 期内技术栈问题不再受理。要点:堵点定性为一次性环境阻塞(接受装 Xcode,挂 Phase 0 基建前置)而非原则拒绝苹果工具链;「宠物窗压全屏之上」定为硬需求(S1 已验 vs Electron 多年 wontfix);Windows 诉求存在但重新确认 [ADR 0001](0001-mac-only-platform-boundary.md)「届时含核心重写」。裁决全文:[09 票](../../.scratch/electron-recon/issues/09-final-ruling.md)。
