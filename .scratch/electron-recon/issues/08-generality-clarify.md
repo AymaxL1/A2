@@ -1,7 +1,7 @@
 # 08 — 「不够通用 / 不被 Xcode 卡」的确切诉求(HITL)
 
 Type: grilling
-Status: open
+Status: resolved
 
 ## Question
 
@@ -13,3 +13,14 @@ Status: open
 4. 签名身份现状(钥匙串 0 证书):有 Apple 开发者账号吗?正式分发预期何时开始?(决定 Phase 3 排期,两栈都躲不开证书。)
 
 本票在明天与用户的对话中解决;问题已汇入 `questions-for-user.md`。
+
+## Answer
+
+2026-07-28 当面澄清(与 09 票终裁同场):
+
+1. **「通用」= (a)+(b) 都有**:既有开发环境诉求(不绑 Xcode),也有将来产品上 Windows 的念想。
+2. **ADR 0001(Mac-only)维持不动**:Windows 诉求存在,但用户重新确认旧承诺「届时接受含核心重写」,并**明文放弃** Electron 预研查实的 Windows 折扣(06 票:适配包+独立签名 vs 含核心全重写)。将来真做 Windows 是重画目的地的新效fort。
+3. **「快速初版」口径**:堵点是「被 Xcode 排队阻塞」,不是原则性拒绝苹果工具链——用户明确「接受装,只是不是今天」。切栈重写成本(S1/S2 重做 + ADR/路线修订 + 3–5 倍常驻内存 + 8 周升级节奏)不接受。Xcode 安装仪式挂为 Phase 0 基建前置待办,期间只推进零 Xcode 纸面工作(to-spec/to-tickets 等)。
+4. **签名身份**:无 Apple Developer 账号(个人/公司都没有),暂无对外分发计划。免费 Apple ID dev 签名(解通知崩溃坑)挂装 Xcode 后;付费账号 + Developer ID 挂 Phase 3 前置,临近再办。
+
+结论汇入 09 票终裁。
