@@ -1,6 +1,6 @@
 # 04: 产出《宿主调用本地 agent 适配层》spec
 
-Status: open
+Status: claimed
 Type: task
 Blocked by: 01, 02, 03
 
