@@ -77,6 +77,13 @@ KILLPAT="$HOST_BIN"
 STUB="$ROOT/Scripts/fake-mihomo.py"
 KILLPAT_STUB="$STUB"
 
+# 08 票:接管态持久化默认落点 —— **全局导出**到 $BUILD 临时区,确保**所有**测试宿主(06/07/08)绝不污染真实 AppSupport。
+#   宿主读 env seam AA_TAKEOVER_STATE_PATH(生产缺省为真实 AppSupport)。08 各 kill -9 剧本按需以 per-launch env 覆盖到独立文件。
+export AA_TAKEOVER_STATE_PATH="$BUILD/takeover-default.json"
+# 真实 AppSupport 的接管态文件:跑前 md5 快照,跑后比对,断言本次运行未触碰它(未污染真实 AppSupport 的证明)。
+REAL_TAKEOVER="$HOME/Library/Application Support/AA/takeover-state.json"
+REAL_TAKEOVER_BEFORE="$( [ -e "$REAL_TAKEOVER" ] && md5 -q "$REAL_TAKEOVER" 2>/dev/null || echo ABSENT )"
+
 SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
 
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
@@ -89,6 +96,7 @@ cleanup() {
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
+  rm -f "$AA_TAKEOVER_STATE_PATH" 2>/dev/null   # 08:清临时区默认持久化文件(绝不落真实 AppSupport)
 }
 trap cleanup EXIT
 
@@ -259,6 +267,32 @@ assert_contains "$OUT" "还原后再次快照 == 接管前快照(终态精确复
 assert_contains "$OUT" "重复 enable 不覆盖首次快照" "④幂等:重复 enable 不覆盖首次快照"
 assert_contains "$OUT" "内核端口未就绪时 enable 报 capability_failed(退出码5,不崩)" "⑤内核端口未就绪→enable 报业务失败(不崩)"
 assert_contains "$OUT" "还原覆盖接管后新增的服务→回到接管前第三方代理(不残留指向内核死端口)" "④'重放漏洞修复:接管后新增服务也进快照、能被还原(不残留死端口)"
+
+# 08 票纯逻辑 + 执行编排断言(同一 runner 输出;CrashRecoveryConformanceTests:判定五分支 + reap 孤儿 + 不变式,注入假件)
+echo "--- 断言组 1d:08 票崩溃自愈判定/执行纯逻辑(CrashRecoveryConformanceTests)---"
+# 判定五分支(纯函数 SelfHealDecision.decide):
+assert_contains "$OUT" "08 自愈判定:无持久化标记 → clean(无操作)" "①判定:无标记→clean"
+assert_contains "$OUT" "08 自愈判定:有标记但代理已不指向我方端口 → 用户手动改过(不覆盖,只清标记)" "②判定:用户手动改过代理→不覆盖只清标记"
+assert_contains "$OUT" "08 自愈判定:残留接管 + 内核可健康重启 → 恢复接管(重指存活端口)" "③a 判定:残留+可重启→恢复接管"
+assert_contains "$OUT" "08 自愈判定:残留接管 + 内核不可健康重启 → 还原快照(降级直连)" "③b 判定:残留+不可重启→还原快照"
+assert_contains "$OUT" "08 自愈判定:代理指向我方端口且端口仍活 → 校正标记(视为正常)" "④判定:指向且端口活→校正标记"
+# 执行编排(经 ProxyPlugin.selfHeal + 假件):恢复/还原/用户改过/无标记 + 孤儿先 reap。
+assert_contains "$OUT" "08 孤儿清理:上世代残留内核 pid 4242 被先 reap(恢复前清孤儿)" "⑤孤儿 pid→自愈前先 reap(还 06 反孤儿债)"
+assert_contains "$OUT" "08 恢复接管:系统代理指向存活端口 127.0.0.1:7890(内核已重启)" "执行:恢复接管→代理指向存活端口"
+assert_contains "$OUT" "08 还原快照:精确还原成接管前第三方代理 203.0.113.9:8080(非一律关闭)" "执行:还原快照→精确复原第三方代理"
+assert_contains "$OUT" "08 用户改过:绝不覆盖用户设置(用户的第三方代理 198.51.100.5:1080 原封不动)" "执行:用户改过→不覆盖用户设置"
+assert_contains "$OUT" "08 clean:无标记时不写系统代理(提前返回,避免无谓触达真 networksetup)" "执行:无标记→不触达 networksetup"
+# 核心不变式:任一自愈路径后系统代理都不指向死端口(恢复→存活端口 / 还原→直连-第三方 / 用户改过→尊重用户)。
+assert_contains "$OUT" "08 不变式(恢复):恢复接管后有存活受管内核" "核心不变式(恢复路径):不指向死端口"
+assert_contains "$OUT" "08 不变式(还原):还原后系统代理不再指向死端口 127.0.0.1:7890" "核心不变式(还原路径):不指向死端口"
+assert_contains "$OUT" "08 不变式(用户改过):终态不指向我方死端口 7890" "核心不变式(用户改过路径):不指向死端口"
+# code-review 修复:pid 身份核验(修盲杀)+ 还原失败保留标记(修清标记)+ 读代理失败 deferred(修误判)。
+assert_contains "$OUT" "08 身份核验:路径不符(pid 已复用为无辜进程)→ 判为非我方 → 不 reap" "修盲杀·纯逻辑:pid 路径不符→不 reap"
+assert_contains "$OUT" "08 身份核验:读不到当前路径(pid 已死 / EPERM 非本用户进程)→ 不 reap" "修盲杀·纯逻辑:读不到路径/EPERM→不 reap"
+assert_contains "$OUT" "08 修盲杀:持久化 pid 身份不符(路径≠记录内核路径)→ 绝不 reap(不杀无辜进程)" "修盲杀·执行:身份不符 pid 绝不被 SIGKILL"
+assert_contains "$OUT" "08 修盲杀:自愈后系统代理不再指向死端口(网络照常复原)" "修盲杀·执行:不杀之余网络仍自愈(不指向死端口)"
+assert_contains "$OUT" "08 修清标记 bug:还原失败 → 保留持久化标记(clearCount=0),下次启动重试" "修清标记:还原失败→保留标记待重试(不留死端口后清标记)"
+assert_contains "$OUT" "08 修误判:读当前系统代理失败 → deferred(保守中止,不误判用户改过)" "修误判:读代理失败→deferred 保留标记,不误判 userChanged"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
@@ -852,6 +886,154 @@ pkill -f "$KILLPAT_STUB" 2>/dev/null
 sleep 1
 rm -f "$SOCK"
 
+# --- 断言组 SH:崩溃自愈 E2E(08 票主体:文件后端假 NetworkConfigPort + fake stub + 持久化临时区,kill -9 剧本,绝不碰真系统)---
+# 姿态:整条剧本用 kill -9 强杀宿主(atexit/信号退出钩子**都不跑**)——留下「代理指向死端口 + 持久化接管态标记 + 孤儿内核」。
+#   重启宿主 → 启动早期自愈跑一次:reap 上世代孤儿内核 → 恢复接管(重启内核+重指存活端口)或还原快照(降级直连)或
+#   (用户改过)只清标记。**硬不变式**:任一自愈路径后系统代理都不指向死端口。持久化写 $BUILD 临时区(per-launch env),绝不碰真 AppSupport。
+echo "--- 断言组 SH:崩溃自愈 E2E(08 票 kill -9 剧本)---"
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+
+SHNET="$BUILD/selfheal-netfake.json"
+SHSTATE="$BUILD/selfheal-takeover.json"
+
+# 接管前初始快照(Wi-Fi 全关;Ethernet 原第三方代理 203.0.113.9:8080,SOCKS 关)—— 证明还原精确、非一律关闭。
+write_shnet_initial() {
+cat > "$SHNET" <<'JSON'
+{"services":[
+{"service":"Wi-Fi","http":{"enabled":false,"host":"","port":0},"https":{"enabled":false,"host":"","port":0},"socks":{"enabled":false,"host":"","port":0}},
+{"service":"Ethernet","http":{"enabled":true,"host":"203.0.113.9","port":8080},"https":{"enabled":true,"host":"203.0.113.9","port":8080},"socks":{"enabled":false,"host":"","port":0}}
+]}
+JSON
+python3 -c 'import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],"w"), sort_keys=True)' "$SHNET" "$BUILD/selfheal-initial.json" 2>/dev/null
+}
+shnet_equals_initial() {
+python3 -c 'import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-initial.json" 2>/dev/null
+}
+
+# 建立「一个崩溃世代」:起宿主(内核 stub + 假网络 + 独立持久化文件)→ 等 REST 就绪 → proxy on 接管 →
+#   捕获内核 stub pid 为 $ORPHAN_PID → kill -9 宿主(退出钩子不跑)。留:代理指向死端口 + 持久化标记 + 孤儿内核。返回非 0 表示前置失败。
+crash_generation() {
+  pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+  write_shnet_initial
+  rm -f "$SHSTATE"
+  AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSETUP_FAKE_STATE="$SHNET" \
+    AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+  HOST_PID=$!
+  disown "$HOST_PID" 2>/dev/null || true
+  SOCK_UP=0
+  for _ in $(seq 1 100); do [ -S "$SOCK" ] && { SOCK_UP=1; break; }; kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.2; done
+  [ "$SOCK_UP" -eq 1 ] || return 1
+  READY=0
+  for _ in $(seq 1 50); do
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  [ "$READY" -eq 1 ] || return 1
+  "$BIN/aa" proxy on --json >/dev/null 2>&1 || return 1
+  ORPHAN_PID="$(pgrep -f "$KILLPAT_STUB" | head -1)"
+  kill -9 "$HOST_PID" 2>/dev/null   # SIGKILL:atexit/信号钩子都不跑 → 孤儿内核 stub 被 launchd 收养、仍存活
+  sleep 2
+  rm -f "$SOCK"                     # 清 kill -9 遗留的陈旧 socket 文件(避免下次启动的就绪探测假阳)
+  return 0
+}
+
+# 起「重启后的新世代」宿主并等 socket 就绪。$1..= 额外 env 赋值(如 AA_MIHOMO_KERNEL_PATH=…)。
+# 关键:先删被 kill -9 的上世代留下的**陈旧 socket 文件**(kill -9 不清 UDS 文件),否则「socket 存在」会假就绪——
+#   自愈在 UDS server 启动**之前**同步跑完,故新 socket 出现 == 自愈已完成且开始服务(SOCK_UP 才是可靠就绪信号)。
+start_restart_host() {
+  rm -f "$SOCK"
+  # 用 env 施加 env 变量:从 "$@" 展开来的 NAME=VALUE 无法被 bash 当赋值处理,必须交给 env 命令解析。
+  env "$@" AA_NETWORKSETUP_FAKE_STATE="$SHNET" AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+  HOST_PID=$!
+  disown "$HOST_PID" 2>/dev/null || true
+  SOCK_UP=0
+  for _ in $(seq 1 200); do [ -S "$SOCK" ] && { SOCK_UP=1; break; }; kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.2; done
+}
+
+# —— 剧本 A:接管 → kill -9 → 重启(带内核)→ 恢复接管(reap 孤儿 + 重启内核 + 重指存活端口)——
+if crash_generation; then
+  echo "    剧本A:crash 后 orphan 内核 pid=$ORPHAN_PID"
+  # 崩溃残留三件套:代理指向死端口 + 持久化标记(含 kernelPort/kernelPID/snapshot)+ 孤儿内核仍活。
+  if grep -qF '"enabled":true,"host":"127.0.0.1","port":7890' "$SHNET"; then echo "PASS: 剧本A crash 后系统代理仍指向死端口 127.0.0.1:7890(断网态,待自愈)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A crash 后未见指向死端口的代理。文件: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+  if [ -f "$SHSTATE" ] && grep -qF '"kernelPort":7890' "$SHSTATE" && grep -qF '"snapshot"' "$SHSTATE" && grep -qF '"kernelPID"' "$SHSTATE"; then echo "PASS: 剧本A crash 后持久化接管态清单在(含 snapshot/kernelPort/kernelPID)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A crash 后持久化清单缺失/不完整: $(cat "$SHSTATE" 2>/dev/null)"; FAIL=$((FAIL+1)); fi
+  if [ -n "$ORPHAN_PID" ] && kill -0 "$ORPHAN_PID" 2>/dev/null; then echo "PASS: 剧本A crash 后孤儿内核仍存活(pid=$ORPHAN_PID;kill -9 宿主退出钩子没跑到)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A crash 后孤儿内核未存活(pid=$ORPHAN_PID)——无法验证跨世代 reap"; FAIL=$((FAIL+1)); fi
+
+  start_restart_host AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT"
+  if [ "$SOCK_UP" -eq 1 ]; then
+    READY=0
+    for _ in $(seq 1 60); do
+      if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+      sleep 0.2
+    done
+    echo "    剧本A 重启+自愈日志:"; grep -F 'self-heal' "$HOSTLOG" | sed 's/^/      /'
+    NEW_STUB="$(pgrep -f "$KILLPAT_STUB" | grep -vx "$ORPHAN_PID" | head -1)"
+    if grep -qF 'self-heal decision=recoverTakeover' "$HOSTLOG"; then echo "PASS: 剧本A 自愈判定=恢复接管(recoverTakeover)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 自愈未走恢复接管。日志: $(grep -F self-heal "$HOSTLOG")"; FAIL=$((FAIL+1)); fi
+    if [ -n "$ORPHAN_PID" ] && ! kill -0 "$ORPHAN_PID" 2>/dev/null; then echo "PASS: 剧本A 自愈 reap 了上世代孤儿内核(旧 pid=$ORPHAN_PID 已不存活,还 06 反孤儿债)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 上世代孤儿内核未被 reap(pid=$ORPHAN_PID 仍在)"; FAIL=$((FAIL+1)); pkill -9 -f "$KILLPAT_STUB" 2>/dev/null; fi
+    SPA="$("$BIN/aa" proxy status --json 2>/dev/null)"
+    if printf '%s' "$SPA" | grep -qF '"running":true'; then echo "PASS: 剧本A 自愈后有存活受管内核(proxy.status running=true → 端口非死)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 自愈后无存活受管内核。status=$SPA"; FAIL=$((FAIL+1)); fi
+    if grep -qF '"enabled":true,"host":"127.0.0.1","port":7890' "$SHNET"; then echo "PASS: 剧本A 自愈后系统代理指向 127.0.0.1:7890(现由重启内核承载,不指向死端口)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 自愈后代理未指向内核端口。文件: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+    if [ -n "$NEW_STUB" ] && [ "$NEW_STUB" != "$ORPHAN_PID" ]; then echo "PASS: 剧本A 自愈重启了新内核(new pid=$NEW_STUB ≠ 旧孤儿 $ORPHAN_PID)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 未见与旧孤儿不同的新内核(new=$NEW_STUB, orphan=$ORPHAN_PID)"; FAIL=$((FAIL+1)); fi
+    if [ -n "$NEW_STUB" ] && [ -f "$SHSTATE" ] && grep -qF "\"kernelPID\":$NEW_STUB" "$SHSTATE"; then echo "PASS: 剧本A 自愈更新了持久化标记(kernelPID=$NEW_STUB,仍处接管态)"; PASS=$((PASS+1)); else echo "FAIL: 剧本A 持久化标记未更新为新内核 pid(new=$NEW_STUB)。文件: $(cat "$SHSTATE" 2>/dev/null)"; FAIL=$((FAIL+1)); fi
+  else
+    echo "FAIL: 剧本A 重启宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL: 剧本A crash_generation 未成功建立残留接管态(前置失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+
+# —— 剧本 B:接管 → kill -9 → 重启(不带内核)→ 还原快照(内核不可重启 → 降级直连,精确复原)——
+if crash_generation; then
+  echo "    剧本B:crash 后 orphan 内核 pid=$ORPHAN_PID"
+  start_restart_host   # 不带 AA_MIHOMO_KERNEL_PATH → 内核不可重启
+  if [ "$SOCK_UP" -eq 1 ]; then
+    sleep 1
+    echo "    剧本B 重启+自愈日志:"; grep -F 'self-heal' "$HOSTLOG" | sed 's/^/      /'
+    if grep -qF 'self-heal decision=restoreSnapshot' "$HOSTLOG"; then echo "PASS: 剧本B 自愈判定=还原快照(restoreSnapshot,内核不可重启→降级直连)"; PASS=$((PASS+1)); else echo "FAIL: 剧本B 自愈未走还原快照。日志: $(grep -F self-heal "$HOSTLOG")"; FAIL=$((FAIL+1)); fi
+    if [ -n "$ORPHAN_PID" ] && ! kill -0 "$ORPHAN_PID" 2>/dev/null; then echo "PASS: 剧本B 自愈同样先 reap 了上世代孤儿内核(旧 pid=$ORPHAN_PID 已不存活)"; PASS=$((PASS+1)); else echo "FAIL: 剧本B 孤儿内核未被 reap(pid=$ORPHAN_PID)"; FAIL=$((FAIL+1)); pkill -9 -f "$KILLPAT_STUB" 2>/dev/null; fi
+    if grep -qF '127.0.0.1' "$SHNET"; then echo "FAIL: 剧本B 自愈后仍残留死端口 127.0.0.1(未清)。文件: $(cat "$SHNET")"; FAIL=$((FAIL+1)); else echo "PASS: 剧本B 自愈后系统代理不再指向死端口 127.0.0.1(降级直连,不断网)"; PASS=$((PASS+1)); fi
+    if grep -qF '"enabled":true,"host":"203.0.113.9","port":8080' "$SHNET"; then echo "PASS: 剧本B 还原快照精确回到接管前第三方代理 203.0.113.9:8080(非一律关闭)"; PASS=$((PASS+1)); else echo "FAIL: 剧本B 未精确还原第三方代理。文件: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+    if shnet_equals_initial; then echo "PASS: 剧本B 自愈后假 networksetup 终态=接管前快照(精确复原)"; PASS=$((PASS+1)); else echo "FAIL: 剧本B 终态≠接管前快照。终态: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+    if [ ! -e "$SHSTATE" ]; then echo "PASS: 剧本B 自愈还原后清除了持久化标记(无残留接管,下次启动 clean)"; PASS=$((PASS+1)); else echo "FAIL: 剧本B 还原后持久化标记仍在: $(cat "$SHSTATE")"; FAIL=$((FAIL+1)); fi
+  else
+    echo "FAIL: 剧本B 重启宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL: 剧本B crash_generation 未成功(前置失败)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+
+# —— 剧本 C:接管 → kill -9 → 用户手动把代理改成别的第三方 → 重启 → 只清陈旧标记、绝不覆盖用户设置 ——
+if crash_generation; then
+  # 用户手动把系统代理改成第三方 198.51.100.5:1080(不再指向我方 7890)。
+cat > "$SHNET" <<'JSON'
+{"services":[
+{"service":"Wi-Fi","http":{"enabled":true,"host":"198.51.100.5","port":1080},"https":{"enabled":true,"host":"198.51.100.5","port":1080},"socks":{"enabled":false,"host":"","port":0}},
+{"service":"Ethernet","http":{"enabled":true,"host":"198.51.100.5","port":1080},"https":{"enabled":true,"host":"198.51.100.5","port":1080},"socks":{"enabled":false,"host":"","port":0}}
+]}
+JSON
+  python3 -c 'import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],"w"), sort_keys=True)' "$SHNET" "$BUILD/selfheal-userchanged.json" 2>/dev/null
+  start_restart_host AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT"
+  if [ "$SOCK_UP" -eq 1 ]; then
+    sleep 1
+    echo "    剧本C 重启+自愈日志:"; grep -F 'self-heal' "$HOSTLOG" | sed 's/^/      /'
+    if grep -qF 'self-heal decision=userChangedProxy' "$HOSTLOG"; then echo "PASS: 剧本C 自愈判定=用户手动改过代理(userChangedProxy)"; PASS=$((PASS+1)); else echo "FAIL: 剧本C 自愈未走 userChanged。日志: $(grep -F self-heal "$HOSTLOG")"; FAIL=$((FAIL+1)); fi
+    if python3 -c 'import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-userchanged.json" 2>/dev/null; then echo "PASS: 剧本C 绝不覆盖用户设置(用户第三方代理 198.51.100.5:1080 原封不动)"; PASS=$((PASS+1)); else echo "FAIL: 剧本C 自愈改动了用户设置。终态: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+    if grep -qF '127.0.0.1' "$SHNET"; then echo "FAIL: 剧本C 竟出现 127.0.0.1(不该指向我方端口)"; FAIL=$((FAIL+1)); else echo "PASS: 剧本C 终态不指向我方死端口(尊重用户直连/第三方设置)"; PASS=$((PASS+1)); fi
+    if [ ! -e "$SHSTATE" ]; then echo "PASS: 剧本C 清除了陈旧持久化标记(不再自作主张接管)"; PASS=$((PASS+1)); else echo "FAIL: 剧本C 陈旧标记仍在: $(cat "$SHSTATE")"; FAIL=$((FAIL+1)); fi
+  else
+    echo "FAIL: 剧本C 重启宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL: 剧本C crash_generation 未成功(前置失败)"; FAIL=$((FAIL+1))
+fi
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+rm -f "$SHSTATE" "$AA_TAKEOVER_STATE_PATH"
+
 # --- 断言组 3:PluginProxy 不依赖任何 Host*(01 票铁律,继续把关)---
 echo "--- 断言组 3:PluginProxy 不依赖任何 Host* ---"
 # (3a) 源码级 grep 守卫:PluginProxy 源码不得 import 任何 Host* 模块。
@@ -883,6 +1065,21 @@ if [ "$GREP_PORT_RC" -eq 1 ] && [ -z "$PORT_DECL_HOST" ]; then
   echo "PASS: Host* 侧不声明 Port 协议(只提供真实现/假件),边界正确"; PASS=$((PASS+1))
 else
   echo "FAIL: Port 协议不应声明在 Host*(命中: $PORT_DECL_HOST)"; FAIL=$((FAIL+1))
+fi
+
+# (3d) 08 票新增 Port 落点核验:TakeoverStateStore/ProcessReaper **协议**必须声明在 AAPluginSDK(插件只依赖 SDK),Host* 侧只能是实现/假件。
+NEWPORT_DECL_SDK="$(grep -REn 'protocol[[:space:]]+(TakeoverStateStore|ProcessReaper)' Sources/AAPluginSDK/)"
+if [ -n "$NEWPORT_DECL_SDK" ]; then
+  echo "PASS: TakeoverStateStore/ProcessReaper 协议声明在 AAPluginSDK(08 新 Port 亦在 SDK,插件不依赖 Host*)"; PASS=$((PASS+1))
+else
+  echo "FAIL: 未在 AAPluginSDK 找到 TakeoverStateStore/ProcessReaper 协议声明"; FAIL=$((FAIL+1))
+fi
+NEWPORT_DECL_HOST="$(grep -REn 'protocol[[:space:]]+(TakeoverStateStore|ProcessReaper)' Sources/AAHostMacOS/ Sources/AAHostRuntime/ Sources/AAHostTestKit/)"
+NEWPORT_RC=$?
+if [ "$NEWPORT_RC" -eq 1 ] && [ -z "$NEWPORT_DECL_HOST" ]; then
+  echo "PASS: Host* 侧不声明 08 新 Port 协议(只提供文件后端/假件),边界正确"; PASS=$((PASS+1))
+else
+  echo "FAIL: 08 新 Port 协议不应声明在 Host*(命中: $NEWPORT_DECL_HOST)"; FAIL=$((FAIL+1))
 fi
 
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
@@ -970,6 +1167,10 @@ RES_LIS="$(pgrep -f "timeout_listener.py")"
 if [ -z "$RES_HOST" ]; then echo "PASS: 无残留宿主进程"; PASS=$((PASS+1)); else echo "FAIL: 残留宿主进程: $RES_HOST"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_STUB" ]; then echo "PASS: 无残留 fake mihomo stub 进程"; PASS=$((PASS+1)); else echo "FAIL: 残留 stub 进程: $RES_STUB"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_LIS" ]; then echo "PASS: 无残留超时假监听器进程"; PASS=$((PASS+1)); else echo "FAIL: 残留假监听器: $RES_LIS"; FAIL=$((FAIL+1)); fi
+
+# 08:未污染真实 AppSupport 接管态文件的证明(跑前后 md5 一致;所有测试宿主的持久化都被 env seam 导向 $BUILD 临时区)。
+REAL_TAKEOVER_AFTER="$( [ -e "$REAL_TAKEOVER" ] && md5 -q "$REAL_TAKEOVER" 2>/dev/null || echo ABSENT )"
+if [ "$REAL_TAKEOVER_BEFORE" = "$REAL_TAKEOVER_AFTER" ]; then echo "PASS: 未污染真实 AppSupport 接管态文件(跑前后一致: $REAL_TAKEOVER_AFTER)"; PASS=$((PASS+1)); else echo "FAIL: 真实 AppSupport 接管态文件被本次运行改动(before=$REAL_TAKEOVER_BEFORE after=$REAL_TAKEOVER_AFTER)"; FAIL=$((FAIL+1)); fi
 
 echo
 echo "========================================"

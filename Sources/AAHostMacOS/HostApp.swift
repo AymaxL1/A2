@@ -96,11 +96,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             networkConfigPort = NetworkSetupPort()
             hostLog("系统代理后端: 真 networksetup(per-service;仅在 proxy.system.enable/disable 被调用时触达)")
         }
+        // 08:接管态持久化路径 —— 生产缺省 AAPaths.takeoverStatePath;test-only env seam AA_TAKEOVER_STATE_PATH 覆盖到临时区
+        //   (E2E 绝不污染真实 AppSupport)。reaper 复用 SystemProcessPort(它兼作 ProcessReaper,按原始 pid 跨世代回收)。
+        let takeoverStatePath = env["AA_TAKEOVER_STATE_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? AAPaths.takeoverStatePath
+        let stateStore = FileTakeoverStateStore(path: takeoverStatePath)
+        hostLog("接管态持久化: \(takeoverStatePath)")
         let plugin = ProxyPlugin(processPort: processPort, httpPort: httpPort,
                                  networkConfigPort: networkConfigPort,
-                                 kernelPath: kernelPath, controlPort: controlPort, kernelArgs: kernelArgs)
+                                 kernelPath: kernelPath, controlPort: controlPort, kernelArgs: kernelArgs,
+                                 stateStore: stateStore, reaper: processPort)
         self.proxyPlugin = plugin
-        if let kp = kernelPath {
+
+        // 0c) 崩溃自愈:正常服务前先跑一次。读持久化接管态 → 判定 → 执行(reap 孤儿 / 恢复接管 / 还原快照 / 清标记)。
+        //     强杀(kill -9)后的残留接管在此被检测并复原,系统代理绝不滞留「指向死端口」的断网态。
+        let healReport = plugin.selfHeal()
+        hostLog("崩溃自愈: \(healReport.logLine)")
+
+        // 0d) 拉起内核 —— 若自愈已(为恢复接管)重启内核则跳过,避免重复拉起;否则按常规拉起(clean/用户改过/还原快照/无标记路径)。
+        if healReport.kernelRelaunched {
+            hostLog("mihomo 内核已由自愈(恢复接管)拉起,跳过常规拉起。")
+        } else if let kp = kernelPath {
             if plugin.launchKernel() {
                 hostLog("mihomo 内核已拉起(随宿主启停): \(kp) · 控制端口 \(controlPort)")
             } else {

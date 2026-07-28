@@ -45,6 +45,44 @@ public protocol ProcessPort: Sendable {
     func isAlive(_ handle: ProcessHandle) -> Bool
     /// 终止并回收句柄对应进程(幂等)。
     func terminate(_ handle: ProcessHandle)
+    /// 取句柄对应进程的**原始 pid**(未知/已回收句柄返回 nil)。
+    ///
+    /// 08 票用途:接管系统代理时要把内核 pid **持久化**进接管态清单,以便下次启动跨世代识别/回收上一世代残留内核。
+    /// `ProcessHandle` 是进程内不透明句柄(跨世代无效),故这里显式暴露原始 pid 供持久化——**仅供持久化/跨世代回收**,
+    /// 同世代内的探活/回收仍应走不透明句柄(维持 pid 解耦)。
+    func processID(_ handle: ProcessHandle) -> Int32?
+}
+
+// ============ ProcessReaper —— 跨世代孤儿回收(按原始 pid 探活 / 强杀)============
+
+/// 跨世代孤儿回收 Port:按**原始 pid**探活并强杀上一世代残留的子进程(内核)。
+///
+/// 08 票用途(还 06 记债):宿主被 `kill -9`(SIGKILL)强杀时,ProcessPort 真实现的 atexit/信号退出钩子**都不触发**,
+///   经它拉起的内核会被 launchd 收养成孤儿并继续持有端口。下次启动时,自愈据持久化的旧 pid 探活;若仍存活即 SIGKILL
+///   兜底回收,释放端口以便干净重启。此处刻意与 ProcessPort 分离:ProcessPort 管「本世代我拉起的句柄」,
+///   ProcessReaper 管「跨世代的原始 pid」——两个关注点,两个 Port。
+///
+/// **pid 复用安全(修盲杀 bug)**:pid 跨重启/重开机存活于持久化文件,其号极可能已被无关进程复用。故 reap 前**必须身份核验**——
+///   用 `executablePath(pid:)` 读回该 pid 当前可执行路径,与持久化的内核路径逐字节比对,**相等才 SIGKILL**;
+///   无法确认(路径不符 / 读不到 / 非本用户进程)一律**不杀**(网络仍可经 restore/repoint 自愈,不冒杀错风险)。
+///   身份**比对逻辑**是域纯逻辑(见 `CrashRecovery.isOurKernel`,注入假件可测);`executablePath` 的真实读取才在本 Port 之后。
+public protocol ProcessReaper: Sendable {
+    /// 某原始 pid 的**可执行映像绝对路径**;pid 不存活 / 无权读取(EPERM,非本用户进程)/ 无法确定 → nil。
+    /// 08:跨世代 reap 前据此核验身份(与持久化的内核路径比对),杜绝 pid 复用后误杀无辜进程。
+    func executablePath(pid: Int32) -> String?
+    /// 某原始 pid 是否存活(kill(pid,0) == 0)。pid <= 0 视为不存活;EPERM(非本用户进程)亦视为**不存活**(不是我方内核,不该当作可回收对象)。
+    func isProcessAlive(pid: Int32) -> Bool
+    /// 强杀某原始 pid(SIGKILL)。**调用方必须已核验身份**(本方法不做核验)。幂等,进程不存在即 no-op;pid <= 0 为 no-op。
+    func reap(pid: Int32)
+}
+
+/// 无操作 ProcessReaper(缺省注入):路径永远 nil、永远报「不存活」、reap 为 no-op。
+/// 用于「无跨世代回收通道」的场景(如纯逻辑单测不关心 reap 时);生产由宿主注入真实现。
+public struct NoopProcessReaper: ProcessReaper {
+    public init() {}
+    public func executablePath(pid: Int32) -> String? { nil }
+    public func isProcessAlive(pid: Int32) -> Bool { false }
+    public func reap(pid: Int32) {}
 }
 
 // ============ HTTPPort —— 单发 HTTP 请求(REST 客户端压其后,便于注入假件)============

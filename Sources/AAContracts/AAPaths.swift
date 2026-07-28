@@ -15,6 +15,10 @@ public enum AAPaths {
     /// UDS socket 文件名。
     public static let socketFileName = "aa.sock"
 
+    /// 接管态清单文件名(08 崩溃自愈)。宿主接管系统代理成功时写入,正常退出还原成功时清除。
+    /// 文件存在 == 「上一世代仍持有接管、可能残留」,下次启动据此自愈(见 PluginProxy.selfHeal)。
+    public static let takeoverStateFileName = "takeover-state.json"
+
     /// socket 所在目录 URL(宿主用它 createDirectory)。
     public static var socketDirectoryURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -24,5 +28,11 @@ public enum AAPaths {
     /// UDS socket 绝对路径。宿主 bind、aa connect 都读这个值。
     public static var socketPath: String {
         socketDirectoryURL.appendingPathComponent(socketFileName).path
+    }
+
+    /// 接管态清单绝对路径(08 崩溃自愈的持久化落点;与 socket 同在 AA 子目录)。
+    /// 生产缺省用此路径;test-only env seam `AA_TAKEOVER_STATE_PATH` 可覆盖到临时区(E2E 绝不污染真实 AppSupport)。
+    public static var takeoverStatePath: String {
+        socketDirectoryURL.appendingPathComponent(takeoverStateFileName).path
     }
 }

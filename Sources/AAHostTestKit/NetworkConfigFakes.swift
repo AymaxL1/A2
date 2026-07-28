@@ -19,6 +19,11 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
     /// 关代理调用记录,供断言「原本关闭的还原成关闭」。
     public private(set) var disableCalls: [(service: String, kind: ProxyKind)] = []
 
+    /// 编程:让**读**(networkServices/proxyState)抛错——模拟「读当前系统代理失败」(08 自愈应保守 deferred,不误判用户改过)。
+    public var failReads = false
+    /// 编程:让**写**(setProxy/disableProxy)抛错——模拟「还原/接管失败」(08 自愈失败应保留标记,绝不清标记留死端口)。
+    public var failWrites = false
+
     public init(initial: [ServiceProxyState]) {
         self.order = initial.map { $0.service }
         var m = [String: ServiceProxyState]()
@@ -26,21 +31,28 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
         self.state = m
     }
 
-    public enum FakeError: Error, Equatable { case unknownService(String) }
+    public enum FakeError: Error, Equatable {
+        case unknownService(String)
+        case readProgrammedToFail
+        case writeProgrammedToFail
+    }
 
     public func networkServices() throws -> [String] {
         lock.lock(); defer { lock.unlock() }
+        if failReads { throw FakeError.readProgrammedToFail }
         return order
     }
 
     public func proxyState(service: String) throws -> ServiceProxyState {
         lock.lock(); defer { lock.unlock() }
+        if failReads { throw FakeError.readProgrammedToFail }
         guard let s = state[service] else { throw FakeError.unknownService(service) }
         return s
     }
 
     public func setProxy(service: String, kind: ProxyKind, host: String, port: Int) throws {
         lock.lock(); defer { lock.unlock() }
+        if failWrites { throw FakeError.writeProgrammedToFail }
         setCalls.append((service, kind, host, port))
         guard let s = state[service] else { throw FakeError.unknownService(service) }
         state[service] = s.replacing(kind, with: ProxySetting(enabled: true, host: host, port: port))
@@ -48,6 +60,7 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
 
     public func disableProxy(service: String, kind: ProxyKind) throws {
         lock.lock(); defer { lock.unlock() }
+        if failWrites { throw FakeError.writeProgrammedToFail }
         disableCalls.append((service, kind))
         guard let s = state[service] else { throw FakeError.unknownService(service) }
         state[service] = s.replacing(kind, with: .off)

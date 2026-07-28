@@ -68,7 +68,8 @@ private let gAAChildAtexitHandler: @convention(c) () -> Void = {
 // ============ ProcessPort 真实现 ============
 
 /// 基于 Foundation `Process` 的 ProcessPort。持有句柄→Process 映射;并在进程级安装一次退出钩子确保零孤儿。
-public final class SystemProcessPort: ProcessPort, @unchecked Sendable {
+/// 兼作 `ProcessReaper`(08 崩溃自愈):按原始 pid 探活/强杀上一世代残留内核——同一份 Darwin 进程原语,两个关注点。
+public final class SystemProcessPort: ProcessPort, ProcessReaper, @unchecked Sendable {
     /// 保护实例的 processes/nextID(与全局 pid 缓冲锁分离,避免在阻塞等待期间长持全局锁)。
     private let mapLock = NSLock()
     /// 句柄 → (Process, 拉起时捕获的 pid)。显式存 pid,避免依赖「进程退出后 processIdentifier 是否仍返回原 pid」的语义。
@@ -114,6 +115,13 @@ public final class SystemProcessPort: ProcessPort, @unchecked Sendable {
         processes[id] = (proc, pid)
         mapLock.unlock()
         return ProcessHandle(id: id)
+    }
+
+    /// 取句柄对应进程的原始 pid(08:接管时把内核 pid 持久化,供下次启动跨世代识别/回收)。
+    /// 未知/已回收句柄返回 nil。
+    public func processID(_ handle: ProcessHandle) -> Int32? {
+        mapLock.lock(); let entry = processes[handle.id]; mapLock.unlock()
+        return entry.map { Int32($0.pid) }
     }
 
     public func isAlive(_ handle: ProcessHandle) -> Bool {
@@ -165,5 +173,32 @@ public final class SystemProcessPort: ProcessPort, @unchecked Sendable {
             usleep(50_000)   // 50ms
         }
         return !p.isRunning
+    }
+
+    // ============ ProcessReaper 实现(08:跨世代按原始 pid 探活/身份核验/强杀)============
+
+    /// 某原始 pid 的可执行映像绝对路径(`proc_pidpath`,libproc);pid 不存活 / 无权读取(EPERM,非本用户进程)/ 读失败 → nil。
+    /// reap 前的**身份核验**据此:与持久化的内核路径逐字节相等才允许 SIGKILL,杜绝 pid 复用后误杀无辜进程。
+    public func executablePath(pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)   // PROC_PIDPATHINFO_MAXSIZE(4*MAXPATHLEN)
+        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+        guard n > 0 else { return nil }                 // 死进程 / EPERM(非本用户进程)/ 读失败 → nil(= 不是可确认的我方内核)
+        return String(cString: buf)
+    }
+
+    /// 某原始 pid 是否存活。`kill(pid, 0)==0` 才算存活;ESRCH(不存在)或 **EPERM(非本用户进程,不是我方内核)** 均视为不存活。
+    /// pid <= 0 直接视为不存活。注意:aliveness 只用于 reap 后「等孤儿彻底消失」;是否 reap 由 executablePath 身份核验决定。
+    public func isProcessAlive(pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0
+    }
+
+    /// 强杀某原始 pid(SIGKILL 兜底回收上一世代残留孤儿)。**调用方必须已身份核验**(见 selfHeal)。
+    /// 孤儿已被 launchd 收养(非本进程子进程),故只发 SIGKILL、由 launchd 回收僵尸;本进程不 waitpid(waitpid 不到非亲生进程)。
+    /// 幂等:pid<=0 或已不存在为 no-op。
+    public func reap(pid: Int32) {
+        guard pid > 0 else { return }
+        kill(pid, SIGKILL)
     }
 }

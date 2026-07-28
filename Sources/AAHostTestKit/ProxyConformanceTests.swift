@@ -28,6 +28,8 @@ public enum ProxyConformanceTests {
         testPluginCapabilityExposure(&report)
         // 07 票:系统代理接管/还原纯逻辑(SystemProxyConformanceTests.swift 内的扩展方法)。
         testSystemProxyTakeoverRestore(&report)
+        // 08 票:崩溃自愈判定纯逻辑 + 执行编排(CrashRecoveryConformanceTests.swift 内的扩展方法)。
+        testCrashSelfHeal(&report)
         return report
     }
 

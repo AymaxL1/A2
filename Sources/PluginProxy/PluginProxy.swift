@@ -28,6 +28,10 @@ public final class ProxyPlugin: @unchecked Sendable {
     private let restClient: MihomoRESTClient
     /// 系统代理读写边界(宿主注入真 networksetup 实现;测试/ E2E 注入假件)。
     private let networkConfigPort: any NetworkConfigPort
+    /// 接管态清单持久化边界(08 崩溃自愈):enable 成功写、disable/正常退出还原成功清除;缺省 Noop(不持久化)。
+    private let stateStore: any TakeoverStateStore
+    /// 跨世代孤儿回收边界(08 崩溃自愈):据持久化的旧 pid 探活/reap 上一世代残留内核;缺省 Noop(不回收)。
+    private let reaper: any ProcessReaper
     /// 内核可执行路径(从宿主注入,宿主从 env/配置读)。nil = 未配置内核 → 不拉起,proxy.status 如实报未运行。
     private let kernelPath: String?
     /// 拉起内核的参数(默认 fake stub 约定 `--port <控制端口>`;真 mihomo 的参数/配置形态入库时由用户决定)。
@@ -47,14 +51,20 @@ public final class ProxyPlugin: @unchecked Sendable {
     ///   - kernelPath: 内核可执行路径;nil = 不拉起。
     ///   - controlPort: mihomo external-controller 端口(RESTClient 读它;默认参数也把它传给内核)。
     ///   - kernelArgs: 覆盖默认拉起参数(缺省 `["--port", "<controlPort>"]`,对齐 fake stub)。
+    ///   - stateStore: 接管态清单持久化(08;缺省 Noop = 不持久化,不改 06/07 既有行为)。
+    ///   - reaper: 跨世代孤儿回收(08;缺省 Noop = 不回收)。
     public init(processPort: any ProcessPort,
                 httpPort: any HTTPPort,
                 networkConfigPort: any NetworkConfigPort,
                 kernelPath: String?,
                 controlPort: Int,
-                kernelArgs: [String]? = nil) {
+                kernelArgs: [String]? = nil,
+                stateStore: any TakeoverStateStore = NoopTakeoverStateStore(),
+                reaper: any ProcessReaper = NoopProcessReaper()) {
         self.processPort = processPort
         self.networkConfigPort = networkConfigPort
+        self.stateStore = stateStore
+        self.reaper = reaper
         self.kernelPath = kernelPath
         self.kernelArgs = kernelArgs ?? ["--port", String(controlPort)]
         self.restClient = MihomoRESTClient(http: httpPort, port: controlPort)
@@ -114,6 +124,11 @@ public final class ProxyPlugin: @unchecked Sendable {
             //   (修重放漏洞:否则新服务被接管却不进快照,还原遍历不到→永久指向死端口)。既有快照的服务保持首次原状态
             //   不被覆盖(幂等:重复 enable 不改「最初」)。故直接把返回快照赋回。
             proxySnapshot = try controller.takeover(host: host, port: port, into: proxySnapshot)
+            // 08:接管成功即持久化接管态清单(接管前快照 + 内核端口 + 内核 pid + 内核可执行路径)。崩溃/强杀后下次启动据此自愈。
+            //   在 lock 内读 handle 的 pid(避免 currentHandle() 二次取锁死锁);持久化失败不崩(记 stderr)。
+            let pid = handle.flatMap { processPort.processID($0) } ?? 0
+            persistTakeover(snapshot: proxySnapshot!, kernelPort: port, kernelPID: pid,
+                            kernelExecutablePath: kernelExecutablePath(pid: pid))
             return .success(.object([
                 "enabled": .bool(true),
                 "host": .string(host),
@@ -138,6 +153,8 @@ public final class ProxyPlugin: @unchecked Sendable {
         do {
             try controller.restore(snapshot)
             proxySnapshot = nil
+            // 08:正常还原成功即清除持久化标记(表示无残留接管;下次启动为 clean)。清除幂等,失败不崩。
+            clearTakeover()
             return .success(.object(["enabled": .bool(false), "restored": .bool(true)]))
         } catch {
             return .failure(WireError(code: WireErrorCode.capabilityFailed,
@@ -158,9 +175,192 @@ public final class ProxyPlugin: @unchecked Sendable {
         do {
             try controller.restore(snapshot)
             lock.lock(); proxySnapshot = nil; lock.unlock()   // 成功后才清
+            // 08:正常退出还原成功 → 清除持久化标记(下次启动为 clean,无残留)。
+            clearTakeover()
         } catch {
-            // 不静默:记日志、保留快照(08 崩溃自愈可据此复原;进程即将退出,残留快照不影响本世代)。
-            FileHandle.standardError.write(Data("[PluginProxy] 宿主退出还原系统代理失败(保留快照供 08 自愈): \(error)\n".utf8))
+            // 不静默:记日志、**保留快照与持久化标记**(08 崩溃自愈可据此复原;进程即将退出,残留快照不影响本世代)。
+            FileHandle.standardError.write(Data("[PluginProxy] 宿主退出还原系统代理失败(保留快照/持久化标记供 08 自愈): \(error)\n".utf8))
+        }
+    }
+
+    // ============ 崩溃自愈(08 票)============
+
+    /// 崩溃自愈:宿主启动早期、正常服务前跑一次。**采集真实信号 → 调 `CrashRecovery.decide` 拿决策 → 按决策执行**——
+    /// 让被测的纯函数就是真实决策路径(消除「测过但真实路径不同」的缝)。
+    /// **硬不变式**:任一路径后系统代理都不指向死端口。自愈只经既有 Port(生产真件 / E2E 假件),不额外触达真系统。
+    ///
+    /// 两条安全铁律:
+    ///   * **reap 前身份核验**(修 pid 复用盲杀):持久化 pid 的当前可执行路径 == 记录的内核路径才 SIGKILL,否则不杀。
+    ///   * **只有 restore/恢复真正成功才清标记**(修「失败仍清标记 → 永久滞留死端口」):失败保留标记 + 记日志,下次启动重试。
+    @discardableResult
+    public func selfHeal() -> SelfHealReport {
+        // 读持久化接管态。无 → decide 即 .clean(不读网络/内核,避免无标记时无谓触达真 networksetup)。
+        let loaded = loadTakeover()
+        guard let state = loaded else {
+            let decision = CrashRecovery.decide(hasPersistedMarker: false,
+                                                proxyStillPointsAtKernelPort: false,
+                                                kernelPortHealthy: false,
+                                                kernelHealthilyRestartable: false)
+            return SelfHealReport(decision: decision, reapedOrphanPID: nil, kernelRelaunched: false)  // .clean
+        }
+
+        // —— 孤儿清理(还 06 债)+ 身份核验(修盲杀)——
+        // 仅当持久化 pid 的**当前可执行路径**逐字节等于记录的内核路径时,才认定它是我方上世代残留内核并 SIGKILL;
+        // 否则(pid 已复用 / 读不到路径 / EPERM 非本用户进程)一律**不杀**,记日志——网络仍经下面的 restore/repoint 自愈,不冒杀错风险。
+        var reapedPID: Int32? = nil
+        if state.kernelPID > 0 {
+            let currentPath = reaper.executablePath(pid: state.kernelPID)
+            if CrashRecovery.isOurKernel(currentPath: currentPath, expectedPath: state.kernelExecutablePath) {
+                reaper.reap(pid: state.kernelPID)
+                reapedPID = state.kernelPID
+                waitForOrphanGone(pid: state.kernelPID)   // 有界等待其消失,便于新内核干净重启(端口释放)
+            } else if reaper.isProcessAlive(pid: state.kernelPID) {
+                selfHealLog("跳过 reap:pid \(state.kernelPID) 身份不符(当前路径=\(currentPath ?? "nil") ≠ 记录内核路径 \(state.kernelExecutablePath)),不杀无辜进程")
+            }
+        }
+
+        // —— 采集信号:读当前系统代理。读**失败**要区别于「用户改过」:保守 deferred(保留标记、不清、不误判)——待下次启动重试。——
+        let controller = SystemProxyController(net: networkConfigPort)
+        let currentServices: [ServiceProxyState]
+        do {
+            currentServices = try controller.capture().services
+        } catch {
+            selfHealLog("读当前系统代理失败(\(error)),保守保留标记待下次启动重试(不误判用户改过、不清标记)")
+            return SelfHealReport(decision: .deferred, reapedOrphanPID: reapedPID, kernelRelaunched: false)
+        }
+        let proxyPoints = CrashRecovery.systemProxyPointsAt(host: "127.0.0.1", port: state.kernelPort, services: currentServices)
+
+        // —— 残留接管才试着把健康内核带回来(有副作用,只在确认残留时做);「能否健康重启」= 重启后 REST 可读到 mixed-port。——
+        var healthyPort: Int? = nil
+        var relaunched = false
+        if proxyPoints, kernelPath != nil, launchKernel() {
+            relaunched = true
+            healthyPort = pollForMixedPort()   // REST 就绪即得 mixed-port;超时 nil
+        }
+
+        // —— 决策(纯函数单一真源;真实信号喂进去)。启动早期无「受本世代管理且健康」的内核(旧的已 reap)→ kernelPortHealthy=false。——
+        let decision = CrashRecovery.decide(
+            hasPersistedMarker: true,
+            proxyStillPointsAtKernelPort: proxyPoints,
+            kernelPortHealthy: false,
+            kernelHealthilyRestartable: healthyPort != nil
+        )
+
+        switch decision {
+        case .userChangedProxy:
+            // 代理已不指向我方端口(用户手动改过 / 已直连)→ 绝不覆盖用户设置,只清陈旧标记。
+            clearTakeover()
+            lock.lock(); proxySnapshot = nil; lock.unlock()
+            return SelfHealReport(decision: .userChangedProxy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+
+        case .recoverTakeover:
+            let port = healthyPort!
+            // 先把「接管前原状态」播种为将来还原目标(**不是**当前指向死端口的态),再重指到存活端口。
+            lock.lock(); proxySnapshot = state.snapshot; lock.unlock()
+            do {
+                let merged = try controller.takeover(host: "127.0.0.1", port: port, into: state.snapshot)
+                lock.lock(); proxySnapshot = merged; lock.unlock()
+                let pid = currentHandle().flatMap { processPort.processID($0) } ?? 0
+                persistTakeover(snapshot: merged, kernelPort: port, kernelPID: pid,
+                                kernelExecutablePath: kernelExecutablePath(pid: pid))   // 更新标记(新 pid/port)
+                return SelfHealReport(decision: .recoverTakeover, reapedOrphanPID: reapedPID, kernelRelaunched: true)
+            } catch {
+                // 重指失败 → 兜底退化为还原快照(绝不留死端口)。**只有还原真成功才清标记**。
+                selfHealLog("恢复接管重指失败(\(error)),退化为还原快照")
+                return finishRestore(controller: controller, snapshot: state.snapshot,
+                                     reapedPID: reapedPID, relaunched: relaunched)
+            }
+
+        case .restoreSnapshot:
+            // 内核不能健康重启 → 按快照精确还原(降级直连)。若刚才误起了不健康内核,回收之。**只有还原真成功才清标记**。
+            reclaimKernel()
+            return finishRestore(controller: controller, snapshot: state.snapshot,
+                                 reapedPID: reapedPID, relaunched: relaunched)
+
+        case .alreadyHealthy:
+            // 启动早期不会走到(kernelPortHealthy=false);为完整性保留:仅校正标记(重写清单)。
+            let pid = currentHandle().flatMap { processPort.processID($0) } ?? state.kernelPID
+            persistTakeover(snapshot: state.snapshot, kernelPort: state.kernelPort, kernelPID: pid,
+                            kernelExecutablePath: pid == state.kernelPID ? state.kernelExecutablePath : kernelExecutablePath(pid: pid))
+            return SelfHealReport(decision: .alreadyHealthy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+
+        case .clean, .deferred:
+            // .clean 已在无标记时返回;.deferred 由采集失败提前返回。此处仅为 switch 完备。
+            return SelfHealReport(decision: decision, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+        }
+    }
+
+    /// 还原快照收尾:**成功才 clearTakeover + 清内存快照**;失败则保留标记 + 记日志,留待下次启动重试(绝不清标记留死端口)。
+    private func finishRestore(controller: SystemProxyController, snapshot: SystemProxySnapshot,
+                              reapedPID: Int32?, relaunched: Bool) -> SelfHealReport {
+        do {
+            try controller.restore(snapshot)
+            lock.lock(); proxySnapshot = nil; lock.unlock()
+            clearTakeover()                                   // 只有真成功才清
+        } catch {
+            selfHealLog("还原快照失败(\(error)),**保留持久化标记**待下次启动重试(绝不清标记以免永久滞留死端口)")
+            // 保留 proxySnapshot(若上层需要)与持久化标记;不清。
+        }
+        return SelfHealReport(decision: .restoreSnapshot, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+    }
+
+    // ============ 持久化助手(不取 lock;由调用方保证时机)============
+
+    /// 自愈日志(写 stderr;宿主把 stdout+stderr 汇入日志文件,E2E 可 grep)。
+    private func selfHealLog(_ msg: String) {
+        FileHandle.standardError.write(Data("[PluginProxy][self-heal] \(msg)\n".utf8))
+    }
+
+    /// 取某 pid 的内核可执行路径(持久化用):优先经 reaper 读回真实映像路径(与 reap 时的核验口径一致),读不到回退到配置路径。
+    private func kernelExecutablePath(pid: Int32) -> String {
+        if pid > 0, let p = reaper.executablePath(pid: pid) { return p }
+        return kernelPath ?? ""
+    }
+
+    /// 读并解码持久化接管态;无 → nil;**有数据但解码失败(损坏/半截)→ 记日志后按「无残留」处理(clean)**。
+    private func loadTakeover() -> TakeoverState? {
+        guard let data = stateStore.load() else { return nil }
+        if let state = try? JSONDecoder().decode(TakeoverState.self, from: data) { return state }
+        selfHealLog("持久化接管态清单损坏/无法解码(\(data.count) 字节),按无残留处理(clean);下次接管将重写")
+        return nil
+    }
+
+    /// 编码并原子持久化接管态(失败不崩,记 stderr)。
+    private func persistTakeover(snapshot: SystemProxySnapshot, kernelPort: Int, kernelPID: Int32,
+                                kernelExecutablePath: String) {
+        let state = TakeoverState(snapshot: snapshot, kernelPort: kernelPort, kernelPID: kernelPID,
+                                  kernelExecutablePath: kernelExecutablePath,
+                                  active: true, takeoverAt: Date().timeIntervalSince1970)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            let data = try encoder.encode(state)
+            try stateStore.save(data)
+        } catch {
+            FileHandle.standardError.write(Data("[PluginProxy] 持久化接管态失败(不影响本世代): \(error)\n".utf8))
+        }
+    }
+
+    /// 清除持久化接管态(幂等)。
+    private func clearTakeover() {
+        stateStore.clear()
+    }
+
+    /// 有界轮询直到 REST 可读到 mixed-port(内核重启后控制面就绪),返回端口;超时返回 nil。
+    /// 用于自愈恢复接管:重启内核后要读到活的 mixed-port 才能把系统代理指向存活端口。
+    private func pollForMixedPort(attempts: Int = 25, interval: TimeInterval = 0.2) -> Int? {
+        for _ in 0..<attempts {
+            if let cfg = try? restClient.configs(), let port = cfg.mixedPort { return port }
+            Thread.sleep(forTimeInterval: interval)
+        }
+        return nil
+    }
+
+    /// 有界等待被 reap 的孤儿彻底消失(端口随之释放),便于新内核干净重启。
+    private func waitForOrphanGone(pid: Int32, attempts: Int = 20, interval: TimeInterval = 0.1) {
+        for _ in 0..<attempts {
+            if !reaper.isProcessAlive(pid: pid) { return }
+            Thread.sleep(forTimeInterval: interval)
         }
     }
 

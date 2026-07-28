@@ -16,6 +16,9 @@ public final class FakeProcessPort: ProcessPort, @unchecked Sendable {
     private let lock = NSLock()
     private var nextID: UInt64 = 1
     private var alive: [UInt64: Bool] = [:]
+    /// 句柄 → 合成 pid(08:测试 processID 持久化 + 跨世代 reap 时可核验)。默认从 1000 起分配。
+    private var pids: [UInt64: Int32] = [:]
+    private var nextPID: Int32 = 1000
 
     /// 拉起调用记录(路径 + 参数),供断言「拉起被正确调用」。
     public private(set) var launchCalls: [(path: String, args: [String])] = []
@@ -40,12 +43,20 @@ public final class FakeProcessPort: ProcessPort, @unchecked Sendable {
         launchCalls.append((executablePath, arguments))
         let id = nextID; nextID += 1
         alive[id] = true
+        let pid = nextPID; nextPID += 1
+        pids[id] = pid
         return ProcessHandle(id: id)
     }
 
     public func isAlive(_ handle: ProcessHandle) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return alive[handle.id] ?? false
+    }
+
+    /// 取句柄的合成 pid(08:供持久化;未知句柄 nil)。
+    public func processID(_ handle: ProcessHandle) -> Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return pids[handle.id]
     }
 
     public func terminate(_ handle: ProcessHandle) {
