@@ -32,7 +32,8 @@ Label: wayfinder:map
 - **消息模型**:借鉴 multica 6 型统一消息(text/thinking/tool-use/tool-result/status/error/log),`CallID` 全链保留(修 multica 有损点);原始 NDJSON 全量落任务工作区(排障真相源),归一化消息只服务状态判定与报告生成。
 - **进程生命周期**:单发子进程、不常驻;取消 = 进程组 SIGTERM→宽限→SIGKILL;双看门狗(消息静默 + 工具在途放宽);进程执行收进 AAAgentCore 自己的 Port(测试打 Fake,试驾 CLI 真实现,将来桥宿主 ProcessPort)。
 - **会话续接**:V1 不做 resume;session-id 拿到就记进任务工作区元数据(为将来留门);失败重跑一律全新会话。
-- **任务产物**:每次委托一个任务工作区目录(如 `~/.aa/agent-tasks/<task-id>/`),`report.md` 为主产物;内部结构单独设计(03 票,可维护性为纲)。
+- **任务产物**:每次委托一个任务工作区目录,内部结构单独设计(03 票,可维护性为纲)。
+- [03 任务工作区目录结构](issues/03-task-workspace-design.md) — 已定稿:根 `~/.aa/agent-tasks/`,目录名即 task-id(时间+slug+hex4);meta.json 单一真相源(schema_version 演进);raw/normalized 双日志流永不互写;主产物 `report.html`(agent 直写自包含 HTML,文本兜底,通知直开);手动 prune 只删终态;详见[结构提案](research/task-workspace-proposal.md)。
 
 ## Not yet specified
 

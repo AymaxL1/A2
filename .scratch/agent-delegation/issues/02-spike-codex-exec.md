@@ -1,6 +1,6 @@
 # 02: Spike — Codex exec headless 事件流实测
 
-Status: open
+Status: claimed
 Type: task
 Blocked by: (无)
 

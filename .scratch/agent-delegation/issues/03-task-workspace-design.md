@@ -1,6 +1,6 @@
 # 03: 任务工作区目录结构设计
 
-Status: open
+Status: resolved
 Type: prototype
 Blocked by: (无)
 
@@ -19,3 +19,23 @@ Blocked by: (无)
 5. **消费方**:`aa` 状态查询、完成通知跳转、人肉 tail 日志三种消费姿态在这个结构上分别怎么走。
 
 软依赖:01/02 的原始事件样本能让 raw 日志部分更实(不强阻塞,可并行)。产物:结构提案文档(树形示例 + 每文件职责)链入本票,HITL 过目后回写 `## Answer`。
+
+## Comments
+
+**2026-07-29 用户拍板(批量面试追加轮)**,提案必须遵守:
+
+1. 根目录 = `~/.aa/agent-tasks/`(进 `AAContracts.AAPaths` 单一来源)。
+2. 目录命名 = 时间前缀 + 可读 slug + 短随机尾(如 `20260729-1432-diagnose-network-x7f3`)。
+3. 清理 = V1 不自动删;`aa agent tasks prune` 手动(按龄/按量),状态查询显示条数与磁盘占用;自动清理进 fog。
+4. 完成通知直接打开报告,**报告主形态 = HTML**(用户原话:可读性更高)——提案需回答 HTML 报告怎么产出(agent 直写 vs 适配层渲染)与未产出时的兜底。
+
+## Answer
+
+结构提案定稿于 [research/task-workspace-proposal.md](../research/task-workspace-proposal.md),2026-07-29 用户过目通过(原话「03 提案 agree」)。要点:
+
+- 根 `~/.aa/agent-tasks/`,**目录名即 task-id**(`<YYYYMMDD-HHmm>-<slug>-<hex4>`),`aa` 命令直接收目录名零查表。
+- 每任务固定布局:`meta.json`(状态唯一真相源,单写者=适配层,schema_version 演进)+ `prompt.md`(委托快照)+ `report.html`(主产物,通知直开)+ `changes.md`(有副作用任务)+ `logs/{raw.ndjson, normalized.ndjson, stderr.log}` + 缺省 `work/`。
+- 红线:**raw 与 normalized 永不互相回写**;下游只消费 normalized,排障才碰 raw。
+- 崩溃残留:`running` 且 pid 死 → 读操作扫到改标 `orphaned`,证据不销毁;prune 只删终态。
+- HTML 报告:主路径 = prompt 约定 agent 直写自包含 HTML;兜底 = 最终文本 escape 套极简内置模板;不做 md 渲染器。
+- 两个小空位(raw 行格式、session_id 获取时机)由 01/02 spike 回填,不影响结构定稿。

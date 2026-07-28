@@ -1,6 +1,6 @@
 # 01: Spike — Claude Code headless 事件流实测
 
-Status: open
+Status: claimed
 Type: task
 Blocked by: (无)
 
