@@ -332,16 +332,17 @@ func emitJSON<T: Encodable>(_ value: T, pretty: Bool = false) {
 
 // ============ 域子命令(注册表元数据驱动的人体工学入口)============
 
-/// 解析后的域子命令:能力 id、`--参数 值` 对(未强转的原始串)、是否 `--json`。
+/// 解析后的域子命令:动词序列(域后的位置参数)、`--参数 值` 对(未强转的原始串)、是否 `--json`。
+/// 域 + 动词序列先按 cliAlias 表匹配到能力 id,未命中再回退「id 段拼接」(见 `resolveDomainDescriptor`)。
 struct DomainInvocation {
-    let id: String
+    let verbs: [String]
     let pairs: [(name: String, raw: String)]
     let json: Bool
 }
 
 /// 把 `aa <域> <动词...> [--<参数> <值> ...] [--json]` 解析成 DomainInvocation。
-/// 形态约定:前导位置参数(不以 `--` 开头)= 域后的动词序列,与域拼成 `<域>.<动词...>` 能力 id;
-/// 其后是 `--参数 值` 对与 `--json`。任一用法错(缺动词 / 选项缺值 / 选项后再现位置参数)→ 退出码 1。
+/// 形态约定:前导位置参数(不以 `--` 开头)= 域后的动词序列;其后是 `--参数 值` 对与 `--json`。
+/// 任一用法错(缺动词 / 选项缺值 / 选项后再现位置参数)→ 退出码 1。
 func parseDomainInvocation(domain: String, rest: [String], json0: Bool = false) -> DomainInvocation {
     var verbs: [String] = []
     var pairs: [(name: String, raw: String)] = []
@@ -387,58 +388,77 @@ func parseDomainInvocation(domain: String, rest: [String], json0: Bool = false) 
                   detail: "域 \(domain) 缺少动词",
                   human: "用法: \(domainUsage(domain: domain))\n用 `aa capabilities list` 查看可用能力。", json: json)
     }
-    let id = ([domain] + verbs).joined(separator: ".")
-    return DomainInvocation(id: id, pairs: pairs, json: json)
+    return DomainInvocation(verbs: verbs, pairs: pairs, json: json)
 }
 
 func domainUsage(domain: String) -> String {
     "aa \(domain) <动词...> [--<参数> <值> ...] [--json]  (映射到能力 \(domain).<动词...>,走 capabilities call 底座)"
 }
 
-/// 域子命令入口。先 describe 取 schema(拿 ParameterSpec),把 `--参数 值` 按声明类型强转成 input,
-/// 再走与 `capabilities call` 完全相同的底座(performCall)。未知域/动词 → 退出码 1 + 可发现提示。
+/// 域子命令入口。先取能力清单(元数据),按 cliAlias 表 / id 段拼接把 `<域> <动词...>` 解析到能力 descriptor,
+/// 再把 `--参数 值` 按声明类型强转成 input,走与 `capabilities call` 完全相同的底座(performCall)。
+/// 未知域/动词 → 退出码 1 + 可发现提示。
 func doDomainCommand(domain: String, rest: [String]) -> Never {
     let inv = parseDomainInvocation(domain: domain, rest: rest)
+    let tokens = [domain] + inv.verbs
 
-    // ① 先取该 id 的 schema(与 describe 同一 UDS 请求)。宿主未运行等传输失败在 roundTrip 内按统一 UX 收口。
-    let descriptor = resolveDescriptorForDomain(id: inv.id, json: inv.json)
+    // ① 取能力清单(一次 list 往返即拿到全部 descriptor + cliAlias + parameters)。传输失败在 roundTrip 内按统一 UX 收口。
+    let descriptors = fetchCapabilityList(json: inv.json)
 
-    // ② 按声明类型强转 `--参数 值`,组成 input 对象;无参数对则 input=nil(等价于 call <id> 不带 --input)。
+    // ② 元数据驱动解析:先按 cliAlias 表精确匹配 tokens,未命中回退 id 段拼接;都不中 → unknown_command(退出码1)。
+    let descriptor = resolveDomainDescriptor(tokens: tokens, among: descriptors, json: inv.json)
+
+    // ③ 按声明类型强转 `--参数 值`,组成 input 对象;无参数对则 input=nil(等价于 call <id> 不带 --input)。
     let specByName = Dictionary(descriptor.parameters.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
     var obj: [String: JSONValue] = [:]
     for pair in inv.pairs {
         guard let spec = specByName[pair.name] else {
             let known = descriptor.parameters.map { "--\($0.name)" }.joined(separator: " ")
             failUsage(code: CLIErrorCode.badArgument,
-                      detail: "能力 \(inv.id) 未声明参数 --\(pair.name)",
-                      human: "未知参数 --\(pair.name)(能力 \(inv.id) 未声明)。可用参数: \(known.isEmpty ? "(无)" : known)。"
-                           + "详见 `aa capabilities describe \(inv.id)`。",
+                      detail: "能力 \(descriptor.id) 未声明参数 --\(pair.name)",
+                      human: "未知参数 --\(pair.name)(能力 \(descriptor.id) 未声明)。可用参数: \(known.isEmpty ? "(无)" : known)。"
+                           + "详见 `aa capabilities describe \(descriptor.id)`。",
                       json: inv.json)
         }
-        obj[pair.name] = coerceArgument(raw: pair.raw, type: spec.type, param: pair.name, id: inv.id, json: inv.json)
+        obj[pair.name] = coerceArgument(raw: pair.raw, type: spec.type, param: pair.name, id: descriptor.id, json: inv.json)
     }
     let input: JSONValue? = inv.pairs.isEmpty ? nil : .object(obj)
 
-    // ③ 走 call 底座:同路由、同响应信封、同退出码映射。
-    performCall(id: inv.id, input: input, json: inv.json)
+    // ④ 走 call 底座:同路由、同响应信封、同退出码映射。
+    performCall(id: descriptor.id, input: input, json: inv.json)
 }
 
-/// 域子命令专用的 describe:取描述符供参数强转。未知能力 id 在人体工学层视为「未知命令」→ 退出码 1 + 可发现提示
-/// (区别于 `capabilities describe/call` 的未知能力=协议错退出码 6:那是给已知底座 API 的严格语义)。
-/// 其它非成功响应(不应出现)按标准 failAndExit 映射。
-func resolveDescriptorForDomain(id: String, json: Bool) -> CapabilityDescriptor {
-    let line = roundTrip(WireRequest(op: WireOp.capabilitiesDescribe, capability: id), json: json)
-    let response = decodeResponse(line, as: DescribeResult.self)
-    if let result = response.result, response.ok {
-        return result.descriptor
+/// 域子命令用:取能力清单(含每条 descriptor 的 cliAlias + parameters)。宿主未运行等传输失败在 roundTrip 内统一收口。
+func fetchCapabilityList(json: Bool) -> [CapabilityDescriptor] {
+    let line = roundTrip(WireRequest(op: WireOp.capabilitiesList), json: json)
+    let response = decodeResponse(line, as: CapabilityListResult.self)
+    guard response.ok, let result = response.result else {
+        failAndExit(response, json: json)
     }
-    if response.error?.code == WireErrorCode.unknownCapability {
-        failUsage(code: CLIErrorCode.unknownCommand,
-                  detail: "未知命令: \(id)",
-                  human: "未知命令: \(id)。用 `aa capabilities list` 查看可用能力,或 `aa capabilities describe <id>` 查看某能力的参数。",
-                  json: json)
+    return result.capabilities
+}
+
+/// 把域子命令 tokens(`[域] + 动词...`)解析成能力 descriptor:
+///   ① 先按 cliAlias 表精确匹配(元数据驱动,别名优先);
+///   ② 未命中回退 05 的「id 段拼接映射」(tokens 直接拼成能力 id);
+///   ③ 都不中 → 人体工学层「未知命令」→ 退出码 1 + 可发现提示(区别于底座 API 未知能力=协议错 6)。
+func resolveDomainDescriptor(tokens: [String], among descriptors: [CapabilityDescriptor], json: Bool) -> CapabilityDescriptor {
+    // ① cliAlias 精确匹配。first(where:) → 若两能力声明同一 cliAlias 会静默取首个(注册顺序在先者)。
+    //    V1 能力集受控、别名唯一,故不做运行时去重;将来别名开放给动态插件时,应在注册期做重复别名检测/拒绝(记债)。
+    if let hit = descriptors.first(where: { $0.cliAlias == tokens }) {
+        return hit
     }
-    failAndExit(response, json: json)
+    // ② 回退:tokens 拼成能力 id 直接匹配。
+    let id = tokens.joined(separator: ".")
+    if let hit = descriptors.first(where: { $0.id == id }) {
+        return hit
+    }
+    // ③ 未知命令。
+    let shown = tokens.joined(separator: " ")
+    failUsage(code: CLIErrorCode.unknownCommand,
+              detail: "未知命令: \(shown)",
+              human: "未知命令: \(shown)。用 `aa capabilities list` 查看可用能力,或 `aa capabilities describe <id>` 查看某能力的参数。",
+              json: json)
 }
 
 /// 按 ParameterSpec 声明类型把字符串实参强转为 JSONValue。强转失败 → 退出码 1(客户端本地用法错)。

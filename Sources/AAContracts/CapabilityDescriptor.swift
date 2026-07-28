@@ -33,18 +33,25 @@ public struct ParameterSpec: Codable, Sendable, Equatable {
 /// - `summary`:一句话人读摘要(同时兼作 agent 可读短描述)。
 /// - `schemaSummary`:入参/出参速览一句话,可空(人读友好;机器校验以下面的 `parameters` 为准)。
 /// - `parameters`:结构化最小 schema(03 票新增);describe 输出它,invoke 据它做集中校验。
+/// - `cliAlias`:可选的 CLI 别名令牌序列(07 票新增)。声明后,`aa <令牌...>` 会先按此表精确匹配到本能力 id
+///   (元数据驱动,与 05 的「id 段拼接」域子命令并存;别名优先,未命中再回退拼接)。例:`proxy.system.enable`
+///   声明 `["proxy","on"]` → `aa proxy on` ≡ `capabilities call proxy.system.enable`。可空(多数能力不需别名)。
+///   Codable 可选字段:老宿主/老客户端缺此键解码得 nil,向后兼容。
 public struct CapabilityDescriptor: Codable, Sendable, Equatable {
     public let id: String
     public let risk: RiskLevel
     public let summary: String
     public let schemaSummary: String?
     public let parameters: [ParameterSpec]
+    public let cliAlias: [String]?
 
-    public init(id: String, risk: RiskLevel, summary: String, schemaSummary: String? = nil, parameters: [ParameterSpec] = []) {
+    public init(id: String, risk: RiskLevel, summary: String, schemaSummary: String? = nil,
+                parameters: [ParameterSpec] = [], cliAlias: [String]? = nil) {
         self.id = id
         self.risk = risk
         self.summary = summary
         self.schemaSummary = schemaSummary
         self.parameters = parameters
+        self.cliAlias = cliAlias
     }
 }

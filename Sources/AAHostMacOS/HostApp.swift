@@ -86,7 +86,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let extra = env["AA_MIHOMO_KERNEL_EXTRA_ARGS"], !extra.isEmpty {
             kernelArgs += extra.split(separator: " ").map(String.init)
         }
+        // 07 票:系统代理读写 Port。缺省为真 networksetup;test-only env seam AA_NETWORKSETUP_FAKE_STATE 指定
+        //   文件后端假件(E2E 用,绝不碰真设置)。与 AA_CONFIRM_AUTO / AA_MIHOMO_KERNEL_PATH 同口径,12/13 前按需门控。
+        let networkConfigPort: any NetworkConfigPort
+        if let statePath = env["AA_NETWORKSETUP_FAKE_STATE"], !statePath.isEmpty {
+            networkConfigPort = FileBackedNetworkConfigPort(statePath: statePath)
+            hostLog("系统代理后端: 文件后端假件(test-only)\(statePath) —— 绝不碰真 networksetup")
+        } else {
+            networkConfigPort = NetworkSetupPort()
+            hostLog("系统代理后端: 真 networksetup(per-service;仅在 proxy.system.enable/disable 被调用时触达)")
+        }
         let plugin = ProxyPlugin(processPort: processPort, httpPort: httpPort,
+                                 networkConfigPort: networkConfigPort,
                                  kernelPath: kernelPath, controlPort: controlPort, kernelArgs: kernelArgs)
         self.proxyPlugin = plugin
         if let kp = kernelPath {
@@ -151,10 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostLog("启动完成。")
     }
 
-    /// 宿主优雅退出(菜单退出 / NSApplication.terminate)时回收内核。被 kill/pkill 的强制退出由
-    /// SystemProcessPort 的 atexit/信号钩子兜底(见 SystemProcessPort.swift 的反孤儿设计)——两条路径都保证零孤儿。
+    /// 宿主优雅退出(菜单退出 / NSApplication.terminate)时:先还原系统代理,再回收内核。
+    /// **顺序(07 票)**:还原系统代理(disable)→ 停内核(reclaim)——确保退出后网络立即直连(不留指向已死内核端口的系统代理)。
+    /// 被 kill/pkill 的强制退出由 SystemProcessPort 的 atexit/信号钩子兜底回收内核(零孤儿);但系统代理还原需运行
+    /// networksetup(非 async-signal-safe),不能在信号处理器里做——那条硬杀路径下的代理复原归 08 票崩溃自愈
+    /// (重启后检测上一世代快照 + 内核指向死端口并清理)。本方法覆盖优雅退出路径。
     func applicationWillTerminate(_ notification: Notification) {
-        proxyPlugin?.reclaimKernel()
+        proxyPlugin?.restoreSystemProxyOnExit()   // ① 先还原系统代理(若曾接管)
+        proxyPlugin?.reclaimKernel()              // ② 再停内核
     }
 
     private func setupStatusItem() {

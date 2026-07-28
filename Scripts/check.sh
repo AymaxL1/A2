@@ -248,6 +248,18 @@ assert_contains "$OUT" "status 域逻辑:内核存活 → running=true" "③stat
 assert_contains "$OUT" "内核死亡 → running=false(如实未运行,不报错)" "③status 域逻辑:内核死亡→如实未运行(退出码 0)"
 assert_contains "$OUT" "无内核句柄 → running=false" "③status 域逻辑:无内核句柄→如实未运行"
 
+# 07 票纯逻辑断言(同一 runner 输出;SystemProxyConformanceTests:快照/接管/还原,注入内存假 NetworkConfigPort)
+echo "--- 断言组 1c:07 票系统代理快照/接管/还原纯逻辑(SystemProxyConformanceTests)---"
+assert_contains "$OUT" "07 快照:capture 捕获全部服务" "①快照:capture 捕获各服务代理原状态"
+assert_contains "$OUT" "07 快照:capture 记录 Ethernet 原第三方 HTTP 代理" "①快照:记录原第三方代理(开关+host+port)"
+assert_contains "$OUT" "均指向内核端口 127.0.0.1:7890" "②接管:各服务 HTTP/HTTPS/SOCKS 指向内核端口"
+assert_contains "$OUT" "原本第三方代理→精确还原成第三方 203.0.113.9:8080(不是一律关闭)" "③还原:原本第三方代理→还原成第三方(非关闭)"
+assert_contains "$OUT" "原本关闭的 SOCKS → 还原成关闭" "③还原:原本关闭→还原关闭"
+assert_contains "$OUT" "还原后再次快照 == 接管前快照(终态精确复原)" "③还原:终态==接管前快照"
+assert_contains "$OUT" "重复 enable 不覆盖首次快照" "④幂等:重复 enable 不覆盖首次快照"
+assert_contains "$OUT" "内核端口未就绪时 enable 报 capability_failed(退出码5,不崩)" "⑤内核端口未就绪→enable 报业务失败(不崩)"
+assert_contains "$OUT" "还原覆盖接管后新增的服务→回到接管前第三方代理(不残留指向内核死端口)" "④'重放漏洞修复:接管后新增服务也进快照、能被还原(不残留死端口)"
+
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
 # 先清场:确保无旧宿主 / 旧 socket(与 trap 双保险)
@@ -718,6 +730,120 @@ if [ "$SOCK_UP" -eq 1 ]; then
   fi
 else
   echo "FAIL: proxy 场景C 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+fi
+
+# 清场:杀宿主 + stub(trap 亦兜底)
+pkill -f "$KILLPAT" 2>/dev/null
+pkill -f "$KILLPAT_STUB" 2>/dev/null
+sleep 1
+rm -f "$SOCK"
+
+# --- 断言组 SP:系统代理接管/还原 E2E(07 票主体:文件后端假 NetworkConfigPort + fake mihomo stub,绝不碰真 networksetup)---
+# 姿态:宿主经 env(AA_NETWORKSETUP_FAKE_STATE)注入文件后端假 NetworkConfigPort,读写 $BUILD 下的 JSON 状态文件;
+#   check.sh 据该文件断言「接管指向内核 mixed-port / 精确还原(含原第三方代理)/ 宿主正常退出后复原」。
+#   宿主**不设 AA_CONFIRM_AUTO**——enable/disable 为 normal,若误走 dangerous 确认会在 headless 挂起(超时退出码3);
+#   它们快速退出码0 即证明 normal 零确认(不弹窗、不阻塞)。绝不设置真 networksetup。
+echo "--- 断言组 SP:系统代理接管/还原 E2E(07 票)---"
+pkill -f "$KILLPAT" 2>/dev/null; pkill -f "$KILLPAT_STUB" 2>/dev/null; sleep 1; rm -f "$SOCK"
+
+# 假 networksetup 初始状态(接管前快照):Wi-Fi 全关;Ethernet 原本就有第三方代理(HTTP/HTTPS→203.0.113.9:8080,SOCKS 关)。
+NETFAKE="$BUILD/netfake-state.json"
+cat > "$NETFAKE" <<'JSON'
+{"services":[
+{"service":"Wi-Fi","http":{"enabled":false,"host":"","port":0},"https":{"enabled":false,"host":"","port":0},"socks":{"enabled":false,"host":"","port":0}},
+{"service":"Ethernet","http":{"enabled":true,"host":"203.0.113.9","port":8080},"https":{"enabled":true,"host":"203.0.113.9","port":8080},"socks":{"enabled":false,"host":"","port":0}}
+]}
+JSON
+# 留一份接管前初始快照的规整副本,供「终态=接管前快照」语义对比(经 python 归一,忽略键序/空白)。
+python3 -c 'import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],"w"), sort_keys=True)' "$NETFAKE" "$BUILD/netfake-initial.json" 2>/dev/null
+
+# 起宿主:内核 stub + 文件后端假 NetworkConfigPort(env 注入),不设 AA_CONFIRM_AUTO。
+AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSETUP_FAKE_STATE="$NETFAKE" \
+  "$HOST_BIN" > "$HOSTLOG" 2>&1 &
+HOST_PID=$!
+disown "$HOST_PID" 2>/dev/null || true
+SOCK_UP=0
+for _ in $(seq 1 100); do
+  [ -S "$SOCK" ] && { SOCK_UP=1; break; }
+  kill -0 "$HOST_PID" 2>/dev/null || break
+  sleep 0.2
+done
+
+# 语义对比助手:比较状态文件与接管前初始快照是否等价(python 归一)。
+netfake_equals_initial() {
+  python3 -c 'import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+sys.exit(0 if a==b else 1)' "$NETFAKE" "$BUILD/netfake-initial.json" 2>/dev/null
+}
+
+if [ "$SOCK_UP" -eq 1 ]; then
+  # 等内核 REST 就绪(enable 要经 REST 读 mixed-port)。
+  READY=0
+  for _ in $(seq 1 50); do
+    if "$BIN/aa" proxy status --json 2>/dev/null | grep -qF '"apiReachable":true'; then READY=1; break; fi
+    sleep 0.2
+  done
+  if [ "$READY" -eq 1 ]; then echo "PASS: SP 内核 REST 就绪(enable 可读 mixed-port)"; PASS=$((PASS+1)); else echo "FAIL: SP 内核 REST 未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1)); fi
+
+  # (SP0) 元数据:enable/disable 为 normal(→零 GUI 确认)且各带 cliAlias(经 wire 下发,别名解析基石)。
+  DEN="$("$BIN/aa" capabilities describe proxy.system.enable --json 2>/dev/null)"; DENRC=$?
+  echo "    describe proxy.system.enable: $DEN"
+  assert_exit 0 $DENRC "describe proxy.system.enable 退出码=0"
+  assert_contains "$DEN" '"risk":"normal"' "proxy.system.enable 风险档=normal(→ 零 GUI 确认,safe/normal 直通)"
+  assert_contains "$DEN" '"cliAlias":["proxy","on"]' "proxy.system.enable 声明 cliAlias=[proxy,on](经 wire 下发)"
+  DDIS="$("$BIN/aa" capabilities describe proxy.system.disable --json 2>/dev/null)"
+  assert_contains "$DDIS" '"risk":"normal"' "proxy.system.disable 风险档=normal(→ 零 GUI 确认)"
+  assert_contains "$DDIS" '"cliAlias":["proxy","off"]' "proxy.system.disable 声明 cliAlias=[proxy,off]"
+
+  # (SP1) aa proxy on(别名→proxy.system.enable):退出0(normal 零确认,未设 AA_CONFIRM_AUTO 仍不挂)+ 接管成功。
+  ON1="$("$BIN/aa" proxy on --json 2>/dev/null)"; ONRC=$?
+  echo "    aa proxy on 输出: $ON1"
+  assert_exit 0 $ONRC "aa proxy on(别名→proxy.system.enable,normal)退出码=0(零 GUI 确认,不阻塞/不超时)"
+  assert_contains "$ON1" '"enabled":true' "aa proxy on 结果 enabled=true(接管成功)"
+  assert_contains "$ON1" '"port":7890' "aa proxy on 指向内核 mixed-port 7890(端口复用 06 RESTClient)"
+
+  # (SP2) 断言假 networksetup 各服务 HTTP/HTTPS/SOCKS 均指向 127.0.0.1:7890(读状态文件,绝不碰真设置)。
+  echo "    接管后假 networksetup: $(cat "$NETFAKE")"
+  ON_COUNT="$(grep -o '"enabled":true,"host":"127.0.0.1","port":7890' "$NETFAKE" | wc -l | tr -d ' ')"
+  if [ "$ON_COUNT" -eq 6 ]; then echo "PASS: 接管后 2 服务×3 类代理均指向 127.0.0.1:7890(6/6,含原关闭的 Wi-Fi/SOCKS)"; PASS=$((PASS+1)); else echo "FAIL: 接管后指向内核端口的项应为6,实际 $ON_COUNT。文件: $(cat "$NETFAKE")"; FAIL=$((FAIL+1)); fi
+  if grep -qF '203.0.113.9' "$NETFAKE"; then echo "FAIL: 接管后仍残留第三方代理 203.0.113.9(未被接管覆盖)"; FAIL=$((FAIL+1)); else echo "PASS: 接管后原第三方代理被内核端口覆盖(接管彻底)"; PASS=$((PASS+1)); fi
+
+  # (SP3) 别名 ≡ call:aa proxy on ≡ capabilities call proxy.system.enable(幂等 enable → 逐字节一致、同退出码0)。
+  ON2="$("$BIN/aa" capabilities call proxy.system.enable --json 2>/dev/null)"; ON2RC=$?
+  assert_exit 0 $ON2RC "capabilities call proxy.system.enable 退出码=0"
+  if [ "$ON1" = "$ON2" ] && [ -n "$ON1" ]; then echo "PASS: aa proxy on ≡ capabilities call proxy.system.enable 逐字节一致(别名同路由同底座)"; PASS=$((PASS+1)); else echo "FAIL: 别名与 call 输出不一致(alias='$ON1' vs call='$ON2')"; FAIL=$((FAIL+1)); fi
+
+  # (SP3b) 06 的 id 映射与 07 的别名共存:aa proxy status(id 映射)仍可用。
+  SPST="$("$BIN/aa" proxy status --json 2>/dev/null)"; SPSTRC=$?
+  assert_exit 0 $SPSTRC "aa proxy status(06 id 映射)仍退出码=0(与别名共存)"
+  assert_contains "$SPST" '"running":true' "aa proxy status 仍反映内核存活(id 映射与 cliAlias 别名并存)"
+
+  # (SP4) aa proxy off(别名→proxy.system.disable):退出0 + 精确还原(含原第三方代理)。
+  OFF1="$("$BIN/aa" proxy off --json 2>/dev/null)"; OFFRC=$?
+  echo "    aa proxy off 输出: $OFF1 | 还原后假 networksetup: $(cat "$NETFAKE")"
+  assert_exit 0 $OFFRC "aa proxy off(别名→proxy.system.disable,normal)退出码=0(零 GUI 确认)"
+  assert_contains "$OFF1" '"restored":true' "aa proxy off 报告已还原(restored=true)"
+  if grep -qF '"enabled":true,"host":"203.0.113.9","port":8080' "$NETFAKE"; then echo "PASS: 还原后 Ethernet 精确回到第三方代理 203.0.113.9:8080(非一律关闭)"; PASS=$((PASS+1)); else echo "FAIL: 还原未精确回到第三方代理。文件: $(cat "$NETFAKE")"; FAIL=$((FAIL+1)); fi
+  if grep -qF '127.0.0.1' "$NETFAKE"; then echo "FAIL: 还原后仍残留内核端口 127.0.0.1(接管痕迹未清)"; FAIL=$((FAIL+1)); else echo "PASS: 还原后无内核端口残留(接管痕迹已清)"; PASS=$((PASS+1)); fi
+  if netfake_equals_initial; then echo "PASS: aa proxy off 后假 networksetup 终态=接管前快照(精确复原)"; PASS=$((PASS+1)); else echo "FAIL: aa proxy off 后终态≠接管前快照。终态: $(cat "$NETFAKE")"; FAIL=$((FAIL+1)); fi
+
+  # (SP5) 宿主正常退出还原:重新接管 → SIGUSR1 优雅退出 → applicationWillTerminate 先还原代理再停内核。
+  "$BIN/aa" proxy on --json >/dev/null 2>&1; RC=$?
+  assert_exit 0 $RC "SP5 前置:重新 aa proxy on 退出码=0"
+  if grep -qF '127.0.0.1' "$NETFAKE"; then echo "PASS: SP5 前置接管生效(文件含内核端口 127.0.0.1)"; PASS=$((PASS+1)); else echo "FAIL: SP5 前置接管未生效"; FAIL=$((FAIL+1)); fi
+  STUB_BEFORE="$(pgrep -f "$KILLPAT_STUB")"
+  echo "    SP5:退出前 fake mihomo pid(s)=[$STUB_BEFORE]"
+  kill -USR1 "$HOST_PID" 2>/dev/null
+  sleep 5
+  # 退出后①:假 networksetup 终态=接管前初始快照(退出即复原,网络立即直连)。
+  if netfake_equals_initial; then echo "PASS: 宿主正常退出后假 networksetup 终态=接管前快照(已复原,退出后直连)"; PASS=$((PASS+1)); else echo "FAIL: 宿主退出后假 networksetup 未复原到接管前快照。终态: $(cat "$NETFAKE")"; FAIL=$((FAIL+1)); fi
+  # 退出后②:内核已停(先还原代理→再停内核 顺序生效),无孤儿 stub。
+  LEFTSP="$(pgrep -f "$KILLPAT_STUB")"
+  if [ -z "$LEFTSP" ]; then echo "PASS: 宿主正常退出后内核已停、无孤儿(还原代理→停内核 顺序生效)"; PASS=$((PASS+1)); else echo "FAIL: 宿主退出后仍有孤儿 stub: $LEFTSP"; FAIL=$((FAIL+1)); pkill -9 -f "$KILLPAT_STUB" 2>/dev/null; fi
+  # 退出后③:宿主进程已退出。
+  if kill -0 "$HOST_PID" 2>/dev/null; then echo "FAIL: 宿主收 SIGUSR1 后未退出"; FAIL=$((FAIL+1)); pkill -f "$KILLPAT" 2>/dev/null; else echo "PASS: 宿主经 SIGUSR1 优雅退出(走完 还原代理→停内核 路径)"; PASS=$((PASS+1)); fi
+else
+  echo "FAIL: SP 宿主未就绪(socket_up=$SOCK_UP)。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
 fi
 
 # 清场:杀宿主 + stub(trap 亦兜底)

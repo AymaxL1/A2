@@ -26,6 +26,8 @@ public enum ProxyConformanceTests {
         testRESTClientParsing(&report)
         testStatusDomainLogic(&report)
         testPluginCapabilityExposure(&report)
+        // 07 票:系统代理接管/还原纯逻辑(SystemProxyConformanceTests.swift 内的扩展方法)。
+        testSystemProxyTakeoverRestore(&report)
         return report
     }
 
@@ -122,21 +124,30 @@ public enum ProxyConformanceTests {
         }
     }
 
-    // ④ 插件能力暴露:ProxyPlugin.capabilities() 产出 proxy.status(safe,无入参),供宿主注册。
+    // ④ 插件能力暴露:ProxyPlugin.capabilities() 产出 proxy.status(safe)+ proxy.system.enable/disable(normal,带 cliAlias),供宿主注册。
     private static func testPluginCapabilityExposure(_ report: inout TestReport) {
         let pp = FakeProcessPort()
         let http = FakeHTTPPort()
-        let plugin = ProxyPlugin(processPort: pp, httpPort: http, kernelPath: nil, controlPort: 9090)
+        let net = FakeNetworkConfigPort(initial: [])
+        let plugin = ProxyPlugin(processPort: pp, httpPort: http, networkConfigPort: net, kernelPath: nil, controlPort: 9090)
         let caps = plugin.capabilities()
-        report.check(caps.count == 1, "插件能力:ProxyPlugin 暴露 1 条能力")
-        let d = caps.first?.descriptor
-        report.check(d?.id == "proxy.status", "插件能力:id 为 proxy.status")
-        report.check(d?.risk == .safe, "插件能力:proxy.status 风险档为 safe")
-        report.check(d?.parameters.isEmpty == true, "插件能力:proxy.status 无入参")
+        report.check(caps.count == 3, "插件能力:ProxyPlugin 暴露 3 条能力(proxy.status + system.enable + system.disable)")
 
-        // 未配置内核路径 → launchKernel 返回 false(不视为错误);handler 产 running:false 且不报错。
+        let status = caps.first { $0.descriptor.id == "proxy.status" }?.descriptor
+        report.check(status?.risk == .safe, "插件能力:proxy.status 风险档为 safe")
+        report.check(status?.parameters.isEmpty == true, "插件能力:proxy.status 无入参")
+
+        // 07 票:enable/disable 为 normal(→ 零 GUI 确认),各带 cliAlias(aa proxy on|off)。
+        let enable = caps.first { $0.descriptor.id == "proxy.system.enable" }?.descriptor
+        report.check(enable?.risk == .normal, "插件能力:proxy.system.enable 风险档为 normal(零 GUI 确认)")
+        report.check(enable?.cliAlias == ["proxy", "on"], "插件能力:proxy.system.enable 声明 cliAlias=[proxy,on]")
+        let disable = caps.first { $0.descriptor.id == "proxy.system.disable" }?.descriptor
+        report.check(disable?.risk == .normal, "插件能力:proxy.system.disable 风险档为 normal(零 GUI 确认)")
+        report.check(disable?.cliAlias == ["proxy", "off"], "插件能力:proxy.system.disable 声明 cliAlias=[proxy,off]")
+
+        // 未配置内核路径 → launchKernel 返回 false(不视为错误);proxy.status handler 产 running:false 且不报错。
         report.check(plugin.launchKernel() == false, "插件能力:未配置内核路径时 launchKernel()=false(不拉起、不报错)")
-        if let handler = caps.first?.handler {
+        if let handler = caps.first(where: { $0.descriptor.id == "proxy.status" })?.handler {
             switch handler(nil) {
             case .success(let out):
                 report.check(out.objectValue?["running"] == .bool(false),
