@@ -35,4 +35,14 @@ public enum AAPaths {
     public static var takeoverStatePath: String {
         socketDirectoryURL.appendingPathComponent(takeoverStateFileName).path
     }
+
+    /// 订阅数据子目录名(10 票):清单 catalog.json + 物化配置 configs/<id>.conf 都落这里(与 socket 同在 AA 子目录下)。
+    public static let subscriptionsSubdirectory = "subscriptions"
+
+    /// 订阅数据目录绝对路径(10 票)。生产缺省用此路径;test-only env seam `AA_SUBSCRIPTION_DIR` 可覆盖到临时区
+    /// (E2E 绝不污染真实 AppSupport;与 AA_TAKEOVER_STATE_PATH 同口径,12/13 前按需门控)。
+    /// 布局:catalog = `<dir>/catalog.json`;物化配置 = `<dir>/configs/<id>.conf`。
+    public static var subscriptionsDirectory: String {
+        socketDirectoryURL.appendingPathComponent(subscriptionsSubdirectory, isDirectory: true).path
+    }
 }

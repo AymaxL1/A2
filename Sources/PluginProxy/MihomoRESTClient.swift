@@ -169,6 +169,13 @@ public struct MihomoRESTClient: Sendable {
         try sendExpectingSuccess(method: HTTPMethod.put, path: "/proxies/" + Self.encodePathComponent(group), body: body)
     }
 
+    /// PUT /configs body `{"path": path}` —— 从指定路径**重载**内核配置(10 票订阅激活/更新用)。2xx 视为成功;非 2xx 抛 httpStatus。
+    /// 真核约定:**PUT /configs = 从路径重载配置**,区别于 `setMode` 的 **PATCH /configs = 改运行参数**(动词错会误触发重载或误改参数)。
+    public func reloadConfig(path: String) throws {
+        let body = try JSONEncoder().encode(["path": path])
+        try sendExpectingSuccess(method: HTTPMethod.put, path: "/configs", body: body)
+    }
+
     /// 按组测速:先读该组候选节点(GET /proxies),再 GET /group/<group>/delay 拿逐节点延迟。
     /// mihomo 对超时/失败节点**不返回其延迟**(从 delay map 缺席),故「在候选内但结果缺席」= 超时,如实标注(delayMs=nil)。
     /// - Parameters:

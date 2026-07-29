@@ -186,7 +186,7 @@ public enum RegistryConformanceTests {
 
         // 分支①:假 confirm 返 true → 批准 → 执行 handler 成功,且恰执行一次。
         let c1 = CallCounter()
-        switch makeRegistry(confirm: { _ in true }, counter: c1).invoke(capabilityID: "fake.danger", input: nil) {
+        switch makeRegistry(confirm: { _, _ in true }, counter: c1).invoke(capabilityID: "fake.danger", input: nil) {
         case .success(let out):
             report.check(out.objectValue?["executed"] == .bool(true), "dangerous + 假 confirm=true → 执行 handler 成功")
         case .failure:
@@ -196,7 +196,7 @@ public enum RegistryConformanceTests {
 
         // 分支②:假 confirm 返 false → denied,且 handler 绝不执行。
         let c2 = CallCounter()
-        report.check(errorCode(makeRegistry(confirm: { _ in false }, counter: c2).invoke(capabilityID: "fake.danger", input: nil))
+        report.check(errorCode(makeRegistry(confirm: { _, _ in false }, counter: c2).invoke(capabilityID: "fake.danger", input: nil))
                         == WireErrorCode.denied, "dangerous + 假 confirm=false → denied")
         report.check(c2.count == 0, "假 confirm=false 时 handler 绝不执行(未被绕过)")
 
@@ -205,6 +205,20 @@ public enum RegistryConformanceTests {
         report.check(errorCode(makeRegistry(confirm: nil, counter: c3).invoke(capabilityID: "fake.danger", input: nil))
                         == WireErrorCode.denied, "dangerous + confirm=nil → fail-closed denied(无 GUI 可用时拒绝执行)")
         report.check(c3.count == 0, "confirm=nil 时 handler 绝不执行(fail-closed 保底)")
+
+        // 分支④(10 票 F2:确认回调确实收到 input → 不再盲批)。invoke 把本次请求 input 透传给确认回调。
+        let c4 = CallCounter()
+        let received = ReceivedInputBox()
+        let reg4 = makeRegistry(confirm: { _, input in received.value = input; return true }, counter: c4)
+        _ = reg4.invoke(capabilityID: "fake.danger", input: .object(["target": .string("disk9")]))
+        report.check(received.value == .object(["target": .string("disk9")]),
+                     "10 F2:dangerous 确认回调确实收到本次请求的 input(不再盲批)")
+        report.check(c4.count == 1, "10 F2:批准后 handler 执行一次(input 透传不影响执行语义)")
+    }
+
+    /// 捕获确认回调收到的 input(证明不再盲批)。`@unchecked Sendable`:测试同步单线程驱动。
+    private final class ReceivedInputBox: @unchecked Sendable {
+        var value: JSONValue?
     }
 
     // ⑤ 契约往返:RiskLevel 与 JSONValue 经 JSON 编解码稳定

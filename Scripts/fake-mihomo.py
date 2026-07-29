@@ -19,6 +19,12 @@
 #                                            验证「超时如实标注」。
 #   有状态 = E2E 能「改后读回验证生效」:切模式/选节点后经 GET /configs、/proxies、proxy.status 读回。
 #
+# 10 票新增:PUT /configs body {"path": p} → **从路径重载配置**(真核约定:PUT /configs = 从路径重载,区别于 PATCH 改运行参数)。
+#       读取文件 p(**test-only JSON fixture 格式**,非真 YAML —— 域层视配置为不透明字节,只有本替身为可观测性才解析),
+#       用 fixture 更新内存 STATE/GROUPS(mode + 各组的 type/all/now),返回 204;读不到 → 404 / 解析失败 → 400。
+#       fixture 形如:{"mode":"global","groups":{"PROXY":{"type":"Selector","all":["A1","A2"],"now":"A1"}}}
+#       目的:订阅 activate/update 后经 GET /configs、/proxies、proxy.status、proxy.groups.list 读回「配置已生效」。
+#
 # ⚠️ 这是**测试资产**,故意伪造固定数据、不做任何真实代理/网络行为。
 #    真 mihomo 内核的锁版入库(版本号记录在案、随宿主启停)是**用户决策**,留用户;本文件只证明
 #    「宿主拉起内核 → REST 读/写状态 → 内核死亡检测 → 宿主退出回收无孤儿」这套机制成立。
@@ -147,11 +153,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         # PUT /proxies/<group> {"name": ...} → 改该组当前选中(真核约定 PUT;有状态:后续 GET /proxies 反映)。
+        # PUT /configs        {"path": p}   → 从路径重载配置(10 票:真核约定 PUT /configs = 从路径重载)。
         path = self.path.split("?", 1)[0]
         segs = [s for s in path.split("/") if s != ""]
         data = self._read_json_body()
         if data is None:
             return self._send_empty(400)
+        if path == "/configs":
+            return self._reload_configs(data)
         if len(segs) == 2 and segs[0] == "proxies":
             group = segs[1]
             name = data.get("name")
@@ -163,6 +172,38 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_empty(204)
             return self._send_empty(400)
         self._send_empty(404)
+
+    def _reload_configs(self, data):
+        # 10 票:从 {"path": p} 指定的 test-only JSON fixture 重载。读不到 → 404;解析失败/格式非法 → 400;成功 → 204。
+        p = data.get("path")
+        if not isinstance(p, str) or not p:
+            return self._send_empty(400)
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                fixture = json.load(f)
+        except FileNotFoundError:
+            return self._send_empty(404)
+        except Exception:
+            return self._send_empty(400)
+        if not isinstance(fixture, dict):
+            return self._send_empty(400)
+        # 更新 mode。
+        mode = fixture.get("mode")
+        if isinstance(mode, str) and mode:
+            STATE["mode"] = mode
+        # 更新各组 type/all/now(替换/新增该组;其余组不动)。
+        groups = fixture.get("groups")
+        if isinstance(groups, dict):
+            for gname, g in groups.items():
+                if not isinstance(g, dict):
+                    continue
+                gtype = g.get("type", "Selector")
+                allnodes = g.get("all", [])
+                if not isinstance(allnodes, list):
+                    allnodes = []
+                GROUPS[gname] = {"type": gtype, "all": list(allnodes)}
+                STATE["now"][gname] = g.get("now", "") or ""
+        return self._send_empty(204)
 
 
 def main():

@@ -36,6 +36,9 @@ public final class ProxyPlugin: @unchecked Sendable {
     private let kernelPath: String?
     /// 拉起内核的参数(默认 fake stub 约定 `--port <控制端口>`;真 mihomo 的参数/配置形态入库时由用户决定)。
     private let kernelArgs: [String]
+    /// 订阅管理域状态机(10 票):list/activate/update/add,经注入的 SubscriptionStore/SubscriptionSourcePort +
+    /// 06 的 RESTClient(reloadConfig)。缺省注入 Noop(不持久化 / 拉取即报未配置),不改 06/07/08 既有构造点。
+    private let subscriptionManager: SubscriptionManager
 
     private let lock = NSLock()
     /// 当前内核句柄(经 ProcessPort 拉起后置入;回收后清空)。读写均在 lock 内。
@@ -53,6 +56,8 @@ public final class ProxyPlugin: @unchecked Sendable {
     ///   - kernelArgs: 覆盖默认拉起参数(缺省 `["--port", "<controlPort>"]`,对齐 fake stub)。
     ///   - stateStore: 接管态清单持久化(08;缺省 Noop = 不持久化,不改 06/07 既有行为)。
     ///   - reaper: 跨世代孤儿回收(08;缺省 Noop = 不回收)。
+    ///   - subscriptionStore: 订阅清单/配置持久化(10;缺省 Noop = 不持久化 → list 空、activate/update/add 因无源/无路径而业务失败,不改既有构造点)。
+    ///   - subscriptionSource: 订阅源拉取(10;缺省 Noop = fetch 恒报「未配置订阅源」→ add/update 业务失败)。
     public init(processPort: any ProcessPort,
                 httpPort: any HTTPPort,
                 networkConfigPort: any NetworkConfigPort,
@@ -60,14 +65,18 @@ public final class ProxyPlugin: @unchecked Sendable {
                 controlPort: Int,
                 kernelArgs: [String]? = nil,
                 stateStore: any TakeoverStateStore = NoopTakeoverStateStore(),
-                reaper: any ProcessReaper = NoopProcessReaper()) {
+                reaper: any ProcessReaper = NoopProcessReaper(),
+                subscriptionStore: any SubscriptionStore = NoopSubscriptionStore(),
+                subscriptionSource: any SubscriptionSourcePort = NoopSubscriptionSourcePort()) {
         self.processPort = processPort
         self.networkConfigPort = networkConfigPort
         self.stateStore = stateStore
         self.reaper = reaper
         self.kernelPath = kernelPath
         self.kernelArgs = kernelArgs ?? ["--port", String(controlPort)]
-        self.restClient = MihomoRESTClient(http: httpPort, port: controlPort)
+        let rest = MihomoRESTClient(http: httpPort, port: controlPort)
+        self.restClient = rest
+        self.subscriptionManager = SubscriptionManager(store: subscriptionStore, source: subscriptionSource, restClient: rest)
     }
 
     /// 经 ProcessPort 拉起内核(随宿主启动)。
@@ -102,6 +111,13 @@ public final class ProxyPlugin: @unchecked Sendable {
     private func currentHandle() -> ProcessHandle? {
         lock.lock(); defer { lock.unlock() }
         return handle
+    }
+
+    /// 10 票(F3):重启后机械补齐——若订阅清单有激活项,让内核从其物化配置重载(best-effort,失败不阻断启动)。
+    /// 宿主在内核确认拉起之后调用;委托订阅状态机(带有界就绪轮询)。
+    @discardableResult
+    public func reloadActiveSubscriptionIfAny() -> Bool {
+        subscriptionManager.reloadActiveIfAny()
     }
 
     // ============ 系统代理接管 / 还原(07 票)============
@@ -371,12 +387,18 @@ public final class ProxyPlugin: @unchecked Sendable {
     ///   * `proxy.groups.list`(safe 只读:组/节点/当前选中;cliAlias `aa proxy groups`);
     ///   * `proxy.latency.test`(safe 只读:按组测速,超时如实标注;cliAlias `aa proxy ping`);
     ///   * `proxy.mode.set`(normal:切模式 rule/global/direct;cliAlias `aa proxy mode`);
-    ///   * `proxy.node.select`(normal:按组选节点;cliAlias `aa proxy node`)。
-    /// handler 每次调用时读/写「当前状态」——故内核死亡/重启、接管/还原、切模式/选节点都能被如实反映;
-    /// safe/normal 均直执行(normal 零 GUI 打断)。内核未运行/控制面未就绪时,写/读经 RESTClient 抛错 → 收敛为业务失败(退出码 5),绝不崩。
+    ///   * `proxy.node.select`(normal:按组选节点;cliAlias `aa proxy node`);
+    ///   * `proxy.subscription.list`(safe:列出订阅 + 当前激活);
+    ///   * `proxy.subscription.activate`(normal:激活某订阅 → 内核重载该配置生效);
+    ///   * `proxy.subscription.update`(normal:更新已有源,零确认 + 失败回滚);
+    ///   * `proxy.subscription.add`(dangerous:新增/替换订阅源,须经宿主 GUI 最终确认)。
+    /// handler 每次调用时读/写「当前状态」——故内核死亡/重启、接管/还原、切模式/选节点、订阅切换都能被如实反映;
+    /// safe/normal 均直执行(normal 零 GUI 打断),dangerous(add)的确认由 Registry.invoke 路由层强制。
+    /// 内核未运行/控制面未就绪 / 订阅源不可达时,写/读经 RESTClient/SourcePort 抛错 → 收敛为业务失败(退出码 5),绝不崩。
     public func capabilities() -> [PluginCapability] {
         let processPort = self.processPort
         let restClient = self.restClient
+        let subscriptionManager = self.subscriptionManager
         return [
             PluginCapability(
                 descriptor: CapabilityDescriptor(
@@ -557,6 +579,70 @@ public final class ProxyPlugin: @unchecked Sendable {
                         return .failure(WireError(code: WireErrorCode.capabilityFailed,
                                                   detail: "选择节点失败(内核未运行/控制面未就绪/分组或节点不存在): \(error)"))
                     }
+                }
+            ),
+            // ============ 10 票:订阅管理(normal 更新 + dangerous 换源)============
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.subscription.list",
+                    risk: .safe,
+                    summary: "列出全部订阅(id/name/source/最近更新时间)与当前激活项(safe 只读,不碰内核)",
+                    schemaSummary: "input: {} → output: { active: id?|null, subscriptions: [{ id, name, source, lastUpdatedAt? }] }",
+                    parameters: []
+                ),
+                handler: { _ in subscriptionManager.list() }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.subscription.activate",
+                    risk: .normal,
+                    summary: "激活指定订阅:让内核从该订阅的物化配置重载生效(同一时刻只激活一个;normal 零 GUI 确认)",
+                    schemaSummary: "input: { id: String } → output: { id, activated: true }",
+                    parameters: [
+                        ParameterSpec(name: "id", type: "string", required: true, description: "要激活的订阅 id(必填;见 proxy.subscription.list)")
+                    ]
+                ),
+                handler: { input in
+                    guard let id = input?.objectValue?["id"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 id"))
+                    }
+                    return subscriptionManager.activate(id: id)
+                }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.subscription.update",
+                    risk: .normal,
+                    summary: "更新已有订阅源:重新拉取并物化;若为激活项则重载生效,重载失败自动回滚到旧配置(normal 零 GUI 确认)",
+                    schemaSummary: "input: { id: String } → output: { id, updated: true, lastUpdatedAt }",
+                    parameters: [
+                        ParameterSpec(name: "id", type: "string", required: true, description: "要更新的订阅 id(必填;见 proxy.subscription.list)")
+                    ]
+                ),
+                handler: { input in
+                    guard let id = input?.objectValue?["id"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 id"))
+                    }
+                    return subscriptionManager.update(id: id)
+                }
+            ),
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.subscription.add",
+                    risk: .dangerous,
+                    summary: "新增或替换订阅源:拉取并物化配置,upsert 进清单(同 name 覆盖=替换源);dangerous——须经宿主 GUI 最终确认,不自动激活",
+                    schemaSummary: "input: { name: String, source: String } → output: { id, name, added: true }",
+                    parameters: [
+                        ParameterSpec(name: "name", type: "string", required: true, description: "订阅展示名(必填;归一为 id,同名覆盖=替换源)"),
+                        ParameterSpec(name: "source", type: "string", required: true, description: "订阅源(必填;file:// 路径 或 http(s):// URL)")
+                    ]
+                ),
+                handler: { input in
+                    let obj = input?.objectValue
+                    guard let name = obj?["name"]?.stringValue, let source = obj?["source"]?.stringValue else {
+                        return .failure(WireError(code: WireErrorCode.invalidParams, detail: "内部错:缺 name/source"))
+                    }
+                    return subscriptionManager.add(name: name, source: source)
                 }
             )
         ]

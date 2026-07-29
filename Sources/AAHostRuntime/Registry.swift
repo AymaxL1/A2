@@ -17,11 +17,13 @@ import AAContracts
 /// - `@Sendable`:handler 不得捕获可变状态(demo 用不可变/值语义),从而 `Capability`/`Registry` 天然 Sendable。
 public typealias CapabilityHandler = @Sendable (JSONValue?) -> Result<JSONValue, WireError>
 
-/// dangerous 能力的宿主确认回调:吃描述符(供 GUI 展示 id/summary),吐 Bool(true=批准执行 / false=拒绝)。
-/// - 由宿主(AAHostMacOS)注入真实 GUI 确认(主线程 NSAlert);测试注入假件(直接返 true/false)。
+/// dangerous 能力的宿主确认回调:吃描述符(供 GUI 展示 id/summary)+ **本次请求的 input**(供 GUI 展示批的是哪些参数,
+/// 消除盲批;10 票加),吐 Bool(true=批准执行 / false=拒绝)。
+/// - 由宿主(AAHostMacOS)注入真实 GUI 确认(主线程 NSAlert;把 input 关键字段渲染进确认框);测试注入假件(直接返 true/false)。
 /// - `@Sendable`:确认回调会被后台连接处理线程调用(宿主实现内部再 `DispatchQueue.main.sync` 切主线程弹窗),
 ///   标 `@Sendable` 才能让持有它的 `Registry` 维持 `Sendable`(03 立的「不可变存储 → 天然 Sendable」不变式)。
-public typealias ConfirmDangerous = @Sendable (CapabilityDescriptor) -> Bool
+/// - input 为收敛的**契约加法**:`input=nil`(如 demo.wipe 不带 input)时行为与 04 一致。
+public typealias ConfirmDangerous = @Sendable (CapabilityDescriptor, JSONValue?) -> Bool
 
 /// 一个已注册能力 = 描述符 + 处理器。
 public struct Capability: Sendable {
@@ -179,7 +181,7 @@ public final class Registry: Sendable {
                 return .failure(WireError(code: WireErrorCode.denied,
                                           detail: "dangerous 能力被拒:无 GUI 确认通道可用(fail-closed),拒绝执行 \(capabilityID)"))
             }
-            guard confirm(cap.descriptor) else {
+            guard confirm(cap.descriptor, input) else {   // 10 票:把本次请求 input 透传给确认层(GUI 展示批的是哪些参数,消除盲批)
                 return .failure(WireError(code: WireErrorCode.denied,
                                           detail: "dangerous 能力被拒:宿主确认未通过 \(capabilityID)"))
             }

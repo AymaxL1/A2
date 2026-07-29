@@ -60,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var proxyPlugin: ProxyPlugin!
     /// test/dev seam:SIGUSR1 → 优雅退出的 DispatchSource(exercise applicationWillTerminate→reclaimKernel→terminate 完整回收路径)。
     var gracefulQuitSource: DispatchSourceSignal?
+    /// dangerous 确认串行化闸门(10 票还 04 债):同一时刻只允许一个确认在途,从根上消除并发嵌套 runModal。
+    /// 从多个后台连接处理线程进入 `confirmDangerous` 时在此排队,一个决定完再放下一个。
+    private let confirmGate = NSLock()
 
     /// 可选无人值守自动拒绝定时器秒数(手动/真机跑用,防夜里留挂着的对话框)。读 `AA_AUTO_DENY_SECONDS`。
     /// 仅在 `.interactive`(真弹窗)分支生效;headless 门禁用的是 `AA_CONFIRM_AUTO`(不弹窗),二者不冲突。
@@ -101,10 +104,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let takeoverStatePath = env["AA_TAKEOVER_STATE_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? AAPaths.takeoverStatePath
         let stateStore = FileTakeoverStateStore(path: takeoverStatePath)
         hostLog("接管态持久化: \(takeoverStatePath)")
+        // 10:订阅持久化目录 + 订阅源拉取真实现。生产缺省 AAPaths.subscriptionsDirectory;test-only env seam
+        //   AA_SUBSCRIPTION_DIR 覆盖到 $BUILD 临时区(E2E 绝不污染真实 AppSupport;与 AA_TAKEOVER_STATE_PATH 同口径,12/13 前按需门控)。
+        let subscriptionDir = env["AA_SUBSCRIPTION_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? AAPaths.subscriptionsDirectory
+        let subscriptionStore = FileSubscriptionStore(baseDir: subscriptionDir)
+        let subscriptionSource = RealSubscriptionSourcePort()
+        hostLog("订阅持久化目录: \(subscriptionDir)(源拉取: file:// / http(s):// 真实现)")
         let plugin = ProxyPlugin(processPort: processPort, httpPort: httpPort,
                                  networkConfigPort: networkConfigPort,
                                  kernelPath: kernelPath, controlPort: controlPort, kernelArgs: kernelArgs,
-                                 stateStore: stateStore, reaper: processPort)
+                                 stateStore: stateStore, reaper: processPort,
+                                 subscriptionStore: subscriptionStore, subscriptionSource: subscriptionSource)
         self.proxyPlugin = plugin
 
         // 0c) 崩溃自愈:正常服务前先跑一次。读持久化接管态 → 判定 → 执行(reap 孤儿 / 恢复接管 / 还原快照 / 清标记)。
@@ -126,13 +136,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     + "真 mihomo 锁版入库留用户决策。")
         }
 
+        // 0d') 10 票(F3)重启后机械补齐:内核确认拉起之后,若清单有激活订阅,让内核从其物化配置重载
+        //      (best-effort,有界就绪轮询,失败不阻断启动;不改 08 判定,只在其后追加一步)。仅在有内核时做(否则 reload 无意义)。
+        //      自愈重启分支与常规拉起分支都覆盖:两者都已让内核起来。放在 server.start() 之前——故 socket 出现即代表恢复已跑完。
+        if healReport.kernelRelaunched || kernelPath != nil {
+            if plugin.reloadActiveSubscriptionIfAny() {
+                hostLog("重启恢复: 已让内核重载当前激活订阅的配置(catalog 与内核对齐)")
+            } else {
+                hostLog("重启恢复: 无激活订阅或重载未成功(不阻断启动)")
+            }
+        }
+
         // 0b) 构造注册表:demo 能力 + 插件能力(proxy.status),并注入 dangerous 确认回调。
         //     回调 @Sendable:被后台连接处理线程调用,内部再切主线程弹窗。捕获 weak self 避免互持。
         //     插件产 [PluginCapability](只依赖 SDK/Contracts),宿主零成本适配成 Registry 的 Capability(handler 形状一致)。
         let pluginCaps = plugin.capabilities().map { Capability(descriptor: $0.descriptor, handler: $0.handler) }
         registry = Registry(capabilities: Registry.demoCapabilities + pluginCaps,
-                            confirmDangerous: { [weak self] descriptor in
-            self?.confirmDangerous(descriptor) ?? false
+                            confirmDangerous: { [weak self] descriptor, input in
+            self?.confirmDangerous(descriptor, input) ?? false
         })
 
         // 1) socket 路径与父目录(路径常量集中在 Contracts.AAPaths);父目录建不出即快速失败,不带病常驻
@@ -214,7 +235,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⚠️ **test-only env seam(`AA_CONFIRM_AUTO`)**:approve→true / deny→false,均不弹窗、即时返回,
     ///    供 headless check.sh 无人值守跑两分支;未设 → 走真 NSAlert(生产缺省,fail-safe)。
     ///    **12/13 真机分发前必须移除或编译期门控**(见 `AutoConfirm` 注释),绝不能让生产默认放行。
-    nonisolated private func confirmDangerous(_ descriptor: CapabilityDescriptor) -> Bool {
+    nonisolated private func confirmDangerous(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
+        // F8(记债转显式崩溃):本入口是**硬性不变式 = 只在后台连接处理线程被调用**。若哪天有人从主线程调它并叠加
+        //   confirmGate 持锁 + 下面的 DispatchQueue.main.sync,就会自锁死;precondition 把这条未来的静默死锁转成显式崩溃(更安全的失败)。
+        precondition(!Thread.isMainThread, "confirmDangerous 必须在后台线程调用(否则 confirmGate + main.sync 会死锁)")
+        // 10 票(还 04 债):整段串行化——同一时刻只允许一个 dangerous 确认在途,消除并发嵌套 runModal
+        //   (旧 auto-deny 定时器 stopModal 停最内层会话可能误关另一弹窗的隐患由此根除)。
+        //   headless 两分支(approve/deny)不弹窗即时返回,加锁开销可忽略;interactive 分支下一个确认排队等待前一个决定完。
+        // 记债(D3,04 家族行为):串行化排队意味着后到的确认可能在其客户端 SO_RCVTIMEO 早已超时后才弹出,
+        //   用户点了「确认」但客户端已判超时退出(退出码3)。属可接受的既有行为,记债不改;将来可加「入队时间戳 + 过期即自动 deny」。
+        confirmGate.lock(); defer { confirmGate.unlock() }
+        // F2:把本次请求的 input 关键字段落一行日志(证明 input 到达确认层,消除盲批;E2E 可 grep `[confirm] <id> ...`)。
+        hostLog("[confirm] \(descriptor.id) \(Self.renderInput(input))")
         switch AutoConfirm.current() {
         case .approve:
             hostLog("AA_CONFIRM_AUTO=approve → 自动批准(test-only,不弹窗)[\(descriptor.id)]")
@@ -223,19 +255,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hostLog("AA_CONFIRM_AUTO=deny → 自动拒绝(test-only,不弹窗)[\(descriptor.id)]")
             return false
         case .interactive:
-            return confirmDangerousOnMain(descriptor)
+            return confirmDangerousOnMain(descriptor, input)
         }
+    }
+
+    /// 把 input 渲染成一行可读摘要(通用:input 是 object 就列键值,别硬编码只认某能力)。用于确认日志与 GUI 确认框。
+    nonisolated static func renderInput(_ input: JSONValue?) -> String {
+        guard let input = input else { return "(无 input)" }
+        guard let obj = input.objectValue else { return "input=\(input)" }
+        if obj.isEmpty { return "(空 input)" }
+        let pairs = obj.keys.sorted().map { key -> String in
+            let v = obj[key]
+            let vs = v?.stringValue ?? v.map { "\($0)" } ?? "null"
+            return "\(key)=\(vs)"
+        }
+        return pairs.joined(separator: " ")
     }
 
     /// 后台线程入口:同步切回主线程弹窗并取回结果(阻塞本连接直到用户/自动决定)。照 S2 已真机点验的模型。
     /// 主线程内用 `MainActor.assumeIsolated` 进入 @MainActor 隔离域调 showConfirmAlert(此时确在主线程,断言成立)。
-    nonisolated private func confirmDangerousOnMain(_ descriptor: CapabilityDescriptor) -> Bool {
+    nonisolated private func confirmDangerousOnMain(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
         let approved: Bool
         if Thread.isMainThread {
-            approved = MainActor.assumeIsolated { self.showConfirmAlert(descriptor) }
+            approved = MainActor.assumeIsolated { self.showConfirmAlert(descriptor, input) }
         } else {
             approved = DispatchQueue.main.sync {
-                MainActor.assumeIsolated { self.showConfirmAlert(descriptor) }
+                MainActor.assumeIsolated { self.showConfirmAlert(descriptor, input) }
             }
         }
         hostLog("dangerous 确认结果 [\(descriptor.id)]: \(approved ? "approved" : "denied")")
@@ -245,17 +290,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 主线程弹 dangerous 确认框(critical NSAlert)。accessory app 弹窗前必须 activate 带到前台。
     /// 支持 `AA_AUTO_DENY_SECONDS` 定时自动拒绝(定时器须加进 `.modalPanel` 模式,否则模态循环里不触发)。
     ///
-    /// 已知限制(记债,本票不改逻辑):并发的两个 dangerous 调用会在主线程嵌套 `runModal`,
-    /// auto-deny 定时器的 `stopModal` 停的是**最内层**模态会话,理论上可能误关到另一个弹窗。
-    /// 属性是 fail-safe——最坏只会**多 deny**,绝不会误批(误关等价于该会话被拒)。
-    /// 将来 dangerous 进入真实业务用例(如 10 票换订阅源)时,应把 dangerous 确认**串行化**
-    /// (同一时刻只允许一个确认 modal,如用串行队列/信号量把并发确认排队),从根上消除嵌套 modal。
-    private func showConfirmAlert(_ descriptor: CapabilityDescriptor) -> Bool {
+    /// 已串行化(10 票还 04 债):`confirmDangerous` 入口用 `confirmGate` 把整段确认串行化——同一时刻只允许一个确认
+    /// 在途,故这里的 `runModal` 不再有并发嵌套,auto-deny 定时器的 `stopModal` 只会作用于当前唯一的模态会话
+    /// (从根上消除了旧的「误关到另一个弹窗」隐患)。
+    /// F2:把本次请求的 input 关键字段渲染进确认框——用户看得见批的是哪个源/替换哪条,不再盲批。
+    private func showConfirmAlert(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "确认执行危险能力:\(descriptor.id)"
-        alert.informativeText = "\(descriptor.summary)\n\n这是 dangerous 档能力,确认只在宿主 GUI 完成,CLI 不会代你决定。"
+        let inputLine = AppDelegate.renderInput(input)
+        alert.informativeText = "\(descriptor.summary)\n\n本次请求参数:\(inputLine)\n\n这是 dangerous 档能力,确认只在宿主 GUI 完成,CLI 不会代你决定。"
         alert.addButton(withTitle: "确认执行") // .alertFirstButtonReturn
         alert.addButton(withTitle: "取消")      // .alertSecondButtonReturn
 
