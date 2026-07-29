@@ -189,6 +189,8 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 // 门禁自动生成:纯逻辑测试的入口 shim(断言逻辑在 AAHostTestKit / AAAgentTestKit)。
 // 06 票:除 RegistryConformanceTests 外,追加 ProxyConformanceTests(Port 假件 / RESTClient / proxy.status 域逻辑)。
 // agent-delegation 01:再追加 AAAgentCoreConformanceTests(FakeAgentPort 主 seam + 6 型消息模型;独立 AgentTestReport)。
+// agent-delegation 02:再追加 ClaudeAdapterTests(stream-json 归一化;喂 01 spike 落盘的真实 NDJSON 黄金样本,
+//   样本目录经 AA_SPIKE_DIR 注入 —— 见下方 runner 调用行;缺失即 fail-closed 记 FAIL,不静默跳过)。
 import AAHostTestKit
 import AAAgentTestKit
 import Foundation
@@ -198,11 +200,14 @@ let r2 = ProxyConformanceTests.run()
 for line in r2.lines { print(line) }
 let r3 = AAAgentCoreConformanceTests.run()
 for line in r3.lines { print(line) }
+let r4 = ClaudeAdapterTests.run()
+for line in r4.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
-let failed = r1.failed + r2.failed + r3.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed) failed=\(failed)")
+print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -238,7 +243,9 @@ assert_exit() {  # $1 期望码  $2 实际码  $3 描述
 
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
 echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
-OUT="$("$TESTRUNNER" 2>&1)"; RC=$?
+# AA_SPIKE_DIR:agent-delegation 02 的 ClaudeAdapterTests 从这里真读 01 spike 落盘的黄金样本(单一真相源,不复制成常量)。
+#   样本目录缺失时套件自己 fail-closed 记 FAIL(不静默跳过),故这里只负责如实注入路径。
+OUT="$(AA_SPIKE_DIR="$ROOT/.scratch/agent-delegation/research" "$TESTRUNNER" 2>&1)"; RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 assert_exit 0 $RC "registry-tests 全绿退出码"
 assert_contains "$OUT" "demo.echo" "纯逻辑测试覆盖 demo.echo"
@@ -278,6 +285,36 @@ assert_contains "$OUT" "AgentMessage.toolUse:kind/tool/callID/input 正确" "②
 assert_contains "$OUT" "AgentMessage:toolUse 的 callID 经 Codable round-trip 保留" "②AgentMessage:CallID round-trip 全链保留"
 assert_contains "$OUT" "AgentMessage:text 消息编码后 JSON 不含 nil 键 tool(encodeIfPresent)" "②AgentMessage:nil 键省略(encodeIfPresent)"
 assert_contains "$OUT" "AgentMessage:6 型样本经 JSONEncoder/Decoder round-trip 全等" "②AgentMessage:6 型 Codable round-trip 全等"
+
+# agent-delegation 02 纯逻辑断言(同一 runner 输出;ClaudeAdapterTests:stream-json 归一化,喂 01 spike 的真实 NDJSON 黄金样本)。
+# 口径同 1c:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(样本被真读到、路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# 样本目录经上面 runner 调用行的 AA_SPIKE_DIR 注入;缺失/不存在时套件自己记 FAIL(fail-closed,绝不静默跳过)。
+echo "--- 断言组 1d:Claude adapter 归一化(ClaudeAdapterTests,黄金样本)---"
+assert_contains "$OUT" "CLAUDEADAPTER_TESTS passed=" "agent-delegation 02 纯逻辑套件已运行(ClaudeAdapterTests)"
+assert_contains "$OUT" "Claude adapter:spike 黄金样本目录存在(不存在即 fail-closed,绝不静默跳过)" "①黄金样本目录经 AA_SPIKE_DIR 真读到(fail-closed)"
+assert_contains "$OUT" "Claude adapter:baseline 只读样本消息序列=[status,status,text](终局答复不重复产消息)" "②baseline:消息序列逐型钉死(终局答复不重复)"
+assert_contains "$OUT" "Claude adapter:baseline 只读样本终态 finalText 与最后一条 text 消息逐字相同(挪位不丢信息)" "②baseline:终局答复挪进终态 finalText 且不丢"
+assert_contains "$OUT" "Claude adapter:baseline 只读样本首条为 session-started 状态消息" "②baseline:system/init → session-started"
+assert_contains "$OUT" "Claude adapter:baseline 只读样本终态=succeeded(reason=completed)" "②baseline:终态 succeeded"
+assert_contains "$OUT" "Claude adapter:tool-use 样本 tool-use 与 tool-result 的 callID 相等(全链配对不丢)" "③tool-use:CallID 全链配对不丢(修 multica 有损点)"
+assert_contains "$OUT" "Claude adapter:tool-use 样本工具名归一为 Write" "③tool-use:工具名归一"
+assert_contains "$OUT" "Claude adapter:越界写样本(07)终态=succeeded(cwd 不是安全边界,归一化层面无差别)" "④越界写:归一化层面与正常写无差别"
+assert_contains "$OUT" "Claude adapter:中断样本(04)终态=aborted(该样本 is_error 也为 true,判定顺序 aborted 在 failed 前)" "⑤中断:终态 aborted(判定顺序不可颠倒)"
+assert_contains "$OUT" "Claude adapter:中断样本(04)额外产出 interrupted 状态消息(中断在消息流里也可见)" "⑤中断:产出 interrupted 状态消息"
+assert_contains "$OUT" "Claude adapter:中断样本(04)中断提示绝不归一为 agent 的 text 输出(不混淆发言方)" "⑤中断:user 文本不混淆为 agent 发言"
+assert_contains "$OUT" "Claude adapter:invalid-model 样本(05)终态=failed(is_error/api_error_status/terminal_reason 联合判定)" "⑥invalid-model:终态 failed(多字段联合)"
+assert_contains "$OUT" "Claude adapter:invalid-model 样本(05)原生 subtype 字面仍是 success —— 终态判定绝不能只看 subtype" "⑥invalid-model:「不能只看 subtype」回归护栏"
+assert_contains "$OUT" "Claude adapter:被拒样本(03)产出 permission-denied 状态消息(kind=status,保留工具名 Write)" "⑦被拒:permission_denials → 统一「操作被拒」status"
+assert_contains "$OUT" "Claude adapter:被拒样本(03)permission-denied 的 callID 与 is_error=true 的 tool_result 对得上" "⑦被拒:被拒信号与 tool_result 全链对得上"
+assert_contains "$OUT" "Claude adapter:被拒样本(03)终态=succeeded(被拒 ≠ 终态失败,不能靠终态判断有没有被拒)" "⑦被拒:被拒 ≠ 终态失败"
+assert_contains "$OUT" "Claude adapter:control_request 归一为 status=unknown:control_request(未知双向消息不崩、不产终态)" "⑧兜底:control_request 记录不崩(V1 不应答)"
+assert_contains "$OUT" "Claude adapter:非 JSON 垃圾行归一为 status=unparsed 且保留原始行(不崩不抛)" "⑧兜底:垃圾行 unparsed 不崩"
+assert_contains "$OUT" "Claude adapter:空行产出 0 条消息(不报错)" "⑧兜底:空行 0 条消息"
+# ⑨ CR 结论的回归护栏:八组黄金样本都覆盖不到这一支(样本里 error_during_execution 恒与 aborted_streaming 同现),
+#    故用构造行钉死——非中断的执行期错误必须判 failed,且不得凭空注入 interrupted(失败被伪装成取消最难被发现)。
+assert_contains "$OUT" "Claude adapter:非中断的 error_during_execution 判 failed(真失败绝不伪装成被取消)" "⑨回归:非中断 error_during_execution → failed"
+assert_contains "$OUT" "Claude adapter:非中断的 error_during_execution 不注入 interrupted 消息(不无中生有)" "⑨回归:不无中生有 interrupted"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"

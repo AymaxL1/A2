@@ -1,5 +1,7 @@
 // AAAgentCore —— 「宿主调用本地 agent」适配层的平台统一 6 型消息模型。
-// 依赖边:AAAgentCore → AAContracts(仅此;不 import Foundation、不 import 任何 Host*)。
+// 依赖边:**本文件**只 import AAContracts(纯值类型,连 Foundation 都用不上)。
+//   模块级红线是「AAAgentCore 绝不 import 任何 Host* / AAPluginSDK / PluginProxy」——Foundation **不在**红线内
+//   (AAContracts 自身即 import 它);同模块的 ClaudeAdapter.swift 因需 JSONDecoder 解原生 JSON 行而 import 之。
 //
 // 归一化契约(spec「消息归一化」节):两家 agent 迥异的原生事件流(Claude 的 stream-json、
 //   Codex exec 的 NDJSON)由各自 adapter 翻译成同一套 6 型消息(text/thinking/tool-use/
@@ -126,5 +128,27 @@ public struct AgentMessage: Codable, Sendable, Equatable {
     /// error:一条错误消息(内容承载于 `text`)。
     public static func error(_ content: String) -> AgentMessage {
         AgentMessage(kind: .error, text: content)
+    }
+
+    // —— 追加便利构造器(agent-delegation 02:两家 adapter 共用的 status 词汇 + 「操作被拒」)——
+    // 上面 6 个不动:它们是 6 型的基本造法;这两个是 status 型的两种**共用用法**,与之并列而非替代。
+
+    /// status(强类型码 + 可选补充文本):`status` 取共用词汇表的 rawValue,`detail` 落在 `text` 承载原生细节。
+    /// 与 `status(_ state: String)` 并存并非重复:平台自定义状态走本重载(唯一出处),
+    /// 原生保真兜底串(如 `"system:api_retry"` / `"unknown:control_request"`)走 String 重载。
+    public static func status(_ code: AgentStatusCode, detail: String? = nil) -> AgentMessage {
+        AgentMessage(kind: .status, text: detail, status: code.rawValue)
+    }
+    /// 「操作被拒」:status 型,但保留是**哪个工具、哪次调用、什么入参**被拒(全链可追溯)。
+    /// 不做成第 7 型:被拒是一种状态而非新消息种类;上层按 `status == AgentStatusCode.permissionDenied.rawValue` 识别,
+    /// 并可据 `callID` 与前面那条 `isError == true` 的 tool-result 对上号(Claude 侧被拒信号可识别,spike 实证)。
+    public static func permissionDenied(callID: String?, tool: String?, input: JSONValue?) -> AgentMessage {
+        AgentMessage(
+            kind: .status,
+            tool: tool,
+            callID: callID,
+            input: input,
+            status: AgentStatusCode.permissionDenied.rawValue
+        )
     }
 }

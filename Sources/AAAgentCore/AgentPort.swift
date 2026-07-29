@@ -1,5 +1,6 @@
 // AAAgentCore —— 一次 agent 进程执行的抽象 `AgentPort`(把所有子进程副作用压到端口之后)。
-// 依赖边:AAAgentCore → AAContracts(仅此;不 import Foundation、不 import 任何 Host*)。
+// 依赖边:**本文件**零 import(全部类型来自 stdlib)。模块级红线是「AAAgentCore 绝不 import 任何
+//   Host* / AAPluginSDK / PluginProxy」——Foundation **不在**红线内(AAContracts 自身即 import 它)。
 //
 // 为何自定义 AgentPort、不复用 AAPluginSDK.ProcessPort:AAAgentCore 的依赖边只到 Contracts
 //   (spec:与 v1-core-proxy 的 16 票并行落地、互不踩施工面),够不着 SDK。故这里另立一个
