@@ -82,12 +82,20 @@ SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCAC
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
 TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 
-# 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
+# agent-delegation 06:SystemAgentPortTests 与反孤儿探针拉起的被测子进程,一律是**唯一时长**的 sleep。
+# 之所以不用裸 `sleep` 或宽泛模式:那会误杀用户机器上别的 sleep。这两个时长(秒)现实中没人会用,
+# 故 pkill/pgrep 盯它们既够精确、又不需要知道 pgid(sleep 8713x 的完整命令行里就带着这个定长串)。
+AGENT_SLEEP_SUITE="sleep 87137"   # 套件内用例(每条用例自己 terminate,这里只是 trap 兜底)
+AGENT_SLEEP_PROBE="sleep 87139"   # 反孤儿探针(刻意不 terminate,靠钩子回收 —— 正是被核验的东西)
+
+# 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器 / 残被测子进程。
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
   pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null
+  pkill -f "$AGENT_SLEEP_SUITE" 2>/dev/null
+  pkill -f "$AGENT_SLEEP_PROBE" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
 }
 trap cleanup EXIT
@@ -131,6 +139,11 @@ build_lib AAContracts
 # agent-delegation 01:AAAgentCore(「宿主调用本地 agent」适配层地基;只依赖 Contracts,与 16 票并行)。
 #   放在 Contracts 之后即满足拓扑序;纯逻辑 + Port 协议 + 6 型消息,vfsoverlay 可验。
 build_lib AAAgentCore
+
+# agent-delegation 06:AAAgentSystem(AgentPort 的**生产实现**:posix_spawn + 进程组 + 管道 + 反孤儿钩子)。
+#   拓扑序:必须在 AAAgentCore 之后(import 它)、AAAgentTestKit 之前(测试要驱动真实现)。
+#   它只依赖 AAAgentCore + 系统库(源码零 import AAContracts),不碰 AAHostMacOS(并行红线),见断言组 3e 的 grep 守卫。
+build_lib AAAgentSystem
 
 # ② 只依赖 Contracts(06 票:AAPluginSDK 现含 ProcessPort/HTTPPort 两个宿主 Port 协议 + PluginCapability)
 build_lib AAPluginSDK
@@ -197,9 +210,18 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 //   零真实文件系统、零真实时钟、零真实进程,故**不需要**任何样本目录或环境变量注入)。
 // agent-delegation 05:再追加 AgentWatchdogTests(消息静默看门狗 + 取消/超时中断语义;时间由测试直接喂 epoch 秒、
 //   进程由 FakeAgentPort 假冒 —— **零真实等待、零真进程**,同样不需要样本目录或环境变量注入)。
+// agent-delegation 06:再追加 SystemAgentPortTests(**唯一碰真进程的套件**:真 /bin/sh 子进程 + 真进程组 + 真信号)。
+//   被测进程一律是系统命令(sleep 时长用唯一值 87137/87139,便于外部核验残留且绝不误伤用户进程);
+//   套件自带 120 秒看门狗,读流意外阻塞时打印 FAIL 并 exit(不让门禁挂死)。
+//   另:AA_ORPHAN_PROBE 模式把本 runner 变成**反孤儿探针**(拉起一组子进程后不回收就退出/被杀),
+//   由 check.sh 在进程外核验 atexit / 信号钩子确实把整组 SIGKILL 干净了 —— 这一步在进程内无法自证。
 import AAHostTestKit
 import AAAgentTestKit
 import Foundation
+
+if let probeMode = ProcessInfo.processInfo.environment["AA_ORPHAN_PROBE"] {
+    SystemAgentPortOrphanProbe.run(mode: probeMode)   // 不返回
+}
 let r1 = RegistryConformanceTests.run()
 for line in r1.lines { print(line) }
 let r2 = ProxyConformanceTests.run()
@@ -214,6 +236,8 @@ let r6 = AgentTaskTests.run()
 for line in r6.lines { print(line) }
 let r7 = AgentWatchdogTests.run()
 for line in r7.lines { print(line) }
+let r8 = SystemAgentPortTests.run()
+for line in r8.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
@@ -221,8 +245,9 @@ print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
 print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
 print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
 print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed) failed=\(failed)")
+print("SYSTEMPORT_TESTS passed=\(r8.passed) failed=\(r8.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -231,7 +256,7 @@ swiftc "${SWIFTC_COMMON[@]}" \
   -o "$TESTRUNNER" \
   "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAHostTestKit.o" \
   "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
-  "$OBJ/AAAgentCore.o" "$OBJ/AAAgentTestKit.o" \
+  "$OBJ/AAAgentCore.o" "$OBJ/AAAgentSystem.o" "$OBJ/AAAgentTestKit.o" \
   "$RUNNER/main.swift" \
   || { echo "FAIL: 编译 registry-tests runner 失败"; exit 1; }
 
@@ -242,7 +267,11 @@ echo
 echo "==== 阶段 B:assert 测试 ===="
 PASS=0; FAIL=0
 assert_contains() {  # $1 实际文本  $2 期望子串(定长字符串,非正则)  $3 描述
-  if printf '%s' "$1" | grep -qF -- "$2"; then
+  # **不要把 -q 加回来**(06 票踩到的假红):本脚本开了 `set -o pipefail`,而 `grep -q` 命中后会立刻退出,
+  # 上游 printf 随即吃到 SIGPIPE 死掉(141);pipefail 取整条管道的非零码 → 明明命中了却判 FAIL。
+  # 只在「命中点靠前 + 剩余输出超过管道缓冲(64KB)」时才发作,故它长期潜伏,直到 runner 输出变长才现形。
+  # 去掉 -q 后 grep 会读完全部输入,不产生 SIGPIPE,判定恒定。
+  if printf '%s' "$1" | grep -F -- "$2" >/dev/null; then
     echo "PASS: $3"; PASS=$((PASS+1))
   else
     echo "FAIL: $3 (未找到 '$2';实际输出: $1)"; FAIL=$((FAIL+1))
@@ -524,6 +553,157 @@ assert_contains "$OUT" "超时合流:竞态里 agent 已交出成功终态时报
 assert_contains "$OUT" "超时合流:timedOut 的豁免集恰为 {succeeded} —— failed / aborted 一律仍判 timeout(防豁免集被悄悄放大)" "⑨合流:豁免集恰为 {succeeded}(防被悄悄放大)"
 assert_contains "$OUT" "超时合流:timedOut 为假时 32 组输入与 AgentTaskState.resolve 逐值相同(薄壳不产生第二套判定)" "⑨合流:薄壳不产生第二个 resolve"
 assert_contains "$OUT" "超时合流:全部输入组合(含 timedOut 为真)都收敛到终态,绝无把任务挂在 running 的路径" "⑨合流:绝不把任务挂在 running"
+
+# agent-delegation 06 断言(同一 runner 输出;SystemAgentPortTests:AgentPort 的**生产实现**)。
+# 口径同 1c–1g:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# **与 1c–1g 的根本不同:本组碰真进程、真管道、真信号**(被测进程是 /bin/sh、sleep、cat、head、yes,
+#   不需要真 agent、不需要 Xcode)。因此本组自带两条纪律:
+#   * 每条用例自己 terminate + reclaim;套件另有 120 秒整体看门狗,读流意外阻塞时打印 FAIL 并 exit(9),
+#     门禁会**失败**而不是挂死(exit 还会触发端口的 atexit 反孤儿钩子,残留子进程随之被 SIGKILL)。
+#   * 一切信号都只发给自己 fork 出来的 pid/pgid;被测 sleep 用唯一时长 87137/87139,故下面的残留核验
+#     用定长串 pgrep 也不会误伤用户机器上别的进程。
+echo "--- 断言组 1h:SystemAgentPort 真实现(真进程 / 真进程组 / 反孤儿,SystemAgentPortTests)---"
+assert_contains "$OUT" "SYSTEMPORT_TESTS passed=" "agent-delegation 06 套件已运行(SystemAgentPortTests,真子进程)"
+# ① 拉起并逐行读 + 中途自退被感知(票面第 1、5 条)
+assert_contains "$OUT" "SystemAgentPort:真子进程 stdout 逐行读出第 1 行 a" "①逐行读:第 1 行"
+assert_contains "$OUT" "SystemAgentPort:真子进程 stdout 逐行读出第 2 行 b" "①逐行读:第 2 行(顺序不乱)"
+assert_contains "$OUT" "SystemAgentPort:stdout 到达 EOF 后 nextEvent 返回 nil" "①逐行读:EOF → nil"
+# CR 补口:EOF 前那段**没有换行**的尾行(agent 被杀在半行上时的唯一现场)必须被交回一次,且只交回一次。
+assert_contains "$OUT" "SystemAgentPort:EOF 前没有换行的尾行被交回一次(半截行是唯一现场,不许吞掉)" "①尾行:无换行尾行被交回"
+assert_contains "$OUT" "SystemAgentPort:不完整尾行只交回一次,之后恒为 nil(不重放)" "①尾行:只交回一次不重放"
+assert_contains "$OUT" "SystemAgentPort:进程中途自退后 isAlive 为假(探活基于真 pid,不靠猜)" "①探活:中途自退被感知(票面第 1 条)"
+assert_contains "$OUT" "SystemAgentPort:正常退出的进程收尸后退出码为 0" "①收尸:拿得到真退出码"
+# ② nextEvent 阻塞语义 —— 01 票 CR 钉死的硬要求,写错会让 05 票看门狗把「暂无输出」误读成流终止
+assert_contains "$OUT" "SystemAgentPort:进程活着但暂无输出时 nextEvent 阻塞到有整行(第一次调用就拿到 late,绝不返回 nil)" "②阻塞语义:活着但暂无输出必须阻塞(票面第 5 条)"
+assert_contains "$OUT" "SystemAgentPort:该次 nextEvent 确实阻塞等待了(耗时不小于 0.5 秒,不是恰好碰上有数据)" "②阻塞语义:真的等了(耗时反证,不是碰巧)"
+assert_contains "$OUT" "SystemAgentPort:阻塞读出末行后进程退出,再读为 nil(EOF 才是 nil)" "②阻塞语义:只有 EOF 才 nil"
+# ③ 进程组 + 连带杀子进程树(票面第 1、3 条;本票最核心)
+assert_contains "$OUT" "SystemAgentPort:子进程自成进程组组长(POSIX_SPAWN_SETPGROUP 真生效,不是继承宿主的组)" "③进程组:SETPGROUP 真生效(Process 做不到,故用 posix_spawn)"
+assert_contains "$OUT" "SystemAgentPort:子进程组绝不等于宿主进程组(若相等,按组发信号会把宿主自己杀掉)" "③进程组:绝不与宿主同组(最不能错的一条)"
+assert_contains "$OUT" "SystemAgentPort:agent 派生的孙进程与它同组(所以一刀能连带收拾)" "③进程组:孙进程同组"
+assert_contains "$OUT" "SystemAgentPort:terminate 之前派生的孙进程确实活着(反证下一条不是空跑)" "③终止:杀之前活着(反证)"
+assert_contains "$OUT" "SystemAgentPort:terminate 连带杀掉 agent 派生的孙进程(进程组终止,不留孤儿)" "③终止:连带杀子进程树(票面第 3 条)"
+assert_contains "$OUT" "SystemAgentPort:terminate 后整个进程组零残留(kill(-pgid,0) 得 ESRCH)" "③终止:整组零残留"
+assert_contains "$OUT" "SystemAgentPort:被信号终止的进程退出码为负(与 04 票『负值即被信号杀』口径一致)" "③终止:退出码为负(与 04 票口径一致)"
+assert_contains "$OUT" "SystemAgentPort:terminate 之后管道仍可读到底再 EOF(取消后 drain 的前提)" "③终止:取消后仍可 drain(01 spike 的 Claude 姿态)"
+# ③b 并发收尸不得把「被信号杀」篡改成「成功」(CR 🔴)。terminate 幂等的设计明摆着欢迎多个调用方
+#     (测试的 defer + 05 看门狗取消 + 07 清理),两个线程会同时越过 `guard !rec.isReaped`:
+#     一个拿到真状态 -15,另一个 waitpid 得 ECHILD。ECHILD 分支若沿用 status 的初值 0,exitCode 就成了 0,
+#     04 票 resolve 据「负值=被信号杀」的口径会把这次**取消判成 completed** —— 失败被误报成成功,最难被发现的方向。
+assert_contains "$OUT" "SystemAgentPort:收尸拿不到状态(ECHILD)时退出码保持 nil 而不是 0(fail-closed,取消绝不被记成成功)" "③b并发:ECHILD 交 nil 不交 0(fail-closed)"
+assert_contains "$OUT" "SystemAgentPort:已收尸的记账再次 markReaped(nil) 不改写已有退出状态(首写生效,后到的 nil 抹不掉 -15)" "③b并发:收尸状态首写生效"
+assert_contains "$OUT" "SystemAgentPort:两个线程并发 terminate 同一句柄都能返回(不自锁、不互相挡死)" "③b并发:两个 terminate 都返回(不自锁)"
+assert_contains "$OUT" "SystemAgentPort:并发 terminate 后退出码绝不是 0(负值或 nil,一次取消不会被篡改成成功)" "③b并发:退出码绝不被篡改成 0(E2E)"
+assert_contains "$OUT" "SystemAgentPort:并发 terminate 之后进程组同样零残留" "③b并发:整组仍零残留"
+# ④ stdin 两种处置(票面第 2 条:两家 agent 要求相反)
+assert_contains "$OUT" "SystemAgentPort:stdin 接 /dev/null 时 cat 立刻读到 EOF 不挂起(读出 done)" "④stdin:devNull 不挂起(Codex exec,02 spike)"
+assert_contains "$OUT" "SystemAgentPort:writeThenKeepOpen 写入的一行被子进程读到并回显(hello)" "④stdin:写入一行真的送达"
+assert_contains "$OUT" "SystemAgentPort:写完后 stdin 写端保持打开,子进程不自退(Claude stream-json 形态)" "④stdin:写后保持打开(票面第 2 条)"
+assert_contains "$OUT" "SystemAgentPort:显式 closeStdin 后子进程收到 EOF 退出,读流随之 EOF(收尾路径可用)" "④stdin:适配层可显式关闭收尾"
+# ⑤ 幂等与错误路径
+assert_contains "$OUT" "SystemAgentPort:同一句柄 terminate 两次不崩不抛(幂等)" "⑤幂等:terminate 两次"
+assert_contains "$OUT" "SystemAgentPort:未知句柄 terminate 为 no-op(不崩不抛)" "⑤幂等:未知句柄 no-op"
+assert_contains "$OUT" "SystemAgentPort:未知句柄 nextEvent 返回 nil(不阻塞、不崩)" "⑤幂等:未知句柄 nextEvent 不阻塞"
+assert_contains "$OUT" "SystemAgentPort:可执行路径不存在时 launch 抛错(不崩、不返回坏句柄)" "⑤错误:拉起失败抛错"
+assert_contains "$OUT" "SystemAgentPort:工作目录不存在时 launch 抛错(绝不静默换个目录干活)" "⑤错误:工作目录不存在抛错"
+# ⑥ 启动规格如实生效 + stderr 不阻塞(07 票要靠这两条接线)
+assert_contains "$OUT" "SystemAgentPort:spec.environment 如实传给子进程(每任务独立 CODEX_HOME 的前提)" "⑥规格:environment 如实生效"
+assert_contains "$OUT" "SystemAgentPort:spec.workingDirectory 生效(子进程 pwd 即委托指定的工作目录)" "⑥规格:workingDirectory 生效"
+assert_contains "$OUT" "SystemAgentPort:子进程向 stderr 灌 100KB 以上也不被管道缓冲卡死(stderr 由专线排干)" "⑥stderr:不阻塞(管道缓冲写满也不死锁)"
+assert_contains "$OUT" "SystemAgentPort:stderr 内容被排干进记账(07 票 logs/stderr.log 的来源)" "⑥stderr:内容留得下(07 票落盘的来源)"
+
+# --- 反孤儿 E2E(票面第 3 条后半:宿主退出必清子进程)---
+# 进程内无法自证「宿主死后子进程被回收」——那需要宿主真的死一次。故用探针:同一个 runner 以 AA_ORPHAN_PROBE 模式
+# 拉起一个自带孙进程的进程组、把 pgid 打出来,然后**故意不 terminate** 就退出/被杀;由这里在进程外核验整组已清空。
+# 核验用 `pgrep -g <pgid>`(等价于票面说的 ps -g):只看那一个自己 fork 出来的组,绝不用宽泛模式。
+#
+# **两条反证是本组的命门**:若探针拉起的两个 sleep 因任何原因没起来(或 sh 瞬死),进程组天然为空,
+#   「零残留」照样绿 —— 探针在自欺。故:exit 模式断言探针自证的 ORPHAN_PROBE_ALIVE=1(它在退出前做 kill(-pgid,0)==0);
+#   signal 模式在**发 SIGTERM 之前**先断言 `pgrep -g <pgid>` 非空。两者互不替代(前者在探针进程内、后者在门禁进程内)。
+#
+# 记债(归 07 票,即第一次让 SystemProcessPort 与 SystemAgentPort 进同一进程的那张票):
+#   两套反孤儿钩子的合流问题本票只做了**单侧**缓解 —— AAAgentSystem 侧保存前手并链式调用;
+#   而 AAHostMacOS.SystemProcessPort 侧是裸 signal() 不链式,若它**后**初始化就会顶掉本票的钩子,
+#   而信号死亡路径不跑 atexit → agent 进程树整树成孤儿。正解是给 SystemProcessPort 补对称的 save+chain
+#   (等 v1-core-proxy 并行红线解冻)。本票绝不修改 AAHostMacOS,故此处只记债;详见 SystemAgentPort.swift 文件头同名段落。
+echo "--- 断言组 1h':反孤儿钩子 E2E(宿主 exit / 被 SIGTERM 两条路径)---"
+# (1) 正常退出路径 —— atexit 钩子
+PROBE_OUT="$(AA_ORPHAN_PROBE=exit "$TESTRUNNER" 2>&1)"; PROBE_RC=$?
+PROBE_PGID="$(printf '%s\n' "$PROBE_OUT" | sed -n 's/^ORPHAN_PROBE_PGID=//p' | head -1)"
+echo "    exit 探针: rc=$PROBE_RC pgid=$PROBE_PGID"
+assert_exit 0 $PROBE_RC "反孤儿探针(exit 模式)自身正常退出"
+# 反证:探针退出**之前**整组确实活着(否则下面「零残留」是空跑)。探针自证 kill(-pgid,0)==0 后打这一行。
+assert_contains "$PROBE_OUT" "ORPHAN_PROBE_ALIVE=1" "反孤儿探针(exit 模式)退出前整组确实活着(反证零残留不是空跑)"
+if [ -n "$PROBE_PGID" ]; then
+  echo "PASS: 反孤儿探针(exit 模式)报出了自己拉起的进程组 pgid=$PROBE_PGID"; PASS=$((PASS+1))
+  RES_G=""
+  for _ in $(seq 1 25); do
+    RES_G="$(pgrep -g "$PROBE_PGID" 2>/dev/null)"
+    [ -z "$RES_G" ] && break
+    sleep 0.2
+  done
+  if [ -z "$RES_G" ]; then
+    echo "PASS: 宿主正常退出后 atexit 钩子已清空整个子进程组(pgid=$PROBE_PGID 零残留)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 宿主退出后子进程组仍有残留(pgid=$PROBE_PGID): $RES_G"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL: 反孤儿探针(exit 模式)没报出 pgid,无法核验 —— 绝不算过。输出: $PROBE_OUT"; FAIL=$((FAIL+1))
+fi
+# (2) 被 SIGTERM 路径 —— 信号钩子(kill/pkill/Ctrl-C 时也必须清干净,且宿主退出码反映信号)
+SIGPROBE_LOG="$BUILD/orphan-probe-signal.out"
+AA_ORPHAN_PROBE=signal "$TESTRUNNER" > "$SIGPROBE_LOG" 2>&1 &
+SIGPROBE_PID=$!
+disown "$SIGPROBE_PID" 2>/dev/null || true
+SIG_PGID=""
+for _ in $(seq 1 100); do
+  SIG_PGID="$(sed -n 's/^ORPHAN_PROBE_PGID=//p' "$SIGPROBE_LOG" 2>/dev/null | head -1)"
+  [ -n "$SIG_PGID" ] && break
+  kill -0 "$SIGPROBE_PID" 2>/dev/null || break
+  sleep 0.2
+done
+echo "    signal 探针: probe_pid=$SIGPROBE_PID pgid=$SIG_PGID"
+if [ -n "$SIG_PGID" ]; then
+  echo "PASS: 反孤儿探针(signal 模式)报出了自己拉起的进程组 pgid=$SIG_PGID"; PASS=$((PASS+1))
+  # 反证(**必须在 kill -TERM 之前**):整组此刻确实活着。少了这条,空进程组会让下面的「零残留」永远为真。
+  ALIVE_BEFORE="$(pgrep -g "$SIG_PGID" 2>/dev/null)"
+  if [ -n "$ALIVE_BEFORE" ]; then
+    echo "PASS: 反孤儿探针(signal 模式)发 SIGTERM 之前整组确实活着(反证零残留不是空跑): $(printf '%s' "$ALIVE_BEFORE" | tr '\n' ' ')"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 反孤儿探针(signal 模式)发 SIGTERM 之前进程组就是空的 —— 零残留断言会空跑,绝不算过"; FAIL=$((FAIL+1))
+  fi
+  # 只杀探针自己这一个 pid(不是它的组),模拟宿主被 kill/pkill —— 子进程组该由信号钩子连带清掉。
+  kill -TERM "$SIGPROBE_PID" 2>/dev/null
+  RES_G2=""
+  for _ in $(seq 1 25); do
+    RES_G2="$(pgrep -g "$SIG_PGID" 2>/dev/null)"
+    [ -z "$RES_G2" ] && break
+    sleep 0.2
+  done
+  if [ -z "$RES_G2" ]; then
+    echo "PASS: 宿主被 SIGTERM 杀掉后信号钩子已清空整个子进程组(pgid=$SIG_PGID 零残留)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 宿主被 SIGTERM 后子进程组仍有残留(pgid=$SIG_PGID): $RES_G2"; FAIL=$((FAIL+1))
+  fi
+  kill -KILL "$SIGPROBE_PID" 2>/dev/null
+else
+  echo "FAIL: 反孤儿探针(signal 模式)没报出 pgid,无法核验 —— 绝不算过"; FAIL=$((FAIL+1))
+  kill -KILL "$SIGPROBE_PID" 2>/dev/null
+fi
+# (3) 两个探针 + 套件用例合起来的兜底核验:唯一时长的被测 sleep 一个都不许留在用户机器上。
+RES_SLEEP_SUITE="$(pgrep -f "$AGENT_SLEEP_SUITE")"
+RES_SLEEP_PROBE="$(pgrep -f "$AGENT_SLEEP_PROBE")"
+if [ -z "$RES_SLEEP_SUITE" ]; then
+  echo "PASS: 无残留的套件被测子进程($AGENT_SLEEP_SUITE)"; PASS=$((PASS+1))
+else
+  echo "FAIL: 残留套件被测子进程($AGENT_SLEEP_SUITE): $RES_SLEEP_SUITE"; FAIL=$((FAIL+1))
+fi
+if [ -z "$RES_SLEEP_PROBE" ]; then
+  echo "PASS: 无残留的反孤儿探针子进程($AGENT_SLEEP_PROBE)"; PASS=$((PASS+1))
+else
+  echo "FAIL: 残留反孤儿探针子进程($AGENT_SLEEP_PROBE): $RES_SLEEP_PROBE"; FAIL=$((FAIL+1))
+fi
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
@@ -1052,6 +1232,23 @@ else
   echo "FAIL: grep 守卫自身出错(rc=$AC_GREP_RC),无法核验 AAAgentCore 边界 —— 绝不算过"; FAIL=$((FAIL+1))
 fi
 
+# (3e) agent-delegation 06 铁律:AAAgentSystem(AgentPort 生产实现所在的薄桥接层)同样不 import 任何
+#      Host* / AAPluginSDK / PluginProxy —— 它只该依赖 **AAAgentCore** + 系统库(Foundation/Darwin)。
+#      (CR 修正:它源码里并没有 import AAContracts,故 Package.swift 那条 AAContracts 依赖已删 ——
+#       本仓口径是「声明的依赖边必须与源码实际 import 一一对应」,不留空头依赖。)
+#      为什么单独立一条:06 票要碰 Process/POSIX,最容易顺手去复用 AAHostMacOS 里那份 SystemProcessPort,
+#      那样就把 agent-delegation 焊死在 v1-core-proxy 正在施工的 target 上(并行红线)。样板照 3a/3d。
+#      显式判 grep 退出码:rc==1 无匹配(好)/ rc==0 命中禁止 import(坏)/ rc>=2 grep 自身出错(绝不算过)。
+AS_GREP_HITS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?(AAHost(Runtime|MacOS|TestKit)|AAPluginSDK|PluginProxy)' Sources/AAAgentSystem/)"
+AS_GREP_RC=$?
+if [ "$AS_GREP_RC" -eq 1 ]; then
+  echo "PASS: AAAgentSystem 源码不含 import Host*/AAPluginSDK/PluginProxy(只依赖 AAAgentCore + 系统库)"; PASS=$((PASS+1))
+elif [ "$AS_GREP_RC" -eq 0 ]; then
+  echo "FAIL: AAAgentSystem 源码出现被禁的 import(Host*/AAPluginSDK/PluginProxy):"; printf '%s\n' "$AS_GREP_HITS"; FAIL=$((FAIL+1))
+else
+  echo "FAIL: grep 守卫自身出错(rc=$AS_GREP_RC),无法核验 AAAgentSystem 边界 —— 绝不算过"; FAIL=$((FAIL+1))
+fi
+
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
 echo "--- 断言组 4:aa --help 退出码语义表(逐码)---"
 HELP="$("$BIN/aa" --help 2>&1)"; RC=$?
@@ -1137,6 +1334,9 @@ RES_LIS="$(pgrep -f "timeout_listener.py")"
 if [ -z "$RES_HOST" ]; then echo "PASS: 无残留宿主进程"; PASS=$((PASS+1)); else echo "FAIL: 残留宿主进程: $RES_HOST"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_STUB" ]; then echo "PASS: 无残留 fake mihomo stub 进程"; PASS=$((PASS+1)); else echo "FAIL: 残留 stub 进程: $RES_STUB"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_LIS" ]; then echo "PASS: 无残留超时假监听器进程"; PASS=$((PASS+1)); else echo "FAIL: 残留假监听器: $RES_LIS"; FAIL=$((FAIL+1)); fi
+# 06 票:跑完全程后再扫一次被测 agent 子进程(唯一时长的 sleep),确保一个都没留在用户机器上。
+RES_AGENT="$(pgrep -f "$AGENT_SLEEP_SUITE"; pgrep -f "$AGENT_SLEEP_PROBE")"
+if [ -z "$RES_AGENT" ]; then echo "PASS: 无残留 agent 被测子进程(sleep 87137/87139)"; PASS=$((PASS+1)); else echo "FAIL: 残留 agent 被测子进程: $RES_AGENT"; FAIL=$((FAIL+1)); fi
 
 echo
 echo "========================================"

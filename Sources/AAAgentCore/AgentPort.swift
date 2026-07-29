@@ -10,7 +10,6 @@
 // 一切 agent 子进程副作用(拉起、探活、流式读、终止)压到本端口之后 → 任务状态机 / 归一化 / 生命周期 /
 //   看门狗均可在 `FakeAgentPort` 上纯逻辑测试,零真实 agent 依赖(spec Testing Decisions 主 seam)。
 
-import AAContracts
 
 /// 一个被拉起的 agent 进程的不透明句柄。
 ///
@@ -60,8 +59,13 @@ public struct AgentLaunchSpec: Sendable, Equatable {
     }
 }
 
-/// 一次 agent 进程执行的端口(最小接口)。真实现(`SystemAgentPort`,归 agent-delegation 06 票)基于 Foundation `Process`;
-/// 假件(`AAAgentTestKit.FakeAgentPort`)可编程回放事件脚本 / 编程失败 / 模拟中途死亡。
+/// 一次 agent 进程执行的端口(最小接口)。真实现(`AAAgentSystem.SystemAgentPort`,归 agent-delegation 06 票)基于
+/// **`posix_spawn`**;假件(`AAAgentTestKit.FakeAgentPort`)可编程回放事件脚本 / 编程失败 / 模拟中途死亡。
+///
+/// **为什么真实现是 posix_spawn 而不是 Foundation `Process`**(06 票整段论证的第一技术判断,别再往回改):
+///   `Process` 没有设置子进程组的公开 API,子进程会**继承宿主的进程组** —— 那样下面反孤儿铁律要的 `kill(-pgid, …)`
+///   会把宿主自己一并杀掉,「连带杀 agent 派生的子进程树」根本无从谈起。
+///   `posix_spawn` + `POSIX_SPAWN_SETPGROUP` 才能让子进程自成进程组组长(pgid == pid)。
 ///
 /// 语义契约(真实现必须满足,假件用于验证域逻辑不依赖真进程):
 /// - `launch`:按启动规格拉起 agent 进程,返回句柄;拉起失败抛错。真实现须按 `spec.stdin` 处置 stdin。

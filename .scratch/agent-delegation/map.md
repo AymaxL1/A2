@@ -51,6 +51,15 @@ Label: wayfinder:map
 - ✅ **05** 看门狗 + 取消语义(66→68 条断言,纯逻辑零真实等待)。**最有价值的一条设计发现**:timeout 合流点不能让 `terminal` 无条件优先 —— Claude 侧 drain 读到底必然回读 `aborted_streaming`,那只是**我们自己那一刀的回声**,无条件优先会把**每一次**看门狗超时系统性记成 `cancelled`,timeout 诊断被彻底抹掉。故豁免集恰为 `{succeeded}`(成功产出不可能被一刀捏造,是唯一安全豁免),并加断言防它被悄悄放大。CR 另纠正一处**超售**:`AgentCancellation` 的「先迁状态再发信号消除孤儿误判窗口」只保证**值序**,`meta.json` 的持久化在调用方,盘上窗口只能由 06/07「先落盘再发信号」封住(所幸 04 已放行 `orphaned → 证据终态`,落进窗口也可纠正)。
 - ⬜ **06** SystemAgentPort 真实现 · ⬜ **07** 试驾 CLI 收口
 
+**⚠️ 顺带挖出一个仓库级门禁缺陷(潜伏已久,06 票踩到并修)**:`Scripts/check.sh` 的 `assert_contains` 用
+`set -o pipefail` + `printf | grep -qF`。`grep -q` 一命中就**立即退出**,上游 `printf` 随即吃到 SIGPIPE(141),
+`pipefail` 取整条管道的 141 → **明明命中了却判 FAIL**。这是**竞态**:只在「命中点靠前 + 剩余输出超过管道缓冲」
+时发作,故长期潜伏,直到 05 票把 runner 输出顶长才现形(主会话那次未能解释的 FAIL=3 正是它)。
+主会话已独立验证机制成立(3MB 输入下 `PIPESTATUS=141 0`,grep 返回 0 却被 141 盖掉)。
+**只会造成假红、不会造成假绿**(grep 的成功码被 printf 的失败码盖住),故此前所有绿都是真绿。
+修法:去掉 `-q`、改 `grep -F … >/dev/null`(读完全部输入,不产生 SIGPIPE),已加防回退注释。
+**注意:v1-core-proxy 那条线用的是同一个 check.sh,那边仍是有 bug 的版本 —— 合并时别把修复丢了。**
+
 **07 票已回填三条接线契约**(拿不到就会接错):中断时 meta 必须保持 running、drain 完才一次 finish(否则 04 的终态冻结让 succeeded 豁免在盘上永远兑现不了);`timedOut` 旗标的语义是「`timeOut()` 真的执行过」而非「verdict 曾判过 stalled」;看门狗的 `silentSeconds`/`toolInFlight` 与「被信号杀但非本平台发起」必须落进 `meta.error`——**判定面收敛,诊断面如实**。
 
 **落地阶段新增的实测事实(回填给后续票)**:
