@@ -195,6 +195,8 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 //   同一个 AA_SPIKE_DIR 注入点,子目录 spike-codex-exec/samples;同样 fail-closed)。
 // agent-delegation 04:再追加 AgentTaskTests(任务状态机 + 工作区落盘;全程经 FakeFileSystem/FakeClock/FakeLiveness,
 //   零真实文件系统、零真实时钟、零真实进程,故**不需要**任何样本目录或环境变量注入)。
+// agent-delegation 05:再追加 AgentWatchdogTests(消息静默看门狗 + 取消/超时中断语义;时间由测试直接喂 epoch 秒、
+//   进程由 FakeAgentPort 假冒 —— **零真实等待、零真进程**,同样不需要样本目录或环境变量注入)。
 import AAHostTestKit
 import AAAgentTestKit
 import Foundation
@@ -210,14 +212,17 @@ let r5 = CodexAdapterTests.run()
 for line in r5.lines { print(line) }
 let r6 = AgentTaskTests.run()
 for line in r6.lines { print(line) }
+let r7 = AgentWatchdogTests.run()
+for line in r7.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
 print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
 print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
 print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed) failed=\(failed)")
+print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -462,6 +467,63 @@ assert_contains "$OUT" "读侧容忍:meta.json 多出未知键时仍能正常解
 # ⑩b 只「读得出」不算兼容:updateMeta 是读-改-写,写侧剥掉未知键就等于旧版本单方面抹掉新版本刚写下的字段。
 assert_contains "$OUT" "写侧保留:updateMeta 读改写之后未知键 future_key 仍在 meta.json 里(不静默剥掉别人的字段)" "⑩b演进:写侧原样写回未知键"
 assert_contains "$OUT" "写侧保留:保住未知键的同时本版本自己的字段照常更新(两件事互不牵连)" "⑩b演进:保留未知键不妨碍正常更新"
+
+# agent-delegation 05 纯逻辑断言(同一 runner 输出;AgentWatchdogTests:消息静默看门狗 + 取消/超时中断语义)。
+# 口径同 1c/1d/1e/1f:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# 与 1f 一样**不依赖任何样本目录 / 环境变量**,且比 1f 更进一步:本组连假文件系统都不需要 ——
+#   时间是测试直接喂进去的 epoch 秒(生产侧由 AgentClockPort 注入),进程是 FakeAgentPort。
+#   **本组里若出现任何真实等待,门禁耗时会立刻暴涨** —— 看门狗默认阈值是 120/900 秒,真等一次就没法当门禁跑。
+echo "--- 断言组 1g:静默看门狗 + 取消语义(AgentWatchdogTests,零真实等待/零真进程)---"
+assert_contains "$OUT" "WATCHDOG_TESTS passed=" "agent-delegation 05 纯逻辑套件已运行(AgentWatchdogTests)"
+# ① 默认阈值的实证依据(两处 spike 的数量级)+ 阈值可配(07 票 CLI 要能覆盖)
+assert_contains "$OUT" "看门狗:默认 idle 阈值为 120 秒(覆盖 Codex exec3 实测 90 秒硬超时窗口,findings 意外发现 2 的 60-90 秒余量)" "①阈值:idle 默认 120 秒有实证依据"
+assert_contains "$OUT" "看门狗:默认工具在途阈值为 900 秒(长跑工具 + Claude api_retry 指数退避都不误杀)" "①阈值:工具在途默认 900 秒有实证依据"
+assert_contains "$OUT" "看门狗:自定义阈值原样生效(阈值可配,默认值不是写死的)" "①阈值:可配(票面明写,07 票 CLI 覆盖)"
+# ①b 票面第 1 条明写「以 ClockPort 驱动」:补一条端到端经 AgentClockPort/FakeClock 的,证明生产接线形状成立。
+assert_contains "$OUT" "看门狗:整条判决链路的时间全部取自 AgentClockPort(经 FakeClock 喂,零真实时钟、零真实等待)" "①b时钟:判决链路的时间来自 ClockPort(票面第 1 条)"
+assert_contains "$OUT" "看门狗:时钟端口恰被取用三次(拉起/观察/判决各一次,看门狗自己一个字都不读系统时钟)" "①b时钟:看门狗自己绝不读系统时钟"
+# ② 静默超时触发 + 边界严格大于(边界松一秒就是误杀)
+assert_contains "$OUT" "看门狗:静默 119 秒(差 1 秒到阈值)仍判 healthy(边界不能松)" "②静默:差 1 秒仍 healthy"
+assert_contains "$OUT" "看门狗:静默恰好等于阈值 120 秒仍判 healthy(判据是严格大于,边界上少杀一秒没人受伤)" "②静默:恰好等于阈值仍 healthy(严格大于)"
+assert_contains "$OUT" "看门狗:静默 121 秒超过 idle 阈值判 stalled(silentSeconds=121、toolInFlight=false,诊断信息不丢)" "②静默:超阈判 stalled 且带诊断信息"
+assert_contains "$OUT" "看门狗:最后活动时刻的初值是拉起时刻(拉起后一条消息都不吐同样会被判卡死)" "②静默:起算点是拉起时刻"
+# ③ 工具在途放宽不误杀(票面第 2 条:须容忍 Codex 40+s 网络重连)
+assert_contains "$OUT" "看门狗:有未闭合工具时生效阈值放宽到 900 秒(idle 档 120 秒不再适用)" "③在途:阈值放宽到在途档"
+assert_contains "$OUT" "看门狗:工具在途静默 45 秒仍判 healthy(Codex 两级传输各 5 次重连实测 40+ 秒,不误杀)" "③在途:Codex 40+ 秒重连不误杀(票面第 2 条)"
+assert_contains "$OUT" "看门狗:工具在途静默 901 秒判 stalled(toolInFlight=true,卡死时有工具在途这条现场信息保住了)" "③在途:超放宽档仍判 stalled 且现场信息不丢"
+# ④ 放宽必须是**动态**的:工具一闭合就退回 idle 档,不是一旦有过工具就永久放宽(那等于把看门狗关掉)
+assert_contains "$OUT" "看门狗:工具闭合后阈值退回 idle 档 120 秒(放宽是动态的,不是一旦有过工具就永久放宽)" "④收回:阈值动态退回 idle 档"
+assert_contains "$OUT" "看门狗:工具闭合后静默 121 秒即判 stalled(闭合前同样的 121 秒还是 healthy)" "④收回:同样 121 秒闭合前后判决相反"
+assert_contains "$OUT" "看门狗:两个工具在途时闭合其一仍剩 1 个未闭合,阈值保持在途档(不提前收回预算)" "④收回:并发工具闭合其一不提前收回"
+# ⑤ 畸形消息(agent 的流本来就可能被截断,一条脏数据不该让在途状态错乱)
+assert_contains "$OUT" "看门狗:callID 为 nil 的畸形 tool-use 不进在途集合(空 id 会让所有畸形调用互相顶掉)" "⑤畸形:nil callID 的 tool-use 不进集合"
+assert_contains "$OUT" "看门狗:没配上的 tool-result 被忽略,在途计数不减到负数(agent 流可能被截断)" "⑤畸形:孤儿 tool-result 不减到负数"
+assert_contains "$OUT" "看门狗:error 型重连心跳刷新最后活动时刻(还在重试不是卡死,02 spike 建议 4)" "⑤心跳:Reconnecting 事件算存活判据"
+assert_contains "$OUT" "看门狗:墙钟回拨时静默时长钳到 0 而不是负数(NTP 回拨不误杀)" "⑤回拨:静默时长钳到 0"
+# ⑥ 取消:迁移 + 终止调用(票面第 3 条,经 Fake Port 断言收到终止调用)
+assert_contains "$OUT" "取消:running 任务被取消后状态迁到 cancelled" "⑥取消:running → cancelled"
+assert_contains "$OUT" "取消:终止意图确实发给了那个句柄(FakeAgentPort.terminateCalls 恰记到这一次)" "⑥取消:终止调用被 Fake Port 记到(票面第 3 条)"
+# ⑥b 最要害的一条:对非 running 取消必须抛错,且**绝不**已经把进程杀了
+assert_contains "$OUT" "取消:pending 与五个终态共六个非 running 状态逐个取消全部抛错(只有 running 可取消)" "⑥b非法取消:六个非 running 状态全抛错"
+assert_contains "$OUT" "取消:非 running 取消抛错时 terminateCalls 保持为空(绝不既报错又已经把进程杀了)" "⑥b非法取消:抛错时绝不已经杀进程"
+# ⑦ 看门狗判卡死 → 迁 timeout + 终止(票面第 1 条的完整链路;落点是 timeout 而非 cancelled)
+assert_contains "$OUT" "超时终止:看门狗判 stalled 后任务状态迁到 timeout(不是 cancelled —— 平台判的与用户点的要分得清)" "⑦超时链路:判卡死 → 迁 timeout"
+assert_contains "$OUT" "超时终止:判卡死后终止意图确实发给了那个句柄,并交回该 vendor 的 drain 姿态" "⑦超时链路:触发终止 + 交回 drain 姿态"
+assert_contains "$OUT" "超时终止:对非 running 任务判超时同样抛错且 terminateCalls 保持为空" "⑦超时链路:非 running 同样不许杀"
+# ⑧ 两家中断差异收敛为域逻辑(票面第 4 条:此差异在状态机/drain 逻辑层显式处理)
+assert_contains "$OUT" "中断收敛:Claude 侧姿态是 drainToEOF(01 spike:信号后先补 Request interrupted 再落 aborted_streaming 终态,弃管道就丢终态)" "⑧收敛:Claude → drain 读到底(01 spike)"
+assert_contains "$OUT" "中断收敛:Codex 侧姿态是 markAbortedAtSignal(02 spike exec5:被 SIGTERM 杀时流里根本没有终态行,再读也读不出)" "⑧收敛:Codex → 发信号那刻自标 aborted(02 spike)"
+assert_contains "$OUT" "中断收敛:两家 drain 姿态互不相等(不对称是实证结论,不是可以抹平的实现细节)" "⑧收敛:不对称是实证结论"
+# ⑨ 终态收敛顺序(复用 04 的 resolve,不写第二个)+ timeout 合流点
+assert_contains "$OUT" "终态收敛:terminal 优先于取消记账 —— 信号落地前正好正常完成时报 completed(不丢一份有效结果)" "⑨顺序:terminal 优先于取消记账"
+assert_contains "$OUT" "终态收敛:Codex 中断现场(terminal 为 nil + 退出码 -15 + 有取消记账)判 cancelled" "⑨顺序:Codex 中断现场判 cancelled"
+assert_contains "$OUT" "超时合流:timedOut 与 cancelRequested 同时为真判 timeout(顺序不可颠倒 —— 平台判的卡死不能记成用户取消)" "⑨合流:timeout 压过 cancel(顺序不可颠倒)"
+assert_contains "$OUT" "超时合流:Claude 读到底拿回的 aborted 只是我们那一刀的回声,timedOut 时仍判 timeout 而不是 cancelled" "⑨合流:aborted 回声不覆盖 timeout"
+assert_contains "$OUT" "超时合流:竞态里 agent 已交出成功终态时报 completed 而不是 timeout(不丢有效产出,与 04 的 terminal 优先同款理由)" "⑨合流:成功产出不被 timeout 丢掉"
+assert_contains "$OUT" "超时合流:timedOut 的豁免集恰为 {succeeded} —— failed / aborted 一律仍判 timeout(防豁免集被悄悄放大)" "⑨合流:豁免集恰为 {succeeded}(防被悄悄放大)"
+assert_contains "$OUT" "超时合流:timedOut 为假时 32 组输入与 AgentTaskState.resolve 逐值相同(薄壳不产生第二套判定)" "⑨合流:薄壳不产生第二个 resolve"
+assert_contains "$OUT" "超时合流:全部输入组合(含 timedOut 为真)都收敛到终态,绝无把任务挂在 running 的路径" "⑨合流:绝不把任务挂在 running"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"

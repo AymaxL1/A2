@@ -48,7 +48,10 @@ Label: wayfinder:map
 - ✅ **02** `1c0d6c9` Claude adapter 归一化(PASS=170,44 条断言)。CR 修:**删掉 aborted 判定里的 `|| subtype == "error_during_execution"`**(两轴独立同结论:该支八样本零独立覆盖,留着会把真失败伪装成「被取消」还凭空注入 interrupted 消息,失败被静音比误报失败更糟);终局答复从消息流挪进终态 `finalText`(`result.result` 实测是最后一条 assistant text 的逐字回显,产成消息会让报告打印两遍)。
 - ✅ **03** `fc0aa1a` Codex adapter 归一化(PASS=193,58 条断言)。CR 修:`JSONValue` 取值便利上提为模块共用(`member(_:)` 的「缺键与显式 null 一视同仁」是两家各自正确性的前提,各留一份会被单边修改静默分叉);`AgentAdapterOutput` 挪成独立文件;改掉一句被 exec7 反证的注释。
 - ✅ **04** 任务状态机 + 工作区落盘(139 条断言)。**两轴独立收敛到同一个 🔴**:`orphaned` 是「按 pid 死了」**猜**出来的推测性终态,却被冻成不可反证 —— agent 子进程退出后、run 进程还在 drain 的窗口里,另一个终端跑 `list` 触发孤儿扫描就会抢标 `orphaned`,随后 run 进程 `finish(completed)` 抛错,**一次成功的任务被永久记成孤儿且报告缺失**。修法:放行 `orphaned → 证据终态`(单向,证据纠正推测)+ `finish` 同态幂等(顺带自愈「meta 已终态但 report 写失败」的死角)。另修:`finalText` 为 nil 时从 normalized 取最后一条 text(兑现 02/03 写下的承诺)、taskID 形状校验(防 07 把用户输入的 `../../x` 拼出 root)、meta 写侧保留未知字段、3d 门禁 grep 扩到 SDK/PluginProxy。
-- ⬜ **05** 看门狗/取消 · ⬜ **06** SystemAgentPort 真实现 · ⬜ **07** 试驾 CLI 收口
+- ✅ **05** 看门狗 + 取消语义(66→68 条断言,纯逻辑零真实等待)。**最有价值的一条设计发现**:timeout 合流点不能让 `terminal` 无条件优先 —— Claude 侧 drain 读到底必然回读 `aborted_streaming`,那只是**我们自己那一刀的回声**,无条件优先会把**每一次**看门狗超时系统性记成 `cancelled`,timeout 诊断被彻底抹掉。故豁免集恰为 `{succeeded}`(成功产出不可能被一刀捏造,是唯一安全豁免),并加断言防它被悄悄放大。CR 另纠正一处**超售**:`AgentCancellation` 的「先迁状态再发信号消除孤儿误判窗口」只保证**值序**,`meta.json` 的持久化在调用方,盘上窗口只能由 06/07「先落盘再发信号」封住(所幸 04 已放行 `orphaned → 证据终态`,落进窗口也可纠正)。
+- ⬜ **06** SystemAgentPort 真实现 · ⬜ **07** 试驾 CLI 收口
+
+**07 票已回填三条接线契约**(拿不到就会接错):中断时 meta 必须保持 running、drain 完才一次 finish(否则 04 的终态冻结让 succeeded 豁免在盘上永远兑现不了);`timedOut` 旗标的语义是「`timeOut()` 真的执行过」而非「verdict 曾判过 stalled」;看门狗的 `silentSeconds`/`toolInFlight` 与「被信号杀但非本平台发起」必须落进 `meta.error`——**判定面收敛,诊断面如实**。
 
 **落地阶段新增的实测事实(回填给后续票)**:
 - Codex 的 `item.*` 事件**不保证被 turn 边界包住**(exec6 的 item error 出现在 `turn.started` 之前)——状态机不得拿 turn 边界当消息闸门。

@@ -14,3 +14,8 @@
 - [ ] `prune` 只删终态、永不删 running;`list` 显示条数 + 磁盘占用。
 - [ ] CLI 解析与参数组装的 vfsoverlay 可验断言(不拉真进程);端到端冒烟脚本:真跑 claude 一个只读诊断任务 + codex 一个最小任务,断言终态与 report.html 产出(手动,标注真实配额消耗)。
 - [ ] 旗舰验收辞点验(手动 ready-for-human):委托一次经 `aa demo.note.set` 的可逆改动零打断、一次经 `aa demo.wipe` 的 dangerous 改动触发宿主确认且拒绝分支能挡住。
+
+**接线契约(04/05 票 CR 回填,拿不到这三条就会接错)**:
+- [ ] **中断时 meta 必须保持 `running`,drain 完了才一次 `finish`**。若在发信号那一刻就把 meta 落成 `timeout`/`cancelled`,04 的终态冻结会让随后「drain 回读到 succeeded」的 `finish(.completed)` 抛 `illegalTransition` —— 05 那条「agent 恰好在信号落地前正常完成就报 completed」的豁免在盘上**永远兑现不了**。自洽的接线只有一种:meta 留在 `running`,drain 结束后用 `AgentInterruptPolicy.resolveIncludingTimeout` 算出终态、**一次** `finish`(`running → 任何终态`皆合法;中途崩溃留下的 `running` 由 04 的孤儿扫描 + 证据纠正边兜住)。
+- [ ] **`timedOut` 旗标的语义是「`timeOut()` 真的执行过」,不是「verdict 曾判过 stalled」**。若在收尾时拿「当下 verdict」当 timedOut,用户取消后 drain 较慢的场景会把一次真实的用户取消误记成 timeout。
+- [ ] **看门狗的现场信息必须落进 `meta.error`**:`stalled` 带的 `silentSeconds` / `toolInFlight` 是「为什么判它卡死」的唯一证据,目前没有专门的 meta 字段承载,不显式写就只活在内存里,用户看 `status` 只会看到一个光秃秃的 `timeout`。同理,被信号杀但非本平台发起时(OOM/外部 pkill),状态按 04 语义记 `cancelled`,但 `meta.error` 要如实记下「被信号 N 终止,非本平台发起」——**判定面收敛,诊断面如实**。
