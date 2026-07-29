@@ -191,6 +191,8 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 // agent-delegation 01:再追加 AAAgentCoreConformanceTests(FakeAgentPort 主 seam + 6 型消息模型;独立 AgentTestReport)。
 // agent-delegation 02:再追加 ClaudeAdapterTests(stream-json 归一化;喂 01 spike 落盘的真实 NDJSON 黄金样本,
 //   样本目录经 AA_SPIKE_DIR 注入 —— 见下方 runner 调用行;缺失即 fail-closed 记 FAIL,不静默跳过)。
+// agent-delegation 03:再追加 CodexAdapterTests(codex exec --json 归一化;喂 02 spike 落盘的真实 jsonl 黄金样本,
+//   同一个 AA_SPIKE_DIR 注入点,子目录 spike-codex-exec/samples;同样 fail-closed)。
 import AAHostTestKit
 import AAAgentTestKit
 import Foundation
@@ -202,12 +204,15 @@ let r3 = AAAgentCoreConformanceTests.run()
 for line in r3.lines { print(line) }
 let r4 = ClaudeAdapterTests.run()
 for line in r4.lines { print(line) }
+let r5 = CodexAdapterTests.run()
+for line in r5.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
 print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
-let failed = r1.failed + r2.failed + r3.failed + r4.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed) failed=\(failed)")
+print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -243,8 +248,11 @@ assert_exit() {  # $1 期望码  $2 实际码  $3 描述
 
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
 echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
-# AA_SPIKE_DIR:agent-delegation 02 的 ClaudeAdapterTests 从这里真读 01 spike 落盘的黄金样本(单一真相源,不复制成常量)。
-#   样本目录缺失时套件自己 fail-closed 记 FAIL(不静默跳过),故这里只负责如实注入路径。
+# AA_SPIKE_DIR:agent-delegation 两家 adapter 的黄金样本根目录(单一真相源,不复制成常量)。**两个消费方**:
+#   * 02 的 ClaudeAdapterTests → 读 `$AA_SPIKE_DIR/spike-claude-headless/*.stdout.ndjson`(01 spike 落盘)
+#   * 03 的 CodexAdapterTests  → 读 `$AA_SPIKE_DIR/spike-codex-exec/samples/*.stdout.jsonl`(02 spike 落盘)
+#   改这一行会同时影响断言组 1d 与 1e —— 别以为「只为 Claude 挪样本」不波及 Codex。
+#   样本目录缺失时两个套件各自 fail-closed 记 FAIL(不静默跳过),故这里只负责如实注入路径。
 OUT="$(AA_SPIKE_DIR="$ROOT/.scratch/agent-delegation/research" "$TESTRUNNER" 2>&1)"; RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 assert_exit 0 $RC "registry-tests 全绿退出码"
@@ -315,6 +323,41 @@ assert_contains "$OUT" "Claude adapter:空行产出 0 条消息(不报错)" "⑧
 #    故用构造行钉死——非中断的执行期错误必须判 failed,且不得凭空注入 interrupted(失败被伪装成取消最难被发现)。
 assert_contains "$OUT" "Claude adapter:非中断的 error_during_execution 判 failed(真失败绝不伪装成被取消)" "⑨回归:非中断 error_during_execution → failed"
 assert_contains "$OUT" "Claude adapter:非中断的 error_during_execution 不注入 interrupted 消息(不无中生有)" "⑨回归:不无中生有 interrupted"
+
+# agent-delegation 03 纯逻辑断言(同一 runner 输出;CodexAdapterTests:codex exec --json 归一化,喂 02 spike 的真实 jsonl 黄金样本)。
+# 口径同 1d:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(样本被真读到、路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# 样本目录经上面 runner 调用行的 AA_SPIKE_DIR 注入(子目录 spike-codex-exec/samples);缺失/不存在时套件自己记 FAIL。
+echo "--- 断言组 1e:Codex adapter 归一化(CodexAdapterTests,黄金样本)---"
+assert_contains "$OUT" "CODEXADAPTER_TESTS passed=" "agent-delegation 03 纯逻辑套件已运行(CodexAdapterTests)"
+assert_contains "$OUT" "Codex adapter:spike 黄金样本目录存在(不存在即 fail-closed,绝不静默跳过)" "①黄金样本目录经 AA_SPIKE_DIR 真读到(fail-closed)"
+assert_contains "$OUT" "Codex adapter:baseline 样本(exec1)消息序列=[status,status,tool-use,tool-result,text,status]" "②baseline:消息序列逐型钉死"
+assert_contains "$OUT" "Codex adapter:baseline 样本(exec1)sessionID 逐字取自首行 thread_id(不必等文件落盘)" "②baseline:thread_id → sessionID(首行直取)"
+assert_contains "$OUT" "Codex adapter:baseline 样本(exec1)终态=succeeded(reason=turn.completed)" "②baseline:终态 succeeded"
+assert_contains "$OUT" "Codex adapter:baseline 样本(exec1)终态 finalText 恒为 nil(Codex 原生无终局答复字段,04 退回取最后一条 text)" "②baseline:finalText 恒 nil(与 Claude 侧不对称)"
+assert_contains "$OUT" "Codex adapter:写尝试样本(exec2)item.started 与 item.completed 同一个 item_1 归一为相等 callID(全链配对不丢)" "③写尝试:CallID 全链配对不丢(修 multica 有损点)"
+assert_contains "$OUT" "Codex adapter:写尝试样本(exec2)工具失败但终态仍是 succeeded(工具失败不等于回合失败)" "③写尝试:工具失败 ≠ 回合失败"
+# ④⑦ 本票最重要的两条:Codex 中断/硬超时时流里**根本没有终态行**,adapter 必须诚实交回 nil(终态由上层据退出码补)。
+assert_contains "$OUT" "Codex adapter:硬超时样本(exec3)terminal 恒为 nil(流里没有终态行就绝不臆造,终态由上层据退出码补)" "④硬超时:terminal 恒为 nil(不臆造终态)"
+assert_contains "$OUT" "Codex adapter:硬超时样本(exec3)逐行归一化没有任何一行产出终态(error 行绝不是失败判据)" "④硬超时:error 行绝不产终态(瞬态噪音)"
+assert_contains "$OUT" "Codex adapter:中断样本(exec5)terminal 恒为 nil(Codex 被信号杀不补终态行,与 Claude 侧不对称)" "⑦中断:terminal 恒为 nil(与 Claude 侧不对称的回归护栏)"
+# ⑤⑥ 静默空气墙:被拦的写连 item 都不出现,V1 诚实记录此限制、绝不合成拒绝消息。
+assert_contains "$OUT" "Codex adapter:静默空气墙样本(exec3b)V1 绝不合成 permission-denied 消息(Codex 侧拒绝不可识别,不臆造)" "⑤静默空气墙:不合成拒绝消息(票面第 4 条)"
+assert_contains "$OUT" "Codex adapter:沙箱边界样本(exec4)两次强制调用只有 cwd 内那次留下一对 item,越界那次归一化后同样零痕迹" "⑥沙箱边界:越界写零痕迹(不臆造第二对 item)"
+# ⑧⑨ 双层编码错因:exec6 解出内层人话,exec7(纯文本)优雅退化为原串。
+assert_contains "$OUT" "Codex adapter:invalid-model 样本(exec6)双层解码后 reason 是内层那句人话" "⑧invalid-model:双层解码取内层错因"
+assert_contains "$OUT" "Codex adapter:invalid-model 样本(exec6)reason 不残留外层 JSON 字面(双层解码真解到了内层)" "⑧invalid-model:外层字面不残留"
+assert_contains "$OUT" "Codex adapter:无鉴权样本(exec7)error.message 非 JSON 时 reason 逐字退化为原串(解不出不丢信息、不崩)" "⑨无鉴权:非 JSON 错因优雅退化"
+assert_contains "$OUT" "Codex adapter:顶层 error 归一为 error 型消息且绝不产终态(瞬态重连噪音不是失败)" "⑩兜底:顶层 error 绝不产终态"
+assert_contains "$OUT" "Codex adapter:未知 item 类型归一为 status=unknown-item:file_change 且保留 callID=item_9" "⑩兜底:未知 item 类型保真且保住 callID"
+assert_contains "$OUT" "Codex adapter:非 JSON 垃圾行归一为 status=unparsed 且保留原始行、不产终态(不崩不抛)" "⑩兜底:垃圾行 unparsed 不崩且不产终态"
+assert_contains "$OUT" "Codex adapter:空行产出 0 条消息(不报错)" "⑩兜底:空行 0 条消息"
+# ⑪ 三支八样本都触发不到的降级(只能靠构造行,照 1d ⑨ 的先例):
+#    stderr 噪音是票面「ERROR 字样不作失败判据」的**可测**落点——防的是将来某个真实现把 2>&1 合流后,
+#    连成功调用也稳定打的 ERROR 噪音把任务误判成失败(02 spike:8/8 次 stderr 都有 ERROR)。
+assert_contains "$OUT" "Codex adapter:stderr 的 ERROR 噪音行只走 unparsed 降级、绝不产终态(ERROR 字样不是失败判据)" "⑪回归:stderr ERROR 噪音不是失败判据"
+assert_contains "$OUT" "Codex adapter:turn.failed 缺 error.message 时终态仍 failed、reason 如实留 nil(不臆造理由)" "⑪回归:turn.failed 缺错因不臆造"
+assert_contains "$OUT" "Codex adapter:双层解码内层为空时退回外层原串(解得开也不交回空理由)" "⑪回归:双层解码内层为空退回原串"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"

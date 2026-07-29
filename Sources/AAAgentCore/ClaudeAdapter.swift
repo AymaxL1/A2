@@ -20,25 +20,6 @@
 import Foundation
 import AAContracts
 
-/// 一行(或多行)原始事件归一化后的产出。
-///
-/// 三个字段各有明确来源,不重叠:`messages` 是 6 型消息序列;`terminal` 仅终态行非 nil;
-/// `sessionID` 仅会话起始行非 nil(Claude `system/init` 的 `session_id`;Codex 的 `thread_id`,03 票)。
-public struct AgentAdapterOutput: Sendable, Equatable {
-    /// 本次归一化产出的统一消息(按原生次序)。
-    public var messages: [AgentMessage]
-    /// 统一终态 —— 仅终态行非 nil。
-    public var terminal: AgentTerminalStatus?
-    /// 会话标识 —— 仅会话起始行非 nil。
-    public var sessionID: String?
-
-    public init(messages: [AgentMessage] = [], terminal: AgentTerminalStatus? = nil, sessionID: String? = nil) {
-        self.messages = messages
-        self.terminal = terminal
-        self.sessionID = sessionID
-    }
-}
-
 /// Claude Code headless `stream-json` 的归一化器(无状态,故用 enum 作命名空间,不可实例化)。
 public enum ClaudeAdapter {
 
@@ -272,25 +253,6 @@ public enum ClaudeAdapter {
     }
 }
 
-// —— JSONValue 取值便利(AAContracts 已有 `objectValue` / `stringValue`,此处只补归一化缺的三个,不重复造)——
-// 刻意 fileprivate:它们是本 adapter 的私有便利,不擅自扩张 AAContracts 的公共面;
-// 若 03 票 Codex adapter 也需要,届时再考虑上提为模块内共用扩展(YAGNI,本票不预造)。
-private extension JSONValue {
-    /// 若是布尔则返回其值,否则 nil。
-    var boolValue: Bool? {
-        if case let .bool(b) = self { return b }
-        return nil
-    }
-    /// 若是数组则返回其元素,否则 nil。
-    var arrayValue: [JSONValue]? {
-        if case let .array(a) = self { return a }
-        return nil
-    }
-    /// 取对象成员:非对象 / 键缺失 / 值为 JSON null 一律 nil。
-    /// **把「缺键」与「显式 null」一视同仁**是刻意的:Claude 的 `api_error_status` 正常时是显式 null,
-    /// 若只判缺键,终态判定会把每一次正常完成都误判成 failed。
-    func member(_ key: String) -> JSONValue? {
-        guard case let .object(object) = self, let value = object[key], value != .null else { return nil }
-        return value
-    }
-}
+// JSONValue 的取值便利(`member` / `boolValue` / `arrayValue`)已上提为模块内共用,见 `JSONValueAccess.swift`
+// —— 03 票 Codex adapter 落地后两家都要用 `member(_:)`,而它的「缺键与显式 null 一视同仁」是两家各自正确性的
+//    前提,各留一份会在将来被单边修改时静默分叉,故收敛为一处 internal 声明。

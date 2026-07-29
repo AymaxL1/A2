@@ -14,3 +14,7 @@
 - [ ] HTML 报告:主路径认 agent 产出的自包含 `report.html`;缺失时兜底把最终文本 escape 套极简内置模板(**不做 md 渲染器**)。
 - [ ] 崩溃残留:`state=running` 且 pid 已死 → 读操作扫到标 `orphaned`,不删证据。
 - [ ] 测试经 Fake Port:喂一段预置统一消息流,断言状态迁移序列 + 落盘后的目录结构/meta 字段/raw≠normalized;orphaned 判定一条;HTML 兜底一条。
+
+**约束(03 票 CR 回填的实测事实,状态机不得违背)**:
+- **Codex 的 `item.*` 事件不保证被 turn 边界包住** —— exec6 样本里 `item.completed`(type=error,model 元数据缺失警告)出现在 `turn.started` **之前**;exec7 里 item error 又夹在回合中段的重连噪音之间。故状态机/看门狗**不得**假设「item 事件必在 turn.started 之后、终态行之前」,更不得拿 turn 边界当消息闸门丢弃 pre-turn 的 item(会丢诊断信息)。
+- **Codex 中断/硬超时时事件流里没有终态行**(exec3/exec5 实证),adapter 会诚实交回 `terminal == nil`。此时 job 终态**必须**由进程退出码 + 是否收到取消意图决定(负退出码=被信号杀 → cancelled),绝不能因为「adapter 没给终态」就把任务挂在 running。

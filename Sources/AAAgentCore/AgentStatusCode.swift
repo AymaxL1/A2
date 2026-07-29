@@ -15,6 +15,12 @@
 public enum AgentStatusCode: String, Sendable, CaseIterable {
     /// 会话起始(Claude `system/init`;Codex `thread.started`)——同时是 sessionID 的产出行。
     case sessionStarted = "session-started"
+    /// 回合开始(Codex `turn.started` 的归一化落点)。Claude 侧无对应事件 —— 它的 `system/init` 与 `result`
+    /// 就是回合边界,不另发「回合开始」;此处如实只服务 Codex,不为对称而给 Claude 硬造一条。
+    case turnStarted = "turn-started"
+    /// 回合正常结束(Codex `turn.completed` 的归一化落点)。与终态 `.succeeded` **同一行产出**:
+    /// 终态供上层判定,这条 status 让「回合正常收尾」在按序渲染的消息流里也看得见(二者不是重复,是两个消费面)。
+    case turnCompleted = "turn-completed"
     /// 触发限流 / 限流状态播报(Claude `rate_limit_event`)。
     case rateLimit = "rate-limit"
     /// 操作被拒(Claude `permission_denials[]` + `is_error:true` 的 tool_result)。
