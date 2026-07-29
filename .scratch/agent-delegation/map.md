@@ -40,6 +40,20 @@ Label: wayfinder:map
 
 - [04 产出适配层 spec](issues/04-write-spec.md) — **图目的地达成**:[spec.md](spec.md) 定稿 + /to-tickets 拆出 7 张实施票 `impl/01–07`(tracer-bullet)。依赖图:01 骨架→02/03/04/06 并行→05→07 收口。两处 spec 收敛:验收 b 用 demo 能力演示双层信任(不硬绑未落地的 mihomo 09/10 写能力)、测试走 TestReport 同构(禁 import Testing,随 11 票迁 swift-testing)。骨架事实:AAAgentCore 自有 AgentPort(样板 SystemProcessPort 反孤儿)。
 
+## 实施进度(impl/01–07,分支 `worktree-research-next`)
+
+每票循环:主会话读票定设计 → 全新 Opus 子代理机械落地(不 commit / 不自审)→ **主会话独立重跑 `bash Scripts/check.sh` 复验** → Fable 5 双轴 code-review(Standards + Spec)→ 主会话修 → 提交。
+
+- ✅ **01** `e350204` 骨架:`AgentPort` + 6 型统一消息 + `FakeAgentPort` + 门禁接线(PASS=148)。CR 修:删死 import。
+- ✅ **02** `1c0d6c9` Claude adapter 归一化(PASS=170,44 条断言)。CR 修:**删掉 aborted 判定里的 `|| subtype == "error_during_execution"`**(两轴独立同结论:该支八样本零独立覆盖,留着会把真失败伪装成「被取消」还凭空注入 interrupted 消息,失败被静音比误报失败更糟);终局答复从消息流挪进终态 `finalText`(`result.result` 实测是最后一条 assistant text 的逐字回显,产成消息会让报告打印两遍)。
+- ✅ **03** `fc0aa1a` Codex adapter 归一化(PASS=193,58 条断言)。CR 修:`JSONValue` 取值便利上提为模块共用(`member(_:)` 的「缺键与显式 null 一视同仁」是两家各自正确性的前提,各留一份会被单边修改静默分叉);`AgentAdapterOutput` 挪成独立文件;改掉一句被 exec7 反证的注释。
+- ✅ **04** 任务状态机 + 工作区落盘(139 条断言)。**两轴独立收敛到同一个 🔴**:`orphaned` 是「按 pid 死了」**猜**出来的推测性终态,却被冻成不可反证 —— agent 子进程退出后、run 进程还在 drain 的窗口里,另一个终端跑 `list` 触发孤儿扫描就会抢标 `orphaned`,随后 run 进程 `finish(completed)` 抛错,**一次成功的任务被永久记成孤儿且报告缺失**。修法:放行 `orphaned → 证据终态`(单向,证据纠正推测)+ `finish` 同态幂等(顺带自愈「meta 已终态但 report 写失败」的死角)。另修:`finalText` 为 nil 时从 normalized 取最后一条 text(兑现 02/03 写下的承诺)、taskID 形状校验(防 07 把用户输入的 `../../x` 拼出 root)、meta 写侧保留未知字段、3d 门禁 grep 扩到 SDK/PluginProxy。
+- ⬜ **05** 看门狗/取消 · ⬜ **06** SystemAgentPort 真实现 · ⬜ **07** 试驾 CLI 收口
+
+**落地阶段新增的实测事实(回填给后续票)**:
+- Codex 的 `item.*` 事件**不保证被 turn 边界包住**(exec6 的 item error 出现在 `turn.started` 之前)——状态机不得拿 turn 边界当消息闸门。
+- Codex 中断/硬超时时事件流**没有终态行**,adapter 诚实交回 `terminal == nil` —— job 终态必须由退出码 + 取消记账决定,不能把任务挂在 running。
+
 ## Not yet specified
 
 - **插件经宿主委托**(北极星第二步):插件侧调用契约、发起方确认强度(插件发起 ≈ 拉起任意代码执行,倾向 dangerous 档)、与注册表的关系——等宿主委托 spec 定型后 sharpen。

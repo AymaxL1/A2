@@ -193,6 +193,8 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 //   样本目录经 AA_SPIKE_DIR 注入 —— 见下方 runner 调用行;缺失即 fail-closed 记 FAIL,不静默跳过)。
 // agent-delegation 03:再追加 CodexAdapterTests(codex exec --json 归一化;喂 02 spike 落盘的真实 jsonl 黄金样本,
 //   同一个 AA_SPIKE_DIR 注入点,子目录 spike-codex-exec/samples;同样 fail-closed)。
+// agent-delegation 04:再追加 AgentTaskTests(任务状态机 + 工作区落盘;全程经 FakeFileSystem/FakeClock/FakeLiveness,
+//   零真实文件系统、零真实时钟、零真实进程,故**不需要**任何样本目录或环境变量注入)。
 import AAHostTestKit
 import AAAgentTestKit
 import Foundation
@@ -206,13 +208,16 @@ let r4 = ClaudeAdapterTests.run()
 for line in r4.lines { print(line) }
 let r5 = CodexAdapterTests.run()
 for line in r5.lines { print(line) }
+let r6 = AgentTaskTests.run()
+for line in r6.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
 print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
 print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed) failed=\(failed)")
+print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -358,6 +363,105 @@ assert_contains "$OUT" "Codex adapter:空行产出 0 条消息(不报错)" "⑩�
 assert_contains "$OUT" "Codex adapter:stderr 的 ERROR 噪音行只走 unparsed 降级、绝不产终态(ERROR 字样不是失败判据)" "⑪回归:stderr ERROR 噪音不是失败判据"
 assert_contains "$OUT" "Codex adapter:turn.failed 缺 error.message 时终态仍 failed、reason 如实留 nil(不臆造理由)" "⑪回归:turn.failed 缺错因不臆造"
 assert_contains "$OUT" "Codex adapter:双层解码内层为空时退回外层原串(解得开也不交回空理由)" "⑪回归:双层解码内层为空退回原串"
+
+# agent-delegation 04 纯逻辑断言(同一 runner 输出;AgentTaskTests:任务状态机 + 工作区落盘)。
+# 口径同 1c/1d/1e:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# 与 1d/1e 不同的是本组**不依赖任何样本目录 / 环境变量**:全程跑在 FakeFileSystem / FakeClock / FakeLiveness 上,
+#   零真实文件系统(根目录是内存里的 /fake/agent-tasks 串)、零真实时钟、零真实进程 —— 门禁不会碰用户的 ~/.aa/。
+echo "--- 断言组 1f:任务状态机 + 工作区落盘(AgentTaskTests,全假件)---"
+assert_contains "$OUT" "AGENTTASK_TESTS passed=" "agent-delegation 04 纯逻辑套件已运行(AgentTaskTests)"
+# ① 状态迁移逐条(合法/非法/终态不可复活)
+assert_contains "$OUT" "任务状态机:pending 迁 running/failed/cancelled 三条全合法" "①迁移:pending 的三条合法出边"
+assert_contains "$OUT" "任务状态机:running 迁 completed/failed/cancelled/timeout/orphaned 五条全合法" "①迁移:running 的五条合法出边"
+assert_contains "$OUT" "任务状态机:pending 直接迁 completed 非法(没跑过就不可能完成)" "①迁移:pending→completed 非法"
+assert_contains "$OUT" "任务状态机:orphaned 之外的四个终态迁向任何状态一律非法(含迁向自身)" "①迁移:证据终态零出边(含迁向自身)"
+# ①b orphaned 是**猜**出来的终态,一手证据(run 进程的 finish)必须能纠正它 —— 且方向单向,证据终态绝不退回 orphaned。
+assert_contains "$OUT" "任务状态机:orphaned 迁 completed/failed/cancelled/timeout 四条全合法(推测性终态可被一手证据纠正)" "①b迁移:orphaned 的四条证据升级出边"
+assert_contains "$OUT" "任务状态机:四个证据终态一律不得退回 orphaned(证据升级是单向的)" "①b迁移:证据升级单向(不可退回 orphaned)"
+assert_contains "$OUT" "任务状态机:orphaned 不可复活成 pending/running 也不可迁向自身(纠正不是复活)" "①b迁移:纠正不是复活"
+# ② adapter 终态 → job 状态(含 terminal 缺失时按退出码收敛,02 spike 的 Codex 现实)
+assert_contains "$OUT" "终态映射:adapter succeeded 映射为 job completed" "②映射:succeeded→completed"
+assert_contains "$OUT" "终态映射:adapter failed 映射为 job failed" "②映射:failed→failed"
+assert_contains "$OUT" "终态映射:adapter aborted 映射为 job cancelled" "②映射:aborted→cancelled"
+assert_contains "$OUT" "终态收敛:terminal 缺失且退出码为负 判 cancelled(负值即被信号杀)" "②收敛:Codex 无终态行时按负退出码判 cancelled"
+assert_contains "$OUT" "终态收敛:所有输入组合都收敛到终态,绝无把任务挂在 running 的路径" "②收敛:绝不把任务永远挂在 running"
+# ③ task-id 生成(slug 规则含中文回退)
+assert_contains "$OUT" "task-id:固定 stamp 与 suffix 下整体形如 stamp-slug-suffix" "③task-id:整体形状"
+assert_contains "$OUT" "task-id:超长 prompt 的 slug 截到 24 字符以内" "③task-id:slug 截断到 24"
+assert_contains "$OUT" "task-id:全中文 prompt 折不出字符时回退 task" "③task-id:中文回退 task"
+# ③b task-id 形状校验:07 票 CLI 会把用户敲的 id 直接喂进读写路径,生产端口是真 FileManager —— 路径穿越必须拦在域逻辑里。
+assert_contains "$OUT" "task-id 校验:空串被拒且磁盘零写入(空 id 会把工作区根目录本身当成一个任务)" "③b穿越:空串被拒且零写入"
+assert_contains "$OUT" "task-id 校验:含两点的向上穿越串被拒且磁盘零写入(生产端口是真 FileManager,会越出 root 写文件)" "③b穿越:向上穿越被拒且零写入"
+assert_contains "$OUT" "task-id 校验:含斜杠的 id 被拒且磁盘零写入(目录名即 task-id,只准一层扁平结构)" "③b穿越:含斜杠被拒且零写入"
+assert_contains "$OUT" "task-id 校验:以点开头的 id 被拒且磁盘零写入(建得出却被 list 与 ls 藏起来的任务是坏证据)" "③b穿越:点开头被拒且零写入"
+# ④ 工作区目录结构与 meta 字段(提案 §2/§3)
+assert_contains "$OUT" "工作区:create 后任务目录恰是 meta.json/prompt.md/logs/work 四项" "④落盘:目录结构与提案一致"
+assert_contains "$OUT" "工作区:logs 目录恰是 raw.ndjson 与 normalized.ndjson 与 stderr.log 三件套" "④落盘:三个日志文件"
+assert_contains "$OUT" "工作区:meta.json 落盘含 schema_version 为 1" "④落盘:schema_version=1"
+assert_contains "$OUT" "工作区:meta.json 落盘 state 为 pending" "④落盘:新建即 pending"
+assert_contains "$OUT" "工作区:委托指定外部 workdir 时不建 work 目录" "④落盘:外部 workdir 不建 work/"
+assert_contains "$OUT" "工作区:有副作用任务的 changes.md 经 writeChanges 落盘,且不牵动 meta.json" "④落盘:changes.md 按需产出"
+# ④b 半截目录(建了目录但 meta 还没写就崩了)不得被静默复用覆盖 —— 它的 logs/ 可能是上次崩溃的唯一线索。
+assert_contains "$OUT" "工作区:缺 meta.json 的半截目录也算已存在,create 抛错且其 logs 证据一字未动" "④b半截目录:create 不覆盖"
+assert_contains "$OUT" "工作区:缺 meta.json 的半截目录对 list 不可见(已知限制:证据不销毁优先于自动清理)" "④b半截目录:对 list 不可见(已知限制)"
+assert_contains "$OUT" "task-id:时间前缀经 ClockPort 注入而非读系统时钟(故可逐字断言)" "③task-id:时间经 ClockPort 注入可测"
+# ⑤ raw 与 normalized 永不互写(提案 §2 的红线)
+assert_contains "$OUT" "工作区:raw.ndjson 里不含归一化消息的任何一行(raw 与 normalized 永不互写)" "⑤红线:raw 不含 normalized"
+assert_contains "$OUT" "工作区:normalized.ndjson 里不含任何一条原始行(两个文件内容互不含对方)" "⑤红线:normalized 不含 raw"
+assert_contains "$OUT" "工作区:文件系统写入失败时如实抛出,不吞错" "⑤落盘:写入失败如实传播"
+# CR 回填约束:Codex 的 item 事件不保证被 turn 包住,落盘不得拿 turn 当闸门
+assert_contains "$OUT" "工作区:turn-started 之前到达的 item 消息照样全量落盘且次序不变(不拿 turn 边界当闸门)" "CR:pre-turn 的 item 不被丢弃"
+# ⑥ meta 单写者 + session_id 立刻落盘
+assert_contains "$OUT" "工作区:session_id 拿到即经 updateMeta 落盘(提案 §3 立刻落盘)" "⑥单写者:session_id 拿到即写"
+assert_contains "$OUT" "工作区:非法迁移 pending 到 completed 时 updateMeta 抛错" "⑥单写者:非法迁移抛错"
+assert_contains "$OUT" "工作区:非法迁移抛错时 meta.json 内容一字未改(绝不静默改写)" "⑥单写者:抛错时磁盘内容不变"
+assert_contains "$OUT" "工作区:终态任务再迁向自身被拒且 updateMeta 抛错(终态元数据冻结)" "⑥单写者:终态 meta 冻结"
+assert_contains "$OUT" "工作区:updateMeta 改 task_id 被拒并抛 taskIDImmutable(目录名即 id,不容第二个真相)" "⑥单写者:task_id 不可变"
+assert_contains "$OUT" "工作区:updateMeta 改 schema_version 被拒并抛 schemaVersionImmutable(版本迁移不是普通更新)" "⑥单写者:schema_version 不可变"
+# ⑦ 崩溃残留:标 orphaned 且不销毁证据(提案 §4)
+assert_contains "$OUT" "残留扫描:崩溃残留任务的 meta 状态改为 orphaned" "⑦残留:running+pid 已死 → orphaned"
+assert_contains "$OUT" "残留扫描:标 orphaned 后 logs 下的 raw.ndjson 一个字节都没动(证据不销毁)" "⑦残留:证据不销毁"
+assert_contains "$OUT" "残留扫描:pid 仍存活的 running 任务不被误标" "⑦残留:活着的不误标"
+assert_contains "$OUT" "残留扫描:state 为 running 但没记下 pid 的任务不被标 orphaned(没有判据就不判,不凭空断言它死了)" "⑦残留:无 pid 不猜死"
+# ⑦b 本次修复的核心(两轴 CR 独立收敛到的同一条 🔴):agent 退出 → run 进程还在 drain → 另一终端扫描抢标 orphaned
+#     → run 进程随后 finish。修之前这一步抛 illegalTransition:一次**成功**的任务被永久记成孤儿、报告缺失、无纠正路径。
+assert_contains "$OUT" "孤儿纠正:先复现 drain 期间被扫描抢标的时序(任务此刻是 orphaned)" "⑦b孤儿:复现 drain 抢标时序"
+assert_contains "$OUT" "孤儿纠正:被抢标 orphaned 后 run 进程的 finish 不再抛错(一手证据不该被推测挡住)" "⑦b孤儿:finish 不再被推测挡住"
+assert_contains "$OUT" "孤儿纠正:纠正后 meta 的最终状态是 completed 而不是 orphaned(成功的任务不该被记成孤儿)" "⑦b孤儿:最终状态是 completed"
+assert_contains "$OUT" "孤儿纠正:纠正后报告被补出来了(被记成孤儿的旧行为下这份报告永远缺失)" "⑦b孤儿:报告不再缺失"
+assert_contains "$OUT" "孤儿纠正:orphaned 经 finish 迁到 timeout 成功落盘" "⑦b孤儿:四条出边逐条落盘(timeout 为例)"
+assert_contains "$OUT" "孤儿纠正:已收好的 completed 再被标 orphaned 一律抛错(证据不可被推测覆盖)" "⑦b孤儿:反向仍非法(单向)"
+# ⑦c finish 同态幂等 + 报告自愈(顺带钉死「一次 finish 只取一次现在」)
+assert_contains "$OUT" "工作区:finish 同态幂等 —— 同一个终态再 finish 一次不抛(不撞终态冻结)" "⑦c幂等:同态重调不抛"
+assert_contains "$OUT" "工作区:同态幂等的第二次 finish 不增加 meta.json 写入次数、内容一字未改" "⑦c幂等:第二次不写 meta"
+assert_contains "$OUT" "工作区:report.html 缺失时重调同值 finish 把报告补了出来(meta 写成功但报告写失败的自愈路径)" "⑦c幂等:报告自愈"
+assert_contains "$OUT" "工作区:同态幂等只认同一个终态,换成别的终态再 finish 一律抛错(终态不是可反复改写的字段)" "⑦c幂等:换终态仍被拒"
+assert_contains "$OUT" "工作区:一次 finish 只取一次现在(finished_at 与报告页脚是同一个时刻,不制造两个现在)" "⑦c幂等:finish 只取一次现在"
+# ⑦d error 与终态一次写盘(不留「error 已填但 state=running」的半截现场)
+assert_contains "$OUT" "工作区:error 与 state 与 finished_at 与 exit_code 一次写盘(不留下 error 已填但仍是 running 的半截现场)" "⑦d收尾:error 与终态一次写盘"
+assert_contains "$OUT" "工作区:成功任务的 error 为 nil 时整键省略,meta.json 不产 error 噪音键" "⑦d收尾:nil error 不产键"
+# ⑧ HTML 报告(提案 §6:自产优先 + 兜底 + escape 顺序)
+assert_contains "$OUT" "HTML 报告:先转 amp 再转其余 —— a and b less-than c 得到 amp 与 lt 各一次" "⑧报告:escape 先转 amp"
+assert_contains "$OUT" "HTML 报告:绝不出现二次转义的 amp-lt(escape 顺序不可颠倒)" "⑧报告:无二次转义"
+assert_contains "$OUT" "HTML 报告:五个危险字符逐个转义为 amp/lt/gt/quot/#39" "⑧报告:五个字符逐个转义"
+assert_contains "$OUT" "HTML 报告:缺 report.html 时兜底生成,且页脚显式标注由文本兜底生成" "⑧报告:兜底生成并标注"
+assert_contains "$OUT" "HTML 报告:已有 agent 自产的 report.html 时原样保留,绝不覆盖" "⑧报告:自产报告不覆盖"
+# ⑧b Codex 的终态 finalText 恒为 nil(AgentTerminalStatus 与 CodexAdapter 两处文件头的承诺),04 必须退回取最后一条 text。
+assert_contains "$OUT" "报告兜底:finalText 为 nil 时退回 normalized 里最后一条 text 消息(Codex 侧的唯一来源)" "⑧b兜底:退回 normalized 最后一条 text"
+assert_contains "$OUT" "报告兜底:取的是最后一条 text 而不是第一条(后面的文本是对前面的收敛)" "⑧b兜底:取最后一条而非第一条"
+assert_contains "$OUT" "报告兜底:只读 normalized.ndjson,绝不去 raw.ndjson 里取最终文本(提案 §2 的红线)" "⑧b兜底:只消费 normalized"
+assert_contains "$OUT" "报告兜底:normalized 里一条 text 都没有时如实说没有最终文本(不硬造内容)" "⑧b兜底:没有 text 时如实说没有"
+assert_contains "$OUT" "报告兜底:normalized.ndjson 读不出来时退回 nil 而不是抛错(兜底是尽力而为,不掀翻已写定的终态)" "⑧b兜底:读不出不抛错"
+# ⑨ prune 永不删 running/pending(提案 §4)
+assert_contains "$OUT" "prune:终态任务目录被删除" "⑨prune:终态被删"
+assert_contains "$OUT" "prune:running 与 pending 哪怕被点名要删也跳过,并如实出现在 skipped" "⑨prune:活态永不删且如实报出"
+assert_contains "$OUT" "prune:keepIDs 点名保留的终态任务不删" "⑨prune:点名保留生效"
+# ⑩ 读侧容忍未知字段(演进规则:只增不改义、旧目录永不迁移)
+assert_contains "$OUT" "读侧容忍:meta.json 多出未知键时仍能正常解出、不抛(演进规则 只增不改义)" "⑩演进:未知字段不打崩读侧"
+# ⑩b 只「读得出」不算兼容:updateMeta 是读-改-写,写侧剥掉未知键就等于旧版本单方面抹掉新版本刚写下的字段。
+assert_contains "$OUT" "写侧保留:updateMeta 读改写之后未知键 future_key 仍在 meta.json 里(不静默剥掉别人的字段)" "⑩b演进:写侧原样写回未知键"
+assert_contains "$OUT" "写侧保留:保住未知键的同时本版本自己的字段照常更新(两件事互不牵连)" "⑩b演进:保留未知键不妨碍正常更新"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
@@ -870,14 +974,18 @@ else
   echo "FAIL: Port 协议不应声明在 Host*(命中: $PORT_DECL_HOST)"; FAIL=$((FAIL+1))
 fi
 
-# (3d) agent-delegation 01 铁律:AAAgentCore 不 import 任何 Host*(与 PluginProxy 同级把关,照 3a 的 grep 模式)。
-#      正则同 3a(覆盖子句形 import);显式判 grep 退出码:rc==1 无匹配(好)/ rc==0 命中禁止 import(坏)/ rc>=2 grep 自身出错(绝不算过)。
-AC_GREP_HITS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?AAHost(Runtime|MacOS|TestKit)' Sources/AAAgentCore/)"
+# (3d) agent-delegation 01 铁律:AAAgentCore 不 import 任何 Host* / AAPluginSDK / PluginProxy
+#      (与 PluginProxy 同级把关,照 3a 的 grep 模式)。
+#      **红线的全文就是 `AgentTaskPorts.swift` / `AgentPort.swift` 注释里那句「绝不 AAPluginSDK/PluginProxy」** ——
+#      故正则在 3a 的 Host* 之外一并覆盖 AAPluginSDK 与 PluginProxy:注释宣称门禁把关,门禁就得真把这两个也拦住,
+#      否则那句注释是空头支票(修 grep 而不是弱化注释)。
+#      显式判 grep 退出码:rc==1 无匹配(好)/ rc==0 命中禁止 import(坏)/ rc>=2 grep 自身出错(绝不算过)。
+AC_GREP_HITS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?(AAHost(Runtime|MacOS|TestKit)|AAPluginSDK|PluginProxy)' Sources/AAAgentCore/)"
 AC_GREP_RC=$?
 if [ "$AC_GREP_RC" -eq 1 ]; then
-  echo "PASS: AAAgentCore 源码不含 import Host*(AAHostRuntime|AAHostMacOS|AAHostTestKit)"; PASS=$((PASS+1))
+  echo "PASS: AAAgentCore 源码不含 import Host*/AAPluginSDK/PluginProxy(AAHostRuntime|AAHostMacOS|AAHostTestKit|AAPluginSDK|PluginProxy)"; PASS=$((PASS+1))
 elif [ "$AC_GREP_RC" -eq 0 ]; then
-  echo "FAIL: AAAgentCore 源码出现 Host* 的 import:"; printf '%s\n' "$AC_GREP_HITS"; FAIL=$((FAIL+1))
+  echo "FAIL: AAAgentCore 源码出现被禁的 import(Host*/AAPluginSDK/PluginProxy):"; printf '%s\n' "$AC_GREP_HITS"; FAIL=$((FAIL+1))
 else
   echo "FAIL: grep 守卫自身出错(rc=$AC_GREP_RC),无法核验 AAAgentCore 边界 —— 绝不算过"; FAIL=$((FAIL+1))
 fi
