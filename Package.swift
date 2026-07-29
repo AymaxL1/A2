@@ -22,6 +22,9 @@ let package = Package(
         .library(name: "AAHostMacOS", targets: ["AAHostMacOS"]),
         .library(name: "AAHostTestKit", targets: ["AAHostTestKit"]),
         .library(name: "PluginProxy", targets: ["PluginProxy"]),
+        // agent-delegation 模块(「宿主调用本地 agent」适配层)——与 v1-core-proxy 的 16 票并行落地。
+        .library(name: "AAAgentCore", targets: ["AAAgentCore"]),
+        .library(name: "AAAgentTestKit", targets: ["AAAgentTestKit"]),
     ],
     targets: [
         // ① 零依赖底座
@@ -31,6 +34,10 @@ let package = Package(
         .target(name: "AAPluginSDK", dependencies: ["AAContracts"]),
         .target(name: "AAHostRuntime", dependencies: ["AAContracts"]),
         .target(name: "AAUISystem", dependencies: ["AAContracts"]),
+        // agent-delegation:AAAgentCore 是「宿主调用本地 agent」适配层的纯逻辑地基,
+        //   **只依赖 AAContracts**(不依赖 SDK / Host*),故与 v1-core-proxy 的 16 票并行落地、互不踩施工面。
+        //   铁律与 PluginProxy 同级:check.sh grep 强制不 import 任何 Host*。
+        .target(name: "AAAgentCore", dependencies: ["AAContracts"]),
 
         // ③ 依赖 HostRuntime 的宿主具体层 / 假件;以及插件域逻辑
         // 依赖边须与源码实际 import 一一对应(两个 target 都同时 import AAHostRuntime 与 AAContracts)。
@@ -48,6 +55,9 @@ let package = Package(
         // 铁律:PluginProxy 只依赖 SDK / Contracts / UISystem,绝不依赖任何 Host* target。
         //   06 票新增的 ProcessPort/HTTPPort **协议**定在 AAPluginSDK(插件只依赖 SDK),真实现/假件在 Host* 侧——边界不破。
         .target(name: "PluginProxy", dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"]),
+        // agent-delegation:AAAgentTestKit 是 AAAgentCore 的**独立**测试基建(FakeAgentPort + 纯逻辑一致性测试)。
+        //   刻意不并入 AAHostTestKit——后者正被 v1-core-proxy 施工,合用会制造合并冲突。只依赖 AAAgentCore + Contracts。
+        .target(name: "AAAgentTestKit", dependencies: ["AAAgentCore", "AAContracts"]),
 
         // ④ CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),

@@ -128,6 +128,10 @@ echo "==== 阶段 A:按拓扑序编译全部 target ===="
 # ① 零依赖底座(含线协议 Codable + UDS 路径常量)
 build_lib AAContracts
 
+# agent-delegation 01:AAAgentCore(「宿主调用本地 agent」适配层地基;只依赖 Contracts,与 16 票并行)。
+#   放在 Contracts 之后即满足拓扑序;纯逻辑 + Port 协议 + 6 型消息,vfsoverlay 可验。
+build_lib AAAgentCore
+
 # ② 只依赖 Contracts(06 票:AAPluginSDK 现含 ProcessPort/HTTPPort 两个宿主 Port 协议 + PluginCapability)
 build_lib AAPluginSDK
 build_lib AAHostRuntime   # 含 Registry(纯逻辑)
@@ -152,6 +156,10 @@ swiftc "${SWIFTC_COMMON[@]}" -wmo \
 
 # ④ 假件 + 06 票纯逻辑测试(AAHostTestKit 现依赖 AAPluginSDK + PluginProxy:Port 假件 + RESTClient/status 测试)
 build_lib AAHostTestKit
+
+# agent-delegation 01:AAAgentTestKit(AAAgentCore 的独立测试基建:FakeAgentPort + 一致性测试;依赖 AAAgentCore + Contracts)。
+#   刻意独立于 AAHostTestKit(避与 v1 施工撞车);在 AAAgentCore 编好后即可编,链接进下面的测试 runner。
+build_lib AAAgentTestKit
 
 # ⑤ 宿主(库,但门禁单独把它编成可执行做冒烟;@main 是过桥,终态是 12 票 XcodeGen app 壳)。
 #    06 票:宿主装配 ProxyPlugin(注入真 SystemProcessPort/SocketHTTPPort),故链接补 AAPluginSDK.o / PluginProxy.o / AAUISystem.o。
@@ -178,18 +186,23 @@ swiftc "${SWIFTC_COMMON[@]}" \
 #    这里只是入口 shim(main.swift 顶层代码,不需 -parse-as-library)。链接 TestKit + Runtime + Contracts。
 echo "-- 编译测试 runner: registry-tests(驱动 AAHostTestKit.RegistryConformanceTests)"
 cat > "$RUNNER/main.swift" <<'SWIFT'
-// 门禁自动生成:纯逻辑测试的入口 shim(断言逻辑在 AAHostTestKit)。
+// 门禁自动生成:纯逻辑测试的入口 shim(断言逻辑在 AAHostTestKit / AAAgentTestKit)。
 // 06 票:除 RegistryConformanceTests 外,追加 ProxyConformanceTests(Port 假件 / RESTClient / proxy.status 域逻辑)。
+// agent-delegation 01:再追加 AAAgentCoreConformanceTests(FakeAgentPort 主 seam + 6 型消息模型;独立 AgentTestReport)。
 import AAHostTestKit
+import AAAgentTestKit
 import Foundation
 let r1 = RegistryConformanceTests.run()
 for line in r1.lines { print(line) }
 let r2 = ProxyConformanceTests.run()
 for line in r2.lines { print(line) }
+let r3 = AAAgentCoreConformanceTests.run()
+for line in r3.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
-let failed = r1.failed + r2.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed) failed=\(failed)")
+print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
+let failed = r1.failed + r2.failed + r3.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -198,6 +211,7 @@ swiftc "${SWIFTC_COMMON[@]}" \
   -o "$TESTRUNNER" \
   "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAHostTestKit.o" \
   "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
+  "$OBJ/AAAgentCore.o" "$OBJ/AAAgentTestKit.o" \
   "$RUNNER/main.swift" \
   || { echo "FAIL: 编译 registry-tests runner 失败"; exit 1; }
 
@@ -247,6 +261,23 @@ assert_contains "$OUT" "REST 客户端:解析 /proxies → 当前节点 STUB-NOD
 assert_contains "$OUT" "status 域逻辑:内核存活 → running=true" "③status 域逻辑:内核存活→反映真实"
 assert_contains "$OUT" "内核死亡 → running=false(如实未运行,不报错)" "③status 域逻辑:内核死亡→如实未运行(退出码 0)"
 assert_contains "$OUT" "无内核句柄 → running=false" "③status 域逻辑:无内核句柄→如实未运行"
+
+# agent-delegation 01 纯逻辑断言(同一 runner 输出;AAAgentCoreConformanceTests:FakeAgentPort 主 seam + 6 型消息模型)。
+# 说明:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(路径被跑到)」;
+#       零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+echo "--- 断言组 1c:AAAgentCore 骨架纯逻辑(AAAgentCoreConformanceTests)---"
+assert_contains "$OUT" "AGENTCORE_TESTS passed=" "agent-delegation 01 纯逻辑套件已运行(AAAgentCoreConformanceTests)"
+assert_contains "$OUT" "假 AgentPort:launch 记录可执行路径" "①FakeAgentPort:launch 记录启动规格"
+assert_contains "$OUT" "假 AgentPort:launch 记录 stdin 处置(writeThenKeepOpen)" "①FakeAgentPort:记录 stdin 处置策略"
+assert_contains "$OUT" "假 AgentPort:nextEvent 依次弹出预置脚本第 1 行" "①FakeAgentPort:nextEvent 依次回放事件脚本"
+assert_contains "$OUT" "假 AgentPort:脚本弹完后 nextEvent 返回 nil" "①FakeAgentPort:脚本弹完→nil"
+assert_contains "$OUT" "假 AgentPort:进程中途死亡后 nextEvent 返回 nil(脚本未弹完亦然)" "①FakeAgentPort:中途死亡→nextEvent nil"
+assert_contains "$OUT" "假 AgentPort:终止调用被记录(取消/反孤儿可核验)" "①FakeAgentPort:terminate 记录"
+assert_contains "$OUT" "假 AgentPort:programNextLaunchToFail 后 launch 抛错" "①FakeAgentPort:编程 launch 失败"
+assert_contains "$OUT" "AgentMessage.toolUse:kind/tool/callID/input 正确" "②AgentMessage:便利构造器 toolUse 关键字段"
+assert_contains "$OUT" "AgentMessage:toolUse 的 callID 经 Codable round-trip 保留" "②AgentMessage:CallID round-trip 全链保留"
+assert_contains "$OUT" "AgentMessage:text 消息编码后 JSON 不含 nil 键 tool(encodeIfPresent)" "②AgentMessage:nil 键省略(encodeIfPresent)"
+assert_contains "$OUT" "AgentMessage:6 型样本经 JSONEncoder/Decoder round-trip 全等" "②AgentMessage:6 型 Codable round-trip 全等"
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
 echo "--- 断言组 2:list E2E(起真宿主)---"
@@ -757,6 +788,18 @@ if [ "$GREP_PORT_RC" -eq 1 ] && [ -z "$PORT_DECL_HOST" ]; then
   echo "PASS: Host* 侧不声明 Port 协议(只提供真实现/假件),边界正确"; PASS=$((PASS+1))
 else
   echo "FAIL: Port 协议不应声明在 Host*(命中: $PORT_DECL_HOST)"; FAIL=$((FAIL+1))
+fi
+
+# (3d) agent-delegation 01 铁律:AAAgentCore 不 import 任何 Host*(与 PluginProxy 同级把关,照 3a 的 grep 模式)。
+#      正则同 3a(覆盖子句形 import);显式判 grep 退出码:rc==1 无匹配(好)/ rc==0 命中禁止 import(坏)/ rc>=2 grep 自身出错(绝不算过)。
+AC_GREP_HITS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?AAHost(Runtime|MacOS|TestKit)' Sources/AAAgentCore/)"
+AC_GREP_RC=$?
+if [ "$AC_GREP_RC" -eq 1 ]; then
+  echo "PASS: AAAgentCore 源码不含 import Host*(AAHostRuntime|AAHostMacOS|AAHostTestKit)"; PASS=$((PASS+1))
+elif [ "$AC_GREP_RC" -eq 0 ]; then
+  echo "FAIL: AAAgentCore 源码出现 Host* 的 import:"; printf '%s\n' "$AC_GREP_HITS"; FAIL=$((FAIL+1))
+else
+  echo "FAIL: grep 守卫自身出错(rc=$AC_GREP_RC),无法核验 AAAgentCore 边界 —— 绝不算过"; FAIL=$((FAIL+1))
 fi
 
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
