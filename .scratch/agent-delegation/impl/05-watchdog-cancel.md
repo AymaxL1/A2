@@ -4,7 +4,7 @@
 
 **Blocked by:** 01(Port);04(取消/超时作用于任务状态机)。
 
-**Status:** ready-for-agent
+**Status:** done(`8f1c270`,PASS=303)
 **验证环:** vfsoverlay 可验(ClockPort 注入时间,零真实等待、零真进程)。
 
 - [ ] 消息静默看门狗:以 ClockPort 驱动,`静默时长 > 阈值` 判卡死 → 触发终止 → 状态迁 `timeout`;阈值可配。

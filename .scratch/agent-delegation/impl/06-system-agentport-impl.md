@@ -4,7 +4,7 @@
 
 **Blocked by:** 01(AgentPort 协议)。
 
-**Status:** ready-for-agent
+**Status:** done(`ea726d8`,PASS=351)
 **验证环:** vfsoverlay 可验(被测进程用 `/bin/sh`/`sleep` 等系统命令,验证进程组信号语义;非门禁的真 agent 冒烟留 07)。
 
 - [ ] `SystemAgentPort` 实现 `AgentPort`:基于 `Process` 拉起,配置进程组(`setpgid` 等价),逐行读 stdout 成事件流;探活基于 pid。

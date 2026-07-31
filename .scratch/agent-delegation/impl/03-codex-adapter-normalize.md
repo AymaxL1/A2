@@ -4,7 +4,7 @@
 
 **Blocked by:** 01(需 6 型消息模型)。
 
-**Status:** ready-for-agent
+**Status:** done(`fc0aa1a`,PASS=193)
 **验证环:** vfsoverlay 可验(纯函数 + 静态样本,无需真 agent)。
 
 - [ ] `CodexAdapter` 纯函数 `(原始行) -> [统一消息]`:处理 `thread.started/turn.started/item.started/item.completed/turn.completed/turn.failed` + 非终态 `error`;`item.*` 里的工具调用归一化并保留调用标识为 `callID`。

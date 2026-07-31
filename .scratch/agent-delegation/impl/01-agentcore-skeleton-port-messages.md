@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done(`e350204`,PASS=148)
 **验证环:** vfsoverlay 可验(纯逻辑 + executable,无需 Xcode、无需真 agent)。
 
 - [ ] `Package.swift` 新增 library target `AAAgentCore`,依赖仅 `AAContracts`;产品导出。

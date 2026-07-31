@@ -4,7 +4,7 @@
 
 **Blocked by:** 01(需消息模型 + AgentPort);消费 02/03 产出的统一消息流,但对「统一消息」编程而非绑具体 adapter,故不 blocked by 02/03。
 
-**Status:** ready-for-agent
+**Status:** done(`94cb0bc`,PASS=265)
 **验证环:** vfsoverlay 可验(经 Fake FileSystem/Clock Port,静态断言落盘结构)。
 
 - [ ] `AAContracts.AAPaths` 加 `agentTasksRoot`(`~/.aa/agent-tasks/`)静态常量作单一来源(与 `socketPath` 同款)。
