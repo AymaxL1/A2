@@ -13,6 +13,7 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     private let lock = NSLock()
     private var blob: Data?
     private var recoveryBlob: Data?
+    private var tombstoned = false
 
     /// save 调用次数(断言「接管成功即持久化」)。
     public private(set) var saveCount = 0
@@ -22,6 +23,8 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     public var failSaves = false
     /// 编程:让 load 抛错，证明不可读标记不会被误判为“不存在”。
     public var failLoads = false
+    public var failRecoveryRemoval = false
+    public var failTombstoneWrites = false
 
     /// 构造时可预置一坨已持久化字节(模拟「上一世代崩溃后残留的接管态清单」)。
     public init(initial: Data? = nil, initialRecovery: Data? = nil) {
@@ -31,12 +34,14 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
 
     public func load() throws -> Data? {
         lock.lock(); defer { lock.unlock() }
+        if tombstoned { return nil }
         if failLoads { throw FakeStoreError.loadProgrammedToFail }
         return blob
     }
 
     public func loadRecovery() throws -> Data? {
         lock.lock(); defer { lock.unlock() }
+        if tombstoned { return nil }
         return recoveryBlob
     }
 
@@ -45,25 +50,34 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
         if failSaves { throw FakeStoreError.saveProgrammedToFail }
         blob = data
         recoveryBlob = data
+        tombstoned = false
         saveCount += 1
     }
 
-    public func clear() {
+    public func clear() throws {
         lock.lock(); defer { lock.unlock() }
+        if failTombstoneWrites { throw FakeStoreError.tombstoneProgrammedToFail }
+        tombstoned = true
         blob = nil
-        recoveryBlob = nil
+        if !failRecoveryRemoval { recoveryBlob = nil }
         clearCount += 1
     }
 
     /// 测试助手:当前是否有持久化(供断言「清标记后无残留」/「接管后有清单」)。
     public var isPersisted: Bool {
         lock.lock(); defer { lock.unlock() }
-        return blob != nil || recoveryBlob != nil
+        return !tombstoned && (blob != nil || recoveryBlob != nil)
+    }
+
+    public var hasStaleRecoveryBlob: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return tombstoned && recoveryBlob != nil
     }
 
     public enum FakeStoreError: Error {
         case loadProgrammedToFail
         case saveProgrammedToFail
+        case tombstoneProgrammedToFail
     }
 }
 

@@ -29,6 +29,8 @@ extension ProxyConformanceTests {
         testCorruptPrimaryUsesRecoveryCopy(&report)
         testUnreadablePrimaryUsesRecoveryCopy(&report)
         testInvalidMarkerWithoutRecoveryBlocksKernel(&report)
+        testClearTombstoneMasksStaleRecovery(&report)
+        testTombstoneWriteFailureDefers(&report)
     }
 
     // ============ ① 自愈判定纯函数(五分支,注入布尔信号,无 I/O)============
@@ -294,7 +296,8 @@ extension ProxyConformanceTests {
                                  stateStore: store, reaper: reaper)
 
         let r = plugin.selfHeal()
-        report.check(r.decision == .restoreSnapshot, "08 还原失败:走还原分支(内核不可重启)")
+        report.check(r.decision == .deferred && !r.allowsKernelLaunch,
+                     "08 还原失败:deferred 且禁止常规内核启停")
         // 核心:还原真失败 → **绝不清标记**,下次启动重试(否则永久滞留死端口)。
         report.check(store.isPersisted && store.clearCount == 0,
                      "08 修清标记 bug:还原失败 → 保留持久化标记(clearCount=0),下次启动重试(不留死端口后清标记)")
@@ -393,5 +396,39 @@ extension ProxyConformanceTests {
                      "08 主副标记均无效:不猜测 loopback 所有权，不改用户本地代理")
         report.check(store.isPersisted && store.clearCount == 0,
                      "08 主副标记均无效:保留持久化证据供人工处理/下次重试")
+    }
+
+    /// recovery 物理删除失败时，已清除 tombstone 必须让陈旧副本失去权威性。
+    private static func testClearTombstoneMasksStaleRecovery(_ report: inout TestReport) {
+        let bytes = Data("old-state".utf8)
+        let store = FakeTakeoverStateStore(initial: bytes, initialRecovery: bytes)
+        store.failRecoveryRemoval = true
+        let cleared = (try? store.clear()) != nil
+        let primary = try? store.load()
+        let recovery = try? store.loadRecovery()
+        report.check(cleared && store.hasStaleRecoveryBlob,
+                     "08 tombstone:恢复副本物理删除失败时逻辑清理仍成功")
+        report.check(primary == nil && recovery == nil && !store.isPersisted,
+                     "08 tombstone:陈旧恢复副本被墓碑屏蔽，不再成为接管证据")
+    }
+
+    private static func testTombstoneWriteFailureDefers(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: [
+            ServiceProxyState(service: "Wi-Fi",
+                              http: ProxySetting(enabled: true, host: "127.0.0.1", port: 7890),
+                              https: .off, socks: .off)
+        ])
+        let state = encodedState(TakeoverState(snapshot: SystemProxySnapshot(services: [
+            ServiceProxyState(service: "Wi-Fi", http: .off, https: .off, socks: .off)
+        ]), kernelPort: 7890, kernelPID: 0, kernelExecutablePath: "", takeoverAt: 1000))
+        let store = FakeTakeoverStateStore(initial: state, initialRecovery: state)
+        store.failTombstoneWrites = true
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        let result = plugin.selfHeal()
+        report.check(result.decision == .deferred && !result.allowsKernelLaunch,
+                     "08 tombstone 写失败:deferred 且禁止常规内核启停")
+        report.check(store.isPersisted && store.clearCount == 0,
+                     "08 tombstone 写失败:主副证据保持权威，未发生半清理")
     }
 }

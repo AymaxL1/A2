@@ -381,7 +381,7 @@ sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-initial.json" 2>/dev/null
 crash_generation() {
   teardown_hosts also-stub          # 轮询等上一剧本宿主真死 + 清默认标记(本剧本用独立 $SHSTATE,不受影响)
   write_shnet_initial
-  rm -f "$SHSTATE" "$SHSTATE.recovery"
+  rm -f "$SHSTATE" "$SHSTATE.recovery" "$SHSTATE.cleared"
   AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSETUP_FAKE_STATE="$SHNET" \
     AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
@@ -513,7 +513,7 @@ json.dump(d,open(p,"w"),sort_keys=True)' "$SHSTATE.recovery"
     for _ in $(seq 1 100); do kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.1; done
     if grep -qF '"enabled":true,"host":"127.0.0.1","port":8888' "$SHNET"; then echo "PASS: 剧本D 退出后精确恢复用户本地第三方代理 127.0.0.1:8888"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 未恢复用户本地第三方代理: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
     if grep -qF '"port":7890' "$SHNET"; then echo "FAIL: 剧本D 退出后仍残留 AA 死端口 7890"; FAIL=$((FAIL+1)); else echo "PASS: 剧本D 退出后无 AA 死端口 7890"; PASS=$((PASS+1)); fi
-    if [ ! -e "$SHSTATE" ] && [ ! -e "$SHSTATE.recovery" ]; then echo "PASS: 剧本D 精确恢复成功后清除主副标记"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 主副标记未清干净"; FAIL=$((FAIL+1)); fi
+    if [ ! -e "$SHSTATE" ] && [ ! -e "$SHSTATE.recovery" ] && [ ! -e "$SHSTATE.cleared" ]; then echo "PASS: 剧本D 精确恢复成功后清除主副标记与临时墓碑"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 主副标记/墓碑未清干净"; FAIL=$((FAIL+1)); fi
   else
     echo "FAIL: 剧本D 恢复副本宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
   fi
@@ -521,4 +521,4 @@ else
   echo "FAIL: 剧本D crash_generation 未成功"; FAIL=$((FAIL+1))
 fi
 teardown_hosts also-stub
-rm -f "$SHSTATE" "$SHSTATE.recovery" "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery"
+rm -f "$SHSTATE" "$SHSTATE.recovery" "$SHSTATE.cleared" "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery" "$AA_TAKEOVER_STATE_PATH.cleared"

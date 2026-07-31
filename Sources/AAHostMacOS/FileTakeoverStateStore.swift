@@ -15,16 +15,19 @@ import AAPluginSDK
 public final class FileTakeoverStateStore: TakeoverStateStore, @unchecked Sendable {
     private let url: URL
     private let recoveryURL: URL
+    private let tombstoneURL: URL
     private let lock = NSLock()
 
     public init(path: String) {
         self.url = URL(fileURLWithPath: path)
         self.recoveryURL = URL(fileURLWithPath: path + ".recovery")
+        self.tombstoneURL = URL(fileURLWithPath: path + ".cleared")
     }
 
     /// 文件不存在返回 nil；存在但不可读时抛错，绝不能与“无残留”混为一谈。
     public func load() throws -> Data? {
         lock.lock(); defer { lock.unlock() }
+        if FileManager.default.fileExists(atPath: tombstoneURL.path) { return nil }
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try Data(contentsOf: url)
     }
@@ -32,6 +35,7 @@ public final class FileTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     /// 独立恢复副本；与主文件分开原子写，主文件损坏/不可读时仍可取回完整快照。
     public func loadRecovery() throws -> Data? {
         lock.lock(); defer { lock.unlock() }
+        if FileManager.default.fileExists(atPath: tombstoneURL.path) { return nil }
         guard FileManager.default.fileExists(atPath: recoveryURL.path) else { return nil }
         return try Data(contentsOf: recoveryURL)
     }
@@ -45,6 +49,9 @@ public final class FileTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
         // 先落恢复副本、再落主文件；任一步失败都会抛错，调用方因而不会开始系统代理写入。
         try atomicWrite(data, to: recoveryURL)
         try atomicWrite(data, to: url)
+        if FileManager.default.fileExists(atPath: tombstoneURL.path) {
+            try FileManager.default.removeItem(at: tombstoneURL)
+        }
     }
 
     private func atomicWrite(_ data: Data, to target: URL) throws {
@@ -64,10 +71,17 @@ public final class FileTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
         }
     }
 
-    /// 清除(幂等:文件不存在为 no-op)。表示「无残留接管」,下次启动为 clean。
-    public func clear() {
+    /// 先原子落 tombstone，再尽力删除恢复副本与主文件。单边删除失败时残留会被 tombstone 屏蔽；
+    /// 两份均删除成功后再移除 tombstone。tombstone 写失败会抛错，且不会开始删除任何证据。
+    public func clear() throws {
         lock.lock(); defer { lock.unlock() }
-        try? FileManager.default.removeItem(at: url)
-        try? FileManager.default.removeItem(at: recoveryURL)
+        try FileManager.default.createDirectory(at: tombstoneURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try atomicWrite(Data("cleared".utf8), to: tombstoneURL)
+        var allRemoved = true
+        for target in [recoveryURL, url] where FileManager.default.fileExists(atPath: target.path) {
+            do { try FileManager.default.removeItem(at: target) }
+            catch { allRemoved = false }
+        }
+        if allRemoved { try? FileManager.default.removeItem(at: tombstoneURL) }
     }
 }

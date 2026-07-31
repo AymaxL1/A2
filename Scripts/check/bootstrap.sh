@@ -97,6 +97,8 @@ REAL_TAKEOVER="$HOME/Library/Application Support/AA/takeover-state.json"
 REAL_TAKEOVER_BEFORE="$( [ -e "$REAL_TAKEOVER" ] && md5 -q "$REAL_TAKEOVER" 2>/dev/null || echo ABSENT )"
 REAL_TAKEOVER_RECOVERY="$REAL_TAKEOVER.recovery"
 REAL_TAKEOVER_RECOVERY_BEFORE="$( [ -e "$REAL_TAKEOVER_RECOVERY" ] && md5 -q "$REAL_TAKEOVER_RECOVERY" 2>/dev/null || echo ABSENT )"
+REAL_TAKEOVER_CLEARED="$REAL_TAKEOVER.cleared"
+REAL_TAKEOVER_CLEARED_BEFORE="$( [ -e "$REAL_TAKEOVER_CLEARED" ] && md5 -q "$REAL_TAKEOVER_CLEARED" 2>/dev/null || echo ABSENT )"
 # 10 票:真实 AppSupport 的订阅目录同法快照(递归列表 md5),跑后比对,证明未污染。
 REAL_SUBS_DIR="$HOME/Library/Application Support/AA/subscriptions"
 REAL_SUBS_BEFORE="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/null | md5 2>/dev/null || echo ABSENT )"
@@ -117,7 +119,7 @@ cleanup() {
   [ -n "${SUBHTTP_PID:-}" ] && kill "$SUBHTTP_PID" 2>/dev/null
   [ -n "${REAL_KERNEL_PID:-}" ] && kill "$REAL_KERNEL_PID" 2>/dev/null
   rm -f "$SOCK" 2>/dev/null
-  rm -f "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery" 2>/dev/null   # 08:清临时区主文件与恢复副本
+  rm -f "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery" "$AA_TAKEOVER_STATE_PATH.cleared" 2>/dev/null   # 08:清临时区主副文件与墓碑
 }
 trap cleanup EXIT
 

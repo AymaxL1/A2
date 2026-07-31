@@ -151,8 +151,8 @@ public final class ProxyPlugin: @unchecked Sendable {
                 do {
                     try controller.restore(plan.rollbackSnapshot)
                     if previousSnapshot == nil {
+                        try clearTakeover()
                         proxySnapshot = nil
-                        clearTakeover()
                     } else {
                         proxySnapshot = plan.snapshot
                     }
@@ -186,9 +186,9 @@ public final class ProxyPlugin: @unchecked Sendable {
         }
         do {
             try controller.restore(snapshot)
-            proxySnapshot = nil
             // 08:正常还原成功即清除持久化标记(表示无残留接管;下次启动为 clean)。清除幂等,失败不崩。
-            clearTakeover()
+            try clearTakeover()
+            proxySnapshot = nil
             return .success(.object(["enabled": .bool(false), "restored": .bool(true)]))
         } catch {
             return .failure(WireError(code: WireErrorCode.capabilityFailed,
@@ -208,9 +208,9 @@ public final class ProxyPlugin: @unchecked Sendable {
         let controller = SystemProxyController(net: networkConfigPort)
         do {
             try controller.restore(snapshot)
-            lock.lock(); proxySnapshot = nil; lock.unlock()   // 成功后才清
             // 08:正常退出还原成功 → 清除持久化标记(下次启动为 clean,无残留)。
-            clearTakeover()
+            try clearTakeover()
+            lock.lock(); proxySnapshot = nil; lock.unlock()   // 还原与清标记都成功后才清内存快照
         } catch {
             // 不静默:记日志、**保留快照与持久化标记**(08 崩溃自愈可据此复原;进程即将退出,残留快照不影响本世代)。
             FileHandle.standardError.write(Data("[PluginProxy] 宿主退出还原系统代理失败(保留快照/持久化标记供 08 自愈): \(error)\n".utf8))
@@ -286,9 +286,14 @@ public final class ProxyPlugin: @unchecked Sendable {
         switch decision {
         case .userChangedProxy:
             // 代理已不指向我方端口(用户手动改过 / 已直连)→ 绝不覆盖用户设置,只清陈旧标记。
-            clearTakeover()
-            lock.lock(); proxySnapshot = nil; lock.unlock()
-            return SelfHealReport(decision: .userChangedProxy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+            do {
+                try clearTakeover()
+                lock.lock(); proxySnapshot = nil; lock.unlock()
+                return SelfHealReport(decision: .userChangedProxy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+            } catch {
+                selfHealLog("清除陈旧接管标记失败(\(error))，保留证据并 deferred")
+                return SelfHealReport(decision: .deferred, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
+            }
 
         case .recoverTakeover:
             let port = healthyPort!
@@ -327,7 +332,7 @@ public final class ProxyPlugin: @unchecked Sendable {
             return SelfHealReport(decision: .alreadyHealthy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
 
         case .clean, .deferred:
-            // 三者均由前置分支提前返回；此处仅为 switch 完备。
+            // 二者均由前置分支提前返回；此处仅为 switch 完备。
             return SelfHealReport(decision: decision, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
         }
     }
@@ -337,11 +342,12 @@ public final class ProxyPlugin: @unchecked Sendable {
                               reapedPID: Int32?, relaunched: Bool) -> SelfHealReport {
         do {
             try controller.restore(snapshot)
+            try clearTakeover()                               // 只有真成功才清
             lock.lock(); proxySnapshot = nil; lock.unlock()
-            clearTakeover()                                   // 只有真成功才清
         } catch {
             selfHealLog("还原快照失败(\(error)),**保留持久化标记**待下次启动重试(绝不清标记以免永久滞留死端口)")
             // 保留 proxySnapshot(若上层需要)与持久化标记;不清。
+            return SelfHealReport(decision: .deferred, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
         }
         return SelfHealReport(decision: .restoreSnapshot, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
     }
@@ -414,8 +420,8 @@ public final class ProxyPlugin: @unchecked Sendable {
     }
 
     /// 清除持久化接管态(幂等)。
-    private func clearTakeover() {
-        stateStore.clear()
+    private func clearTakeover() throws {
+        try stateStore.clear()
     }
 
     /// 有界轮询直到 REST 可读到 mixed-port(内核重启后控制面就绪),返回端口;超时返回 nil。

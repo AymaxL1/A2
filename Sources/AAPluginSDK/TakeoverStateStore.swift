@@ -18,20 +18,20 @@ import Foundation
 /// - `load`:读取已持久化的字节;无(从未接管 / 已清除)返回 nil;存在但读取失败则抛错,不得误判为「无残留」。
 /// - `loadRecovery`:读取独立恢复副本；主文件损坏/不可读时供域层恢复完整快照。
 /// - `save`:分别原子写入主文件与恢复副本。任一失败即抛错，调用方不得开始系统代理写入。
-/// - `clear`:清除持久化(还原成功后表示「无残留接管」)。幂等:本就不存在为 no-op。
+/// - `clear`:先持久化已清除 tombstone，再清主副数据；tombstone 写失败则抛错。幂等。
 public protocol TakeoverStateStore: Sendable {
     func load() throws -> Data?
     func loadRecovery() throws -> Data?
     func save(_ data: Data) throws
-    func clear()
+    func clear() throws
 }
 
-/// 无操作 TakeoverStateStore(缺省注入):load 永远 nil、save/clear 为 no-op。
+/// 无操作 TakeoverStateStore(缺省注入):主副 load 永远 nil、save/clear 为 no-op。
 /// 用于「持久化关闭」的场景(如纯逻辑单测不关心持久化时);生产/E2E 由宿主注入文件后端真实现。
 public struct NoopTakeoverStateStore: TakeoverStateStore {
     public init() {}
     public func load() throws -> Data? { nil }
     public func loadRecovery() throws -> Data? { nil }
     public func save(_ data: Data) throws {}
-    public func clear() {}
+    public func clear() throws {}
 }
