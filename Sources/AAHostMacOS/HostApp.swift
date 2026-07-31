@@ -148,7 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostLog("崩溃自愈: \(healReport.logLine)")
 
         // 0d) 拉起内核 —— 若自愈已(为恢复接管)重启内核则跳过,避免重复拉起;否则按常规拉起(clean/用户改过/还原快照/无标记路径)。
-        if healReport.kernelRelaunched {
+        if !healReport.allowsKernelLaunch {
+            hostLog("崩溃自愈 deferred：为避免无还原快照的内核启停，本次不拉起 mihomo。")
+        } else if healReport.kernelRelaunched {
             hostLog("mihomo 内核已由自愈(恢复接管)拉起,跳过常规拉起。")
         } else if let kp = kernelPath {
             if plugin.launchKernel() {
@@ -163,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 0d') 10 票(F3)重启后机械补齐:内核确认拉起之后,若清单有激活订阅,让内核从其物化配置重载
         //      (best-effort,有界就绪轮询,失败不阻断启动;不改 08 判定,只在其后追加一步)。仅在有内核时做(否则 reload 无意义)。
         //      自愈重启分支与常规拉起分支都覆盖:两者都已让内核起来。放在 server.start() 之前——故 socket 出现即代表恢复已跑完。
-        if healReport.kernelRelaunched || kernelPath != nil {
+        if healReport.allowsKernelLaunch && (healReport.kernelRelaunched || kernelPath != nil) {
             if plugin.reloadActiveSubscriptionIfAny() {
                 hostLog("重启恢复: 已让内核重载当前激活订阅的配置(catalog 与内核对齐)")
             } else {

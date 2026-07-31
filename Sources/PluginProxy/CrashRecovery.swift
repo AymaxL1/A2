@@ -52,6 +52,8 @@ public enum SelfHealDecision: String, Sendable, Equatable {
     case restoreSnapshot
     /// ④ 有标记,系统代理指向我方端口且端口仍活(其实没崩,或已恢复)→ 视为正常,校正标记即可。
     case alreadyHealthy
+    /// (非 decide 产物,执行层专用)标记不可解码/读取时，禁用指向本机的代理并降级到可联网状态。
+    case failSafeDirect
     /// (非 decide 产物,执行层专用)采集信号失败(如读当前系统代理抛错)→ 保守中止:**保留标记、不清、不误判**,待下次启动重试。
     /// `decide` 只做五条策略分派,绝不返回本值;它表达「无法判定」这一操作性中止,与「判定为某策略」区分开。
     case deferred
@@ -119,6 +121,9 @@ public struct SelfHealReport: Sendable, Equatable {
         self.reapedOrphanPID = reapedOrphanPID
         self.kernelRelaunched = kernelRelaunched
     }
+
+    /// deferred 表示隔离/采集未完成；宿主不得在无还原快照时走常规内核启停。
+    public var allowsKernelLaunch: Bool { decision != .deferred }
 
     /// 一行人读摘要(宿主启动日志用;E2E 可 grep)。
     public var logLine: String {

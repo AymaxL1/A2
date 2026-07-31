@@ -28,6 +28,7 @@ extension ProxyConformanceTests {
         testExecutorCaptureFailureDefers(&report)  // 修误判:读代理失败 → deferred 保留标记,不误判用户改过
         testCorruptMarkerDefers(&report)
         testUnreadableMarkerDefers(&report)
+        testInvalidMarkerFallbackFailureBlocksKernel(&report)
     }
 
     // ============ ① 自愈判定纯函数(五分支,注入布尔信号,无 I/O)============
@@ -326,33 +327,63 @@ extension ProxyConformanceTests {
                      "08 修误判:采集失败即中止,未对系统代理做任何写入")
     }
 
-    /// 标记存在但损坏绝不能等同于“不存在”；应保留证据并 deferred。
+    /// 标记存在但损坏绝不能等同于“不存在”；可读写网络时应隔离本地死代理并降级直连。
     private static func testCorruptMarkerDefers(_ report: inout TestReport) {
         let net = FakeNetworkConfigPort(initial: [
             ServiceProxyState(service: "Wi-Fi",
                               http: ProxySetting(enabled: true, host: "127.0.0.1", port: 7890),
-                              https: .off, socks: .off)
+                              https: ProxySetting(enabled: true, host: "localhost", port: 7890),
+                              socks: ProxySetting(enabled: true, host: "203.0.113.8", port: 1080))
         ])
         let store = FakeTakeoverStateStore(initial: Data("not-json".utf8))
         let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
                                  kernelPath: nil, controlPort: 9090, stateStore: store)
         let result = plugin.selfHeal()
-        report.check(result.decision == .deferred,
-                     "08 损坏标记:存在但解码失败 → deferred(不得误判 clean)")
-        report.check(store.isPersisted && store.clearCount == 0,
-                     "08 损坏标记:保留原文件供诊断/后续恢复")
+        report.check(result.decision == .failSafeDirect,
+                     "08 损坏标记:存在但解码失败 → failSafeDirect(不得误判 clean)")
+        report.check(net.currentState(service: "Wi-Fi")?.http == .off
+                     && net.currentState(service: "Wi-Fi")?.https == .off,
+                     "08 损坏标记:禁用指向本机的代理，绝不滞留死端口")
+        report.check(net.currentState(service: "Wi-Fi")?.socks.host == "203.0.113.8",
+                     "08 损坏标记:保留非本机第三方代理")
+        report.check(!store.isPersisted && store.clearCount == 1,
+                     "08 损坏标记:降级直连成功后清除无效标记")
     }
 
     private static func testUnreadableMarkerDefers(_ report: inout TestReport) {
-        let net = FakeNetworkConfigPort(initial: [ServiceProxyState(service: "Wi-Fi", http: .off, https: .off, socks: .off)])
+        let net = FakeNetworkConfigPort(initial: [
+            ServiceProxyState(service: "Wi-Fi",
+                              http: ProxySetting(enabled: true, host: "::1", port: 7890),
+                              https: .off, socks: .off)
+        ])
         let store = FakeTakeoverStateStore(initial: Data("present".utf8))
         store.failLoads = true
         let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
                                  kernelPath: nil, controlPort: 9090, stateStore: store)
         let result = plugin.selfHeal()
-        report.check(result.decision == .deferred,
-                     "08 不可读标记:load 抛错 → deferred(不得误判 missing/clean)")
+        report.check(result.decision == .failSafeDirect,
+                     "08 不可读标记:load 抛错 → failSafeDirect(不得误判 missing/clean)")
+        report.check(net.currentState(service: "Wi-Fi")?.http == .off,
+                     "08 不可读标记:禁用 IPv6 loopback 死代理")
+        report.check(!store.isPersisted,
+                     "08 不可读标记:降级直连成功后清除无效标记")
+    }
+
+    /// 无法完成隔离时必须保留证据并禁止宿主走常规内核启停。
+    private static func testInvalidMarkerFallbackFailureBlocksKernel(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: [
+            ServiceProxyState(service: "Wi-Fi",
+                              http: ProxySetting(enabled: true, host: "127.0.0.1", port: 7890),
+                              https: .off, socks: .off)
+        ])
+        net.failWrites = true
+        let store = FakeTakeoverStateStore(initial: Data("not-json".utf8))
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        let result = plugin.selfHeal()
+        report.check(result.decision == .deferred && !result.allowsKernelLaunch,
+                     "08 无效标记隔离失败:deferred 且禁止常规内核启停")
         report.check(store.isPersisted && store.clearCount == 0,
-                     "08 不可读标记:不清除持久化证据")
+                     "08 无效标记隔离失败:保留持久化证据供下次重试")
     }
 }
