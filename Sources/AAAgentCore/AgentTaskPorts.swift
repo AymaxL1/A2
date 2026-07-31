@@ -55,6 +55,15 @@ public protocol AgentClockPort: Sendable {
 public protocol AgentFileSystemPort: Sendable {
     func createDirectory(at path: String) throws
     func write(_ text: String, to path: String) throws
+    /// 写一个**只有属主可读写(0600)**的文件 —— 专给**凭据副本**用。
+    /// 今天唯一的调用点是 `AgentCodexHome` 拷 `auth.json`(里面是用户的 OAuth token)。
+    ///
+    /// 为什么单立一个方法而不是给 `write` 加个权限参数:语义完全不同(这是「凭据落盘」,不是「写文件」),
+    ///   单立一个名字让「全仓哪些路径会写出凭据」变成一次 grep 就能答的问题;既有 write 调用点也不必都去关心权限位。
+    /// **为什么刻意不给默认实现**:默认实现只能退化成普通 `write`(umask 下通常是 0644),
+    ///   那样将来新增一个端口实现就会**静默**把凭据副本写成人人可读 —— 正是本模块从头到尾在防的那类 fail-open。
+    ///   故它是必答题:少答一个方法,编译期就红。
+    func writePrivate(_ text: String, to path: String) throws
     func append(_ line: String, to path: String) throws
     func read(at path: String) throws -> String
     func exists(at path: String) -> Bool

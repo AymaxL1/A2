@@ -15,6 +15,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "aa", targets: ["aa"]),
+        // agent-delegation 07:委托试驾 CLI(与 `aa` 各自独立,互不影响 —— 守并行红线)。
+        .executable(name: "aa-agent", targets: ["aa-agent"]),
         .library(name: "AAContracts", targets: ["AAContracts"]),
         .library(name: "AAPluginSDK", targets: ["AAPluginSDK"]),
         .library(name: "AAHostRuntime", targets: ["AAHostRuntime"]),
@@ -69,6 +71,12 @@ let package = Package(
 
         // ④ CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),
+        // agent-delegation 07:委托试驾 CLI(`run|status|cancel|list|prune`)。
+        //   依赖边与源码实际 import 一一对应:AAAgentCore(组装 / 状态机 / 归一化 / 看门狗)+
+        //   AAAgentSystem(真进程端口与真文件系统端口)+ AAContracts(退出码单一来源)。
+        //   **绝不依赖 AAHostMacOS / AAHostRuntime / PluginProxy**:它是 agent-delegation 模块自己的入口,
+        //   与 v1-core-proxy 的 16 票并行落地、互不踩施工面(现有 `aa` 一个字节都不动)。
+        .executableTarget(name: "aa-agent", dependencies: ["AAContracts", "AAAgentCore", "AAAgentSystem"]),
     ],
     swiftLanguageVersions: [.v5]
 )

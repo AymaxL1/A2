@@ -24,6 +24,8 @@ public final class FakeFileSystem: AgentFileSystemPort, @unchecked Sendable {
     private var failingWrites: Set<String> = []
     private var writeCounts: [String: Int] = [:]
     private var appendCounts: [String: Int] = [:]
+    /// 走过 `writePrivate`(凭据通道,契约 0600)的路径。
+    private var privateWritePaths: Set<String> = []
 
     public init() {}
 
@@ -66,6 +68,12 @@ public final class FakeFileSystem: AgentFileSystemPort, @unchecked Sendable {
         return writeCounts[Self.normalize(path)] ?? 0
     }
 
+    /// 该路径是否走的是**凭据通道**(`writePrivate`,契约 0600)而不是普通 `write`。
+    public func wasWrittenPrivately(at path: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return privateWritePaths.contains(Self.normalize(path))
+    }
+
     /// 该路径被**追加**过几次。
     public func appendCount(at path: String) -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -99,6 +107,18 @@ public final class FakeFileSystem: AgentFileSystemPort, @unchecked Sendable {
         try requireParentDirectory(of: p)
         files[p] = text
         writeCounts[p] = (writeCounts[p] ?? 0) + 1
+    }
+
+    /// 凭据副本写入(契约:0600)。假件没有真权限位,故记一笔「这个路径是走凭据通道写的」,
+    /// 让断言能反证「auth.json 绝不是被普通 write 顺手写出去的」。
+    public func writePrivate(_ text: String, to path: String) throws {
+        let p = Self.normalize(path)
+        lock.lock(); defer { lock.unlock() }
+        if failingWrites.contains(p) { throw FakeFileSystemError.programmedFailure(p) }
+        try requireParentDirectory(of: p)
+        files[p] = text
+        writeCounts[p] = (writeCounts[p] ?? 0) + 1
+        privateWritePaths.insert(p)
     }
 
     public func append(_ line: String, to path: String) throws {

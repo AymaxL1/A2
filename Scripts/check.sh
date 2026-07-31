@@ -195,6 +195,20 @@ swiftc "${SWIFTC_COMMON[@]}" \
   Sources/aa/*.swift \
   || { echo "FAIL: 编译 aa 失败"; exit 1; }
 
+# agent-delegation 07:委托试驾 CLI aa-agent(独立可执行,**与 aa 零共享**——守并行红线)。
+#   模块名用 aa_agent(横杠不是合法 Swift 标识符;SPM 也是这么折的)。链接 Contracts + AgentCore + AgentSystem 三个 .o。
+#   注意:门禁只会用它跑 `--help` / 用法错 / `--dry-run` 三类**零副作用**路径,
+#   **绝不**用它真拉起 claude/codex(那会消耗用户真实配额,且 Claude 侧 bypass 对文件系统无隔离)。
+echo "-- 编译可执行 target: aa-agent(agent-delegation 07 试驾 CLI)"
+swiftc "${SWIFTC_COMMON[@]}" \
+  -parse-as-library \
+  -module-name aa_agent \
+  -I "$MODULES" \
+  -o "$BIN/aa-agent" \
+  "$OBJ/AAContracts.o" "$OBJ/AAAgentCore.o" "$OBJ/AAAgentSystem.o" \
+  Sources/aa-agent/*.swift \
+  || { echo "FAIL: 编译 aa-agent 失败"; exit 1; }
+
 # ⑤ 门禁生成的 Registry 纯逻辑测试 runner —— 断言逻辑在 AAHostTestKit.RegistryConformanceTests,
 #    这里只是入口 shim(main.swift 顶层代码,不需 -parse-as-library)。链接 TestKit + Runtime + Contracts。
 echo "-- 编译测试 runner: registry-tests(驱动 AAHostTestKit.RegistryConformanceTests)"
@@ -210,6 +224,9 @@ cat > "$RUNNER/main.swift" <<'SWIFT'
 //   零真实文件系统、零真实时钟、零真实进程,故**不需要**任何样本目录或环境变量注入)。
 // agent-delegation 05:再追加 AgentWatchdogTests(消息静默看门狗 + 取消/超时中断语义;时间由测试直接喂 epoch 秒、
 //   进程由 FakeAgentPort 假冒 —— **零真实等待、零真进程**,同样不需要样本目录或环境变量注入)。
+// agent-delegation 07:再追加 AgentLaunchAssemblerTests(两家启动参数组装 + 每任务 CODEX_HOME 隔离)。
+//   **绝不拉起任何进程,更绝不真跑 claude/codex**:组装是纯函数,整份 AgentLaunchSpec 逐条断言得出来;
+//   CODEX_HOME 那一组跑在 FakeFileSystem 上,一个字节都不碰用户真实的 ~/.codex/。同样不需要样本目录或环境注入。
 // agent-delegation 06:再追加 SystemAgentPortTests(**唯一碰真进程的套件**:真 /bin/sh 子进程 + 真进程组 + 真信号)。
 //   被测进程一律是系统命令(sleep 时长用唯一值 87137/87139,便于外部核验残留且绝不误伤用户进程);
 //   套件自带 120 秒看门狗,读流意外阻塞时打印 FAIL 并 exit(不让门禁挂死)。
@@ -238,6 +255,8 @@ let r7 = AgentWatchdogTests.run()
 for line in r7.lines { print(line) }
 let r8 = SystemAgentPortTests.run()
 for line in r8.lines { print(line) }
+let r9 = AgentLaunchAssemblerTests.run()
+for line in r9.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
@@ -246,8 +265,9 @@ print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
 print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
 print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
 print("SYSTEMPORT_TESTS passed=\(r8.passed) failed=\(r8.failed)")
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed
-print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed) failed=\(failed)")
+print("LAUNCHASM_TESTS passed=\(r9.passed) failed=\(r9.failed)")
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed + r9.failed
+print("ALL_UNIT passed=\(r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed + r9.passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
@@ -275,6 +295,15 @@ assert_contains() {  # $1 实际文本  $2 期望子串(定长字符串,非正�
     echo "PASS: $3"; PASS=$((PASS+1))
   else
     echo "FAIL: $3 (未找到 '$2';实际输出: $1)"; FAIL=$((FAIL+1))
+  fi
+}
+assert_not_contains() {  # $1 实际文本  $2 **不该**出现的子串(定长字符串)  $3 描述
+  # 同样**不要**用 `grep -q`(理由见 assert_contains):去掉 -q 后 grep 读完全部输入,不产生 SIGPIPE。
+  # 这里 grep 命中(rc=0)才是坏消息,故两支与 assert_contains 相反。
+  if printf '%s' "$1" | grep -F -- "$2" >/dev/null; then
+    echo "FAIL: $3 (不该出现的 '$2' 出现了;实际输出: $1)"; FAIL=$((FAIL+1))
+  else
+    echo "PASS: $3"; PASS=$((PASS+1))
   fi
 }
 assert_exit() {  # $1 期望码  $2 实际码  $3 描述
@@ -623,10 +652,18 @@ assert_contains "$OUT" "SystemAgentPort:stderr 内容被排干进记账(07 票 l
 #   signal 模式在**发 SIGTERM 之前**先断言 `pgrep -g <pgid>` 非空。两者互不替代(前者在探针进程内、后者在门禁进程内)。
 #
 # 记债(归 07 票,即第一次让 SystemProcessPort 与 SystemAgentPort 进同一进程的那张票):
-#   两套反孤儿钩子的合流问题本票只做了**单侧**缓解 —— AAAgentSystem 侧保存前手并链式调用;
-#   而 AAHostMacOS.SystemProcessPort 侧是裸 signal() 不链式,若它**后**初始化就会顶掉本票的钩子,
+#   两套反孤儿钩子的合流问题 06 票只做了**单侧**缓解 —— AAAgentSystem 侧保存前手并链式调用;
+#   而 AAHostMacOS.SystemProcessPort 侧是裸 signal() 不链式,若它**后**初始化就会顶掉那套钩子,
 #   而信号死亡路径不跑 atexit → agent 进程树整树成孤儿。正解是给 SystemProcessPort 补对称的 save+chain
-#   (等 v1-core-proxy 并行红线解冻)。本票绝不修改 AAHostMacOS,故此处只记债;详见 SystemAgentPort.swift 文件头同名段落。
+#   (等 v1-core-proxy 并行红线解冻)。详见 SystemAgentPort.swift 文件头同名段落。
+#
+#   **07 票的处置(如实记下,别以为它做过了)**:债**仍在**,本票没修,也没有触发它的前置条件 ——
+#   新增的 aa-agent 只链接 AAContracts + AAAgentCore + AAAgentSystem,**不链接 AAHostMacOS**(见上面的编译行)。
+#   于是全仓四个可执行里依旧没有任何一个同时装上两套钩子:
+#     aahost = Host* 侧(有 SystemProcessPort,无 AAAgentSystem);
+#     aa = 只有 Contracts;aa-agent 与 registry-tests = agent 侧(有 AAAgentSystem,无 AAHostMacOS)。
+#   合流真正发生的时刻是 12 票起把 agent 委托装进 GUI 宿主的那一刻,那时并行红线也已解冻 ——
+#   在此之前,「靠保证谁先初始化」这种最脆的纪律一次都没有被依赖过。
 echo "--- 断言组 1h':反孤儿钩子 E2E(宿主 exit / 被 SIGTERM 两条路径)---"
 # (1) 正常退出路径 —— atexit 钩子
 PROBE_OUT="$(AA_ORPHAN_PROBE=exit "$TESTRUNNER" 2>&1)"; PROBE_RC=$?
@@ -703,6 +740,323 @@ if [ -z "$RES_SLEEP_PROBE" ]; then
   echo "PASS: 无残留的反孤儿探针子进程($AGENT_SLEEP_PROBE)"; PASS=$((PASS+1))
 else
   echo "FAIL: 残留反孤儿探针子进程($AGENT_SLEEP_PROBE): $RES_SLEEP_PROBE"; FAIL=$((FAIL+1))
+fi
+
+# agent-delegation 07 纯逻辑断言(同一 runner 输出;AgentLaunchAssemblerTests:两家启动参数组装 + CODEX_HOME 隔离)。
+# 口径同 1c–1g:PASS/FAIL 均含描述串,故这些 assert_contains 证明「断言确已运行(路径被跑到)」;
+#   零失败由上面「registry-tests 全绿退出码」(runner 任一 r*.failed>0 即 exit 1)兜底保证。
+# **本组一次进程都不拉、一分钱配额都不花**:组装是纯函数,整份 AgentLaunchSpec 逐条断言得出来 ——
+#   这正是 07 票把参数组装放进 AAAgentCore 而不是 CLI 的理由(放 CLI 就只能靠真拉起才验得了,
+#   而真拉起既烧用户配额、Claude 侧 bypass 又对文件系统无隔离,门禁里根本不能做)。
+#   CODEX_HOME 那一组跑在 FakeFileSystem 上,**一个字节都不碰用户真实的 ~/.codex/**(那里面是 danger-full-access)。
+echo "--- 断言组 1i:启动参数组装 + CODEX_HOME 隔离(AgentLaunchAssemblerTests,零进程零配额)---"
+assert_contains "$OUT" "LAUNCHASM_TESTS passed=" "agent-delegation 07 纯逻辑套件已运行(AgentLaunchAssemblerTests)"
+# ① Claude argv:每一项都指得到 01 spike 的具体样本
+assert_contains "$OUT" "Claude 组装:含 -p 单发形态(01 spike 8/8 样本的调用形状)" "①Claude:-p 单发"
+assert_contains "$OUT" "Claude 组装:含 --output-format stream-json(归一化层消费的就是这个流)" "①Claude:--output-format stream-json"
+assert_contains "$OUT" "Claude 组装:含 --input-format stream-json(prompt 走 stdin 一行 JSON,样本 06 实证)" "①Claude:--input-format stream-json"
+assert_contains "$OUT" "Claude 组装:含 --verbose(01 spike 8/8 成功样本都带,不是可选装饰)" "①Claude:--verbose(样本实证,非装饰)"
+assert_contains "$OUT" "Claude 组装:含 --permission-mode bypassPermissions(不给不是挂起等审批,是 CLI 同步自动拒绝)" "①Claude:bypassPermissions(不给则 agent 什么都干不成)"
+assert_contains "$OUT" "Claude 组装:绝不出现 --bare(它把认证限定为 API key,本机订阅 OAuth 会直接打不开认证)" "①Claude:绝不用 --bare"
+assert_contains "$OUT" "Claude 组装:未指定 model 时绝不出现 --model(用 agent 自己的默认,不替用户做主)" "①Claude:未指定 model 不出现 --model"
+assert_contains "$OUT" "Claude 组装:指定 model 时 --model 恰出现一次且值逐字透传" "①Claude:指定 model 恰出现一次"
+assert_contains "$OUT" "Claude 组装:stdin 是 writeThenKeepOpen 且载荷是单行(ndjson 每行一条记录)" "①Claude:stdin 保持打开(进程不自退,收尾显式管)"
+# ①b stdin 那一行必须是**合法 JSON**(解一遍验),且形状逐字照跑通过的样本 06
+assert_contains "$OUT" "Claude stdin:那一行是可解析的合法 JSON(解一遍验,不靠肉眼)" "①b stdin:是合法 JSON(真解一遍)"
+assert_contains "$OUT" "Claude stdin:形状是 type=user + message.role=user + message.content 为纯字符串(逐字照样本 06)" "①b stdin:形状照实测样本"
+assert_contains "$OUT" "Claude stdin:含引号与换行的 prompt 编码后仍是单行(手拼字符串必然在此翻车)" "①b stdin:含引号换行仍单行"
+assert_contains "$OUT" "Claude stdin:prompt 原文经 JSON 解码后逐字还原(转义正确)" "①b stdin:prompt 逐字还原"
+# ② blocked-args 不可覆盖 —— 双层信任模型的地基,必须钉死
+assert_contains "$OUT" "blocked-args:调用方三次试图改权限档,--permission-mode 仍恰好出现一次(重复参数会让 CLI 行为不确定)" "②blocked:权限档恰出现一次(不产生重复参数)"
+assert_contains "$OUT" "blocked-args:权限档仍是 bypassPermissions,调用方覆盖不动(双层信任模型的地基)" "②blocked:权限档覆盖不动"
+assert_contains "$OUT" "blocked-args:等号形态 --permission-mode=plan 与裸值 acceptEdits 都被剔干净(堵一半等于没堵)" "②blocked:等号形态也堵住"
+assert_contains "$OUT" "blocked-args:调用方塞进来的工具白名单(含 Task/SendMessage)被剔除,能力面只能收紧不能放开" "②blocked:能力面只能收紧"
+assert_contains "$OUT" "blocked-args:不在 blocked 表里的追加参数原样保留(只堵组装器自己拥有的旋钮,不当保姆)" "②blocked:非 blocked 参数原样保留"
+assert_contains "$OUT" "blocked-args:Codex 沙箱档仍是 read-only,调用方的 --sandbox danger-full-access 被剔除" "②blocked:Codex 沙箱档覆盖不动"
+assert_contains "$OUT" "blocked-args:Codex 的 -c sandbox_mode=… 旁路也被堵住(等价旁路不堵等于没堵 -s)" "②blocked:堵住 -c sandbox_mode 等价旁路"
+# ②b CR 补:clap 短旗标的**贴写形态**(-sVALUE / -cKEY=VALUE / -C/path / -mNAME)。
+#     只堵「分开写」与「等号写」而漏掉贴写,调用方一个 token 就能把沙箱拧到 danger-full-access,
+#     而 meta / prompt 快照仍记着 read-only —— 「等价旁路不堵等于没堵」这句话必须对自己也成立。
+assert_contains "$OUT" "blocked-args:贴写形态 -sdanger-full-access 被剔除(clap 短旗标可粘值,只堵分开写的等于没堵)" "②b blocked:贴写 -sVALUE 被剔除"
+assert_contains "$OUT" "blocked-args:贴写形态 -csandbox_mode=… 被剔除(-c 的等价旁路同样有贴写写法)" "②b blocked:贴写 -cKEY=VALUE 被剔除"
+assert_contains "$OUT" "blocked-args:贴写形态 -C/ 被剔除(换工作根 = 让 agent 去别处干活,且不会撞出重复参数)" "②b blocked:贴写 -C/path 被剔除"
+assert_contains "$OUT" "blocked-args:贴写形态 -mgpt-nonexistent 被剔除(model 有类型化字段)" "②b blocked:贴写 -mNAME 被剔除"
+assert_contains "$OUT" "blocked-args:贴写形态过滤不误伤非 blocked 参数(前缀匹配只对 blocked 短旗标生效)" "②b blocked:前缀匹配不误伤"
+assert_contains "$OUT" "blocked-args:贴写旁路全被剔除后,沙箱档仍是我们写的 read-only" "②b blocked:剔完仍是 read-only"
+# ②c CR 补:--mcp-config / --settings —— 借我们自己的 --strict-mcp-config 把能力面重新放开的杠杆。
+assert_contains "$OUT" "blocked-args:--mcp-config 被剔除(--strict-mcp-config 的语义正是「只认它传进来的那份」,漏堵等于把钥匙插门上)" "②c blocked:--mcp-config 被剔除"
+assert_contains "$OUT" "blocked-args:--settings 被剔除(它能注入 hooks 等配置面)" "②c blocked:--settings 被剔除"
+assert_contains "$OUT" "blocked-args:剔除杠杆之后我们自己的 --strict-mcp-config 仍在(收紧没被连坐删掉)" "②c blocked:收紧旗标未被连坐"
+# ③ 能力面收紧(01 spike findings 第 7 条:无头子进程默认继承宿主全部插件/技能/自定义 agent 面)
+assert_contains "$OUT" "能力面:含 --strict-mcp-config(无头子进程默认继承宿主全部 MCP 面,不收紧就是失控)" "③能力面:--strict-mcp-config"
+assert_contains "$OUT" "能力面:含工具白名单参数且非空(01 spike:样本里 tools 含 Task/SendMessage/RemoteTrigger 等本机项目工具)" "③能力面:工具白名单在"
+assert_contains "$OUT" "能力面:默认白名单里没有 Task/SendMessage 这类宿主项目工具(被委托 agent 不该能再派子代理)" "③能力面:默认白名单不含宿主项目工具"
+assert_contains "$OUT" "能力面:调用方可把白名单收得更窄(只读诊断任务),逐字生效" "③能力面:可收得更窄"
+# ④ Codex argv(02 spike 8/8 样本形状 + exec --help 落盘的旗标名)
+assert_contains "$OUT" "Codex 组装:首个参数是 exec 子命令(02 spike 8/8 样本的 argv 形状)" "④Codex:exec 子命令"
+assert_contains "$OUT" "Codex 组装:含 --json(事件流是 JSONL,归一化层消费的就是它)" "④Codex:--json"
+assert_contains "$OUT" "Codex 组装:含 --skip-git-repo-check(任务工作区不是 git 仓库,不给会拒跑)" "④Codex:--skip-git-repo-check"
+assert_contains "$OUT" "Codex 组装:默认沙箱档是 read-only(显式写出来,不靠 CLI 的默认值)" "④Codex:默认只读档"
+assert_contains "$OUT" "Codex 组装:stdin 是 devNull(不给会静默挂起 —— 02 spike 意外发现 1,最隐蔽的坑)" "④Codex:stdin devNull(不给会静默挂起)"
+assert_contains "$OUT" "Codex 组装:prompt 是最后一个位置参数(exec [OPTIONS] [PROMPT] 的形状)" "④Codex:prompt 在最后"
+assert_contains "$OUT" "Codex 组装:以减号开头的 prompt 前补 -- 终止符(否则会被当成旗标解析)" "④Codex:减号开头的 prompt 补 --"
+# ⑤ 环境白名单:CODEX_HOME 指向任务私有目录且压过继承值;凭据类变量不带进子进程
+assert_contains "$OUT" "Codex 环境:CODEX_HOME 指向任务私有目录(每任务独立,用完即弃)" "⑤环境:CODEX_HOME 指向任务私有目录"
+assert_contains "$OUT" "Codex 环境:宿主继承来的 CODEX_HOME 被我们的值压过(否则任务会去读用户真配置里的 danger-full-access)" "⑤环境:继承的 CODEX_HOME 被压过"
+assert_contains "$OUT" "环境白名单:凭据类变量不带进子进程(本机是订阅 OAuth,带 API key 会静默改变计费主体)" "⑤环境:凭据不透传"
+assert_contains "$OUT" "环境白名单:白名单之外的宿主变量一律不透传(白名单漏一个只是少个变量,黑名单漏一个就是泄密)" "⑤环境:白名单之外一律不透传"
+# ⑥ CODEX_HOME 隔离:只拷 auth.json、绝不拷 config.toml、对源目录零写入
+assert_contains "$OUT" "CODEX_HOME 隔离:任务私有目录里**只有** auth.json 一个文件(别的一个字节都没拷)" "⑥隔离:目标目录只有 auth.json"
+assert_contains "$OUT" "CODEX_HOME 隔离:绝不拷 config.toml(用户真配置里是 danger-full-access,拷过去等于把沙箱关掉)" "⑥隔离:绝不拷 config.toml"
+assert_contains "$OUT" "CODEX_HOME 隔离:auth.json 走的是凭据通道 writePrivate(0600),不是普通 write(0644 的 token 拷贝)" "⑥隔离:auth.json 走凭据通道(0600)"
+assert_contains "$OUT" "CODEX_HOME 隔离:prepare 全过程对源目录零写入(源目录只读,用户真 ~/.codex 一个字节不动)" "⑥隔离:对源目录零写入"
+assert_contains "$OUT" "CODEX_HOME 守卫:目标目录与源目录相同时拒绝执行(放行的话 discard 会把用户真目录整个删掉)" "⑥隔离:目标==源 拒绝执行"
+assert_contains "$OUT" "CODEX_HOME 守卫:源里没有 auth.json 时如实抛错(不静默给一个没鉴权的目录让人猜)" "⑥隔离:缺 auth.json 如实抛错"
+assert_contains "$OUT" "CODEX_HOME 清理:discard 把任务私有目录连同运行时长出来的状态一并删净(用后即弃)" "⑥隔离:discard 删净(含运行时状态)"
+assert_contains "$OUT" "CODEX_HOME 清理:discard 幂等(收尾有多条出口,为已删过一次抛错只会逼出一堆 try?)" "⑥隔离:discard 幂等"
+
+# --- 断言组 1j:aa-agent CLI 解析与接线(**零进程、零配额**)---
+# 本组只跑三类**没有任何副作用**的路径:`--help`、用法错、以及 `--dry-run`(只组装并打印,不建工作区、不拉进程)。
+# **绝不在门禁里真拉起 claude/codex**:那会消耗用户真实配额与费用,且 Claude 侧走 bypassPermissions 时
+#   对文件系统完全没有隔离(01 spike 实证:`../` 与 `/tmp/…` 越界写均成功)。真跑归 Scripts/agent-smoke.sh
+#   (手动、需人在场、脚本开头有醒目告警),check.sh **永不**调用它。
+# 工作区根目录一律指向 $BUILD 下的临时路径,**绝不碰用户真实的 ~/.aa/agent-tasks**;
+#   而且下面还专门反证了「只读命令不会把这个根目录建出来」。
+echo "--- 断言组 1j:aa-agent CLI 解析与接线(零进程零配额,不碰 ~/.aa)---"
+AGENT_CLI_ROOT="$BUILD/agent-tasks-cli"   # 刻意**不**预先创建:用来反证只读命令不会建目录
+
+# (1) --help:退出码 0 + 退出码语义表逐码(与 aa 同一单一来源 AAExitCode.semantics)
+HELP="$("$BIN/aa-agent" --help 2>&1)"; RC=$?
+assert_exit 0 $RC "aa-agent --help 退出码 0(显式 help 走 stdout)"
+assert_contains "$HELP" "退出码语义(单一来源: AAContracts.AAExitCode)" "帮助含退出码语义表(单一来源)"
+assert_contains "$HELP" "  0  成功" "帮助逐码:0 成功"
+assert_contains "$HELP" "  1  用法错" "帮助逐码:1 用法错"
+assert_contains "$HELP" "  2  denied" "帮助逐码:2 denied"
+assert_contains "$HELP" "  3  超时" "帮助逐码:3 超时"
+assert_contains "$HELP" "  4  宿主不可达" "帮助逐码:4 不可达"
+assert_contains "$HELP" "  5  能力业务失败" "帮助逐码:5 业务失败"
+assert_contains "$HELP" "  6  协议/校验错" "帮助逐码:6 协议/校验错"
+assert_contains "$HELP" "run 子命令的终态映射" "帮助含 run 的终态→退出码映射"
+assert_contains "$HELP" "永不删 running/pending" "帮助写明 prune 永不删活态"
+assert_contains "$HELP" "对文件系统**没有隔离**" "帮助里对 Claude bypass 无隔离有醒目告警"
+
+# (2) 用法错一律退出码 1(纯客户端错,未触达任何 agent)
+"$BIN/aa-agent" >/dev/null 2>&1; assert_exit 1 $? "无子命令 → 退出码 1"
+"$BIN/aa-agent" bogus-subcommand >/dev/null 2>&1; assert_exit 1 $? "未知子命令 → 退出码 1"
+"$BIN/aa-agent" run --prompt hi >/dev/null 2>&1; assert_exit 1 $? "run 缺 --agent → 退出码 1"
+"$BIN/aa-agent" run --agent claude >/dev/null 2>&1; assert_exit 1 $? "run 缺 --prompt → 退出码 1"
+"$BIN/aa-agent" run --agent nosuch --prompt hi >/dev/null 2>&1; assert_exit 1 $? "run 未知 agent 名 → 退出码 1"
+"$BIN/aa-agent" run --agent codex --prompt hi --sandbox nosuch >/dev/null 2>&1; assert_exit 1 $? "run 未知 sandbox 档 → 退出码 1"
+"$BIN/aa-agent" run --agent claude --prompt hi --idle-timeout 0 --dry-run >/dev/null 2>&1; assert_exit 1 $? "run 非正阈值 → 退出码 1(可配就要真可配,钳制归 CLI)"
+"$BIN/aa-agent" run --agent claude --prompt >/dev/null 2>&1; assert_exit 1 $? "选项缺值 → 退出码 1(不把下一个旗标当值)"
+"$BIN/aa-agent" run --agent claude --prompt hi --exec /nope/claude --dry-run >/dev/null 2>&1; assert_exit 1 $? "--exec 指向不存在的文件 → 退出码 1"
+"$BIN/aa-agent" status --root "$AGENT_CLI_ROOT" >/dev/null 2>&1; assert_exit 1 $? "status 缺 task-id → 退出码 1"
+"$BIN/aa-agent" cancel --root "$AGENT_CLI_ROOT" >/dev/null 2>&1; assert_exit 1 $? "cancel 缺 task-id → 退出码 1"
+"$BIN/aa-agent" prune --root "$AGENT_CLI_ROOT" >/dev/null 2>&1; assert_exit 1 $? "prune 不给规则 → 退出码 1(裸 prune 会删光终态任务,故不提供)"
+# 路径穿越:04 把校验拦在域逻辑里,CLI 把用户敲的 id 直接喂进去也越不出 root(生产端口是真 FileManager)
+TRAVERSE="$("$BIN/aa-agent" status "../../etc/passwd" --root "$AGENT_CLI_ROOT" 2>&1)"; RC=$?
+assert_exit 1 $RC "status 路径穿越 id → 退出码 1"
+assert_contains "$TRAVERSE" "非法 task-id" "status 路径穿越 id 被明确拒绝(拦在读盘之前)"
+
+# (3) 只读命令:空工作区如实回 0 条,且**不把根目录建出来**(证据:目录仍不存在)
+LISTOUT="$("$BIN/aa-agent" list --root "$AGENT_CLI_ROOT" 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "list 在不存在的工作区根上退出码 0(一次都没委托过不是错误)"
+assert_contains "$LISTOUT" "任务数: 0" "list 如实回 0 条 + 磁盘占用(清理信号)"
+if [ ! -d "$AGENT_CLI_ROOT" ]; then
+  echo "PASS: 只读命令不会凭空建出工作区根目录(门禁绝不碰用户真实 ~/.aa/agent-tasks)"; PASS=$((PASS+1))
+else
+  echo "FAIL: list 把工作区根目录建出来了($AGENT_CLI_ROOT)——只读命令不该有副作用"; FAIL=$((FAIL+1))
+fi
+
+# (4) --dry-run:证明 CLI 与组装器**真的接上了**(不是只有单元测试里的组装器自己对)。
+#     用 /bin/echo 当"可执行"只是为了过存在性校验 —— dry-run 一个进程都不会拉起。
+DRYC="$("$BIN/aa-agent" run --agent claude --prompt "diagnose this repo" --exec /bin/echo \
+        --root "$AGENT_CLI_ROOT" --dry-run 2>&1)"; RC=$?
+assert_exit 0 $RC "run --dry-run(claude)退出码 0"
+assert_contains "$DRYC" "--permission-mode bypassPermissions" "dry-run:CLI 组出的命令行里确有 bypassPermissions(CLI↔组装器接线成立)"
+assert_contains "$DRYC" "--output-format stream-json" "dry-run:命令行含 --output-format stream-json"
+assert_contains "$DRYC" "--input-format stream-json" "dry-run:命令行含 --input-format stream-json"
+assert_contains "$DRYC" "--strict-mcp-config" "dry-run:命令行含 --strict-mcp-config(能力面收紧)"
+assert_contains "$DRYC" "dry-run:未建工作区、未拉起任何进程" "dry-run:明确声明零副作用"
+DRYX="$("$BIN/aa-agent" run --agent codex --prompt "list files" --exec /bin/echo \
+        --root "$AGENT_CLI_ROOT" --dry-run 2>&1)"; RC=$?
+assert_exit 0 $RC "run --dry-run(codex)退出码 0"
+assert_contains "$DRYX" "exec --json --skip-git-repo-check --sandbox read-only" "dry-run:Codex 命令行形状与默认只读档"
+assert_contains "$DRYX" "CODEX_HOME" "dry-run:Codex 环境里有每任务独立的 CODEX_HOME"
+DRYJ="$("$BIN/aa-agent" run --agent claude --prompt "hi" --exec /bin/echo \
+        --root "$AGENT_CLI_ROOT" --dry-run --json 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "run --dry-run --json 退出码 0"
+assert_contains "$DRYJ" "\"task_id\"" "dry-run --json:机读输出含 task_id(stdout 只放机读结果)"
+# CR 补:委托原文可以长得像旗标。组装器专门为 Codex 侧的减号 prompt 补了 `--` 终止符还配了断言,
+#   若 CLI 在解析层就把这类 prompt 判成用法错,那条路径经 CLI 永远走不到 —— 测试覆盖一个 CLI 造不出来的输入。
+DRYP="$("$BIN/aa-agent" run --agent codex --prompt "--help me diagnose" --exec /bin/echo \
+        --root "$AGENT_CLI_ROOT" --dry-run 2>&1)"; RC=$?
+assert_exit 0 $RC "run --dry-run:以 -- 开头的 prompt 被当作委托原文而不是旗标(退出码 0)"
+assert_contains "$DRYP" "-- --help me diagnose" "dry-run:减号 prompt 前补了 -- 终止符且原文逐字保留"
+# CR 补:相对 --exec 必须在入口就折成绝对路径。launch 是「先 chdir 到任务工作目录再 exec」,
+#   相对路径在那一刻解析的是任务目录下的相对路径 —— 校验这关过了、真拉起时 ENOENT,报错点离病因十万八千里。
+DRYREL="$("$BIN/aa-agent" run --agent claude --prompt hi --exec ./Scripts/check.sh \
+          --root "$AGENT_CLI_ROOT" --dry-run 2>&1)"; RC=$?
+assert_exit 0 $RC "run --dry-run:相对 --exec 被接受(退出码 0)"
+assert_contains "$DRYREL" "$ROOT/Scripts/check.sh" "dry-run:相对 --exec 已折成绝对路径(否则 chdir 后 exec 必 ENOENT)"
+if [ ! -d "$AGENT_CLI_ROOT" ]; then
+  echo "PASS: dry-run 四次之后工作区根目录仍不存在(真的零副作用,不是嘴上说说)"; PASS=$((PASS+1))
+else
+  echo "FAIL: dry-run 建出了工作区目录($AGENT_CLI_ROOT)——它承诺过零副作用"; FAIL=$((FAIL+1))
+fi
+# (5) 管理面(list / status / prune)跑在**真 FileManager 端口**上,任务目录由本脚本手工造 —— 零 agent 进程。
+#     造三种任务,每一种都对着一条明写的纪律:
+#       A completed          → prune 该删的
+#       B running 且**没有 pid** → 永不删(铁律 3);且残留扫描「没有判据就不判」,不会把它误标 orphaned
+#       C state=paused(本版本不认识的值)→ `AgentTaskState` 是**严格解码**的,readMeta 会抛;
+#         这正是 04 票 CR 纪律 1 要防的「一颗老鼠坏一锅汤」:它必须被逐条降级成「meta 不可读」,
+#         而不是把整条 list 打挂;prune 也必须跳过它(fail-closed:看不懂就不动,证据不销毁)。
+FIXTURE="$BUILD/agent-tasks-fixture"
+TASK_A="20260730-0101-done-a1b2"; TASK_B="20260730-0102-live-c3d4"; TASK_C="20260730-0103-weird-e5f6"
+mkdir -p "$FIXTURE/$TASK_A/logs" "$FIXTURE/$TASK_B/logs" "$FIXTURE/$TASK_C/logs"
+cat > "$FIXTURE/$TASK_A/meta.json" <<JSON
+{"agent":"claude","created_at":"2026-07-30T01:01:00+08:00","finished_at":"2026-07-30T01:02:00+08:00","initiator":"cli","schema_version":1,"state":"completed","task_id":"$TASK_A","workdir":"/tmp"}
+JSON
+cat > "$FIXTURE/$TASK_B/meta.json" <<JSON
+{"agent":"codex","created_at":"2026-07-30T01:02:00+08:00","initiator":"cli","schema_version":1,"state":"running","task_id":"$TASK_B","workdir":"/tmp"}
+JSON
+cat > "$FIXTURE/$TASK_C/meta.json" <<JSON
+{"agent":"claude","created_at":"2026-07-30T01:03:00+08:00","initiator":"cli","schema_version":1,"state":"paused","task_id":"$TASK_C","workdir":"/tmp"}
+JSON
+LIST2="$("$BIN/aa-agent" list --root "$FIXTURE" 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "list 在含坏 meta 的工作区上仍退出码 0(一个坏任务不该打挂整条命令)"
+assert_contains "$LIST2" "$TASK_A" "list 列出终态任务"
+assert_contains "$LIST2" "$TASK_B" "list 列出 running 任务"
+assert_contains "$LIST2" "$TASK_C" "list 也列出 meta 坏掉的任务(不隐藏证据)"
+assert_contains "$LIST2" "(meta 不可读)" "list 对未知 state 值逐条降级显示(04 CR 纪律 1:不让一个任务打挂整条 list)"
+assert_contains "$LIST2" "任务数: 3" "list 报出条数(清理信号)"
+STATUS_A="$("$BIN/aa-agent" status "$TASK_A" --root "$FIXTURE" 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "status 读正常任务退出码 0"
+assert_contains "$STATUS_A" "state:      completed" "status 如实报出 state"
+"$BIN/aa-agent" status "$TASK_C" --root "$FIXTURE" >/dev/null 2>&1
+assert_exit 6 $? "status 读不出 meta → 退出码 6(协议/校验错,且绝不删改证据)"
+"$BIN/aa-agent" cancel "$TASK_A" --root "$FIXTURE" >/dev/null 2>&1
+assert_exit 1 $? "cancel 一个已终态任务 → 退出码 1(调用方状态没理清,让它响而不是静默变成一次真杀)"
+PRUNE="$("$BIN/aa-agent" prune --root "$FIXTURE" --keep 0 2>/dev/null)"; RC=$?
+assert_exit 0 $RC "prune --keep 0 退出码 0"
+assert_contains "$PRUNE" "删除: $TASK_A" "prune 删掉终态任务"
+assert_contains "$PRUNE" "跳过: $TASK_B" "prune 跳过 running 并**如实报出**(铁律 3:哪怕点名要删也不删)"
+assert_contains "$PRUNE" "跳过: $TASK_C" "prune 跳过 meta 读不出的目录(fail-closed,证据不销毁)"
+if [ ! -d "$FIXTURE/$TASK_A" ] && [ -d "$FIXTURE/$TASK_B" ] && [ -d "$FIXTURE/$TASK_C" ]; then
+  echo "PASS: prune 之后磁盘上确实只少了那个终态任务(running 与坏 meta 的目录一个字节没动)"; PASS=$((PASS+1))
+else
+  echo "FAIL: prune 删错了目录(A 应删除、B/C 应保留):$(ls "$FIXTURE")"; FAIL=$((FAIL+1))
+fi
+# 反证:残留扫描没有把「running 但没记 pid」的任务误标成 orphaned(没有判据就不判,不凭空断言它死了)
+assert_contains "$("$BIN/aa-agent" status "$TASK_B" --root "$FIXTURE" 2>/dev/null)" "state:      running" \
+  "残留扫描不把「running 但无 pid」误标为 orphaned(经 CLI 端到端复核)"
+
+# (6) 反证:上面这一组从头到尾没有拉起过任何 agent 进程(真拉起会烧配额,门禁里绝不允许)
+# 只盯本次构建的**绝对路径**(沿用本仓「绝不误杀用户机上同名进程」的约定)。
+RES_AGENT="$(pgrep -f "$BIN/aa-agent" 2>/dev/null)"
+if [ -z "$RES_AGENT" ]; then
+  echo "PASS: 断言组 1j 跑完无残留 aa-agent 进程(全程零进程拉起)"; PASS=$((PASS+1))
+else
+  echo "FAIL: 残留 aa-agent 进程: $RES_AGENT"; FAIL=$((FAIL+1))
+fi
+
+# --- 断言组 1k:run 全链路端到端(**假 agent 重放 spike 真实事件流,零配额零真 agent**)---
+# 为什么必须有这一组(07 票 CR 🔴 的护栏):1j 只跑 `--dry-run`,它在**建工作区之前**就退出了 ——
+#   于是「拉起 → 逐行读 → 归一化落盘 → 看门狗 → 终态收敛 → 一次 finish → report.html」这整条主链路
+#   在门禁里一次都没被跑过。CR 抓到的那个 🔴(Claude 侧从不 closeStdin,每次成功委托都要等满静默阈值
+#   再被自家看门狗 SIGTERM)正好落在这段盲区里:dry-run 验不到,而真跑要烧配额。
+# 解法:用**假 agent** —— 一个 /bin/sh 脚本,把 spike 当年真跑落盘的事件流原样 `cat` 出来。
+#   于是协议形状是真的(不是我们编的),归一化吃到的是真样本,而全程零网络、零配额、零真 agent。
+#   两家的 stdin 不对称也照实模拟:
+#     * 假 claude 吐完事件流后 `cat > /dev/null` —— **读到 EOF 才退出**,精确复刻 01 spike 样本 06 实证的
+#       「不发 EOF 就不自退」(natural_exit: no / 45 秒仍活着 / 最后靠 SIGTERM 收尾 exit 143)。
+#       故:CLI 若不显式 closeStdin,这一步就会挂满 idle 阈值再被看门狗杀 —— 下面的断言正是冲它去的。
+#     * 假 codex 吐完就 exit 0(它的 stdin 是 /dev/null,本来就不等)。
+echo "--- 断言组 1k:run 全链路端到端(假 agent 重放 spike 样本,零配额)---"
+FAKE_DIR="$BUILD/fake-agents"; mkdir -p "$FAKE_DIR"
+E2E_ROOT="$BUILD/agent-tasks-e2e"
+CLAUDE_SAMPLE="$ROOT/.scratch/agent-delegation/research/spike-claude-headless/01-baseline-readonly.stdout.ndjson"
+CODEX_SAMPLE="$ROOT/.scratch/agent-delegation/research/spike-codex-exec/samples/exec1-baseline-readonly-default.stdout.jsonl"
+
+if [ ! -f "$CLAUDE_SAMPLE" ] || [ ! -f "$CODEX_SAMPLE" ]; then
+  # fail-closed:样本缺失就如实记 FAIL,绝不静默跳过(静默跳过 = 主链路无人把关却一片绿)。
+  echo "FAIL: 端到端假 agent 缺样本(claude=$CLAUDE_SAMPLE codex=$CODEX_SAMPLE)"; FAIL=$((FAIL+1))
+else
+  cat > "$FAKE_DIR/fake-claude" <<FAKESH
+#!/bin/sh
+# 假 claude:原样重放 01 spike 落盘的真实 stream-json 事件流,然后**等 stdin EOF 才退出**
+# (复刻实证行为:写完 prompt 不发 EOF,真 claude 不自退)。零网络、零配额。
+cat "$CLAUDE_SAMPLE"
+cat > /dev/null
+exit 0
+FAKESH
+  cat > "$FAKE_DIR/fake-codex" <<FAKESH
+#!/bin/sh
+# 假 codex:原样重放 02 spike 落盘的真实 JSONL 事件流,吐完即退(它的 stdin 是 /dev/null,本来就不等)。
+cat "$CODEX_SAMPLE"
+exit 0
+FAKESH
+  chmod +x "$FAKE_DIR/fake-claude" "$FAKE_DIR/fake-codex"
+
+  # (1) Claude 全链路。--idle-timeout 20:**故意压到 20 秒**——若 closeStdin 这根线断了,
+  #     这一步会明显地卡 20 秒并打出「看门狗判定卡死」,下面两条断言(时长上界 + 无看门狗字样)当场抓住它。
+  E2E_T0=$(date +%s)
+  E2EC="$("$BIN/aa-agent" run --agent claude --prompt "hi" --exec "$FAKE_DIR/fake-claude" \
+          --root "$E2E_ROOT" --idle-timeout 20 --json 2>&1)"; RC=$?
+  E2E_ELAPSED=$(( $(date +%s) - E2E_T0 ))
+  assert_exit 0 $RC "端到端(假 claude):run 退出码 0"
+  assert_contains "$E2EC" '"state":"completed"' "端到端(假 claude):终态 completed"
+  assert_contains "$E2EC" '"task_id"' "端到端(假 claude):--json 输出含 task_id"
+  # ↓ 这两条就是 CR 🔴 的回归护栏:少了 closeStdin 它们必红。
+  assert_not_contains "$E2EC" "看门狗判定卡死" "端到端(假 claude):正常完成的委托**没有**被看门狗判卡死(closeStdin 收尾真的接上了)"
+  if [ "$E2E_ELAPSED" -lt 15 ]; then
+    echo "PASS: 端到端(假 claude):result 落地后秒级收尾(耗时 ${E2E_ELAPSED}s,远小于 20s 静默阈值)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 端到端(假 claude)耗时 ${E2E_ELAPSED}s —— 说明它是等满静默阈值被看门狗杀掉的,不是自然收尾(closeStdin 断了)"; FAIL=$((FAIL+1))
+  fi
+  E2E_TASK_C="$(printf '%s' "$E2EC" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p' | head -1)"
+  if [ -n "$E2E_TASK_C" ] && [ -f "$E2E_ROOT/$E2E_TASK_C/report.html" ]; then
+    echo "PASS: 端到端(假 claude):report.html 已产出(04 票兜底路径真的走到了)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 端到端(假 claude):report.html 缺失(task=$E2E_TASK_C)"; FAIL=$((FAIL+1))
+  fi
+  if [ -s "$E2E_ROOT/$E2E_TASK_C/logs/raw.ndjson" ] && [ -s "$E2E_ROOT/$E2E_TASK_C/logs/normalized.ndjson" ]; then
+    echo "PASS: 端到端(假 claude):raw.ndjson 与 normalized.ndjson 都非空(原话与归一化各自落了盘)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 端到端(假 claude):日志为空(raw/normalized 至少一个没落盘)"; FAIL=$((FAIL+1))
+  fi
+  # meta 里必须留下 session_id(提案 §3 为将来 resume 留的唯一指针;短任务最容易在这里丢)
+  assert_contains "$(cat "$E2E_ROOT/$E2E_TASK_C/meta.json" 2>/dev/null)" "session_id" \
+    "端到端(假 claude):meta.json 落下了 session_id(短任务也没丢掉 resume 指针)"
+  # 成功任务不该带「被信号杀」的退出码 —— 那正是 closeStdin 断线时的指纹。
+  # 两种写法都要否掉:`-15`(不捕获 SIGTERM 的进程,如这里的假 agent;06 票按负值记账)
+  # 与 `143`(真 claude **捕获** SIGTERM 后自 exit 128+15,01 spike 第 6 题)。
+  # 断的是 pretty-print 后的**整个键值对**而不是裸数字:裸 "-15" 会在 2026-08-15 这类日期上假红。
+  E2E_META_C="$(cat "$E2E_ROOT/$E2E_TASK_C/meta.json" 2>/dev/null)"
+  assert_not_contains "$E2E_META_C" '"exit_code" : -15' \
+    "端到端(假 claude):meta.json 里没有 exit_code -15(成功任务不该是被 SIGTERM 收的尾)"
+  assert_not_contains "$E2E_META_C" '"exit_code" : 143' \
+    "端到端(假 claude):meta.json 里没有 exit_code 143(真 claude 捕获 SIGTERM 时的同款指纹)"
+
+  # (2) Codex 全链路(stdin devNull;吐完即退,天然 EOF)
+  E2EX="$("$BIN/aa-agent" run --agent codex --prompt "hi" --exec "$FAKE_DIR/fake-codex" \
+          --root "$E2E_ROOT" --codex-home "$FAKE_DIR/nonexistent-codex-home" --idle-timeout 20 --json 2>&1)"; RC=$?
+  assert_exit 0 $RC "端到端(假 codex):run 退出码 0"
+  assert_contains "$E2EX" '"state":"completed"' "端到端(假 codex):终态 completed"
+  E2E_TASK_X="$(printf '%s' "$E2EX" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p' | head -1)"
+  if [ -n "$E2E_TASK_X" ] && [ ! -d "$E2E_ROOT/$E2E_TASK_X/codex-home" ]; then
+    echo "PASS: 端到端(假 codex):任务私有 CODEX_HOME 用完即弃(auth.json 副本没留在磁盘上)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 端到端(假 codex):任务私有 CODEX_HOME 残留($E2E_ROOT/$E2E_TASK_X/codex-home)"; FAIL=$((FAIL+1))
+  fi
+
+  # (3) 反证:端到端跑完不留任何假 agent 进程(沿用本仓「只盯本次构建的绝对路径」的约定,绝不宽泛 pkill)
+  RES_FAKE="$(pgrep -f "$FAKE_DIR/fake-" 2>/dev/null)"
+  if [ -z "$RES_FAKE" ]; then
+    echo "PASS: 端到端跑完无残留假 agent 进程(整组收干净了)"; PASS=$((PASS+1))
+  else
+    echo "FAIL: 残留假 agent 进程: $RES_FAKE"; FAIL=$((FAIL+1))
+  fi
 fi
 
 # --- 断言组 2:list 纵切 E2E(aa capabilities list ⇄ 宿主 UDS)---
@@ -1247,6 +1601,25 @@ elif [ "$AS_GREP_RC" -eq 0 ]; then
   echo "FAIL: AAAgentSystem 源码出现被禁的 import(Host*/AAPluginSDK/PluginProxy):"; printf '%s\n' "$AS_GREP_HITS"; FAIL=$((FAIL+1))
 else
   echo "FAIL: grep 守卫自身出错(rc=$AS_GREP_RC),无法核验 AAAgentSystem 边界 —— 绝不算过"; FAIL=$((FAIL+1))
+fi
+
+# (3f) agent-delegation 07 铁律:**可执行 target `aa-agent` 同样不 import 任何 Host* / AAPluginSDK / PluginProxy**。
+#      前六票的惯例是「每立一个 agent 侧 target 就补一条目录 grep」(01 补 3d、06 补 3e),本票新立 target,补这一条。
+#      为什么链接行挡不住(这才是必须补 grep 的理由):编译 aa-agent 用的是 `-I "$MODULES"`,而此刻 $MODULES 里
+#      已经躺着 AAHostRuntime / AAPluginSDK / PluginProxy / AAHostTestKit 的 .swiftmodule(拓扑序在前),
+#      `import` 一律解析得到;链接虽只给三个 .o,但**不引用具体符号**的 import(或只用到 typealias / @inlinable 面)
+#      编译链接双绿 —— 于是「aa-agent 绝不依赖 AAHost*」这条并行红线会被无声突破。
+#      这条红线不是洁癖:07 票的接线契约第 3 条(两套反孤儿钩子合流)之所以还能记作「前置未触发」,
+#      唯一依据就是**全仓没有任何可执行同时装上两套信号钩子**。那句话的可验证形式就是这条 grep。
+#      显式判 grep 退出码:rc==1 无匹配(好)/ rc==0 命中禁止 import(坏)/ rc>=2 grep 自身出错(绝不算过)。
+AG_GREP_HITS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?(AAHost(Runtime|MacOS|TestKit)|AAPluginSDK|PluginProxy)' Sources/aa-agent/)"
+AG_GREP_RC=$?
+if [ "$AG_GREP_RC" -eq 1 ]; then
+  echo "PASS: aa-agent 源码不含 import Host*/AAPluginSDK/PluginProxy(只依赖 AAContracts + AAAgentCore + AAAgentSystem)"; PASS=$((PASS+1))
+elif [ "$AG_GREP_RC" -eq 0 ]; then
+  echo "FAIL: aa-agent 源码出现被禁的 import(Host*/AAPluginSDK/PluginProxy):"; printf '%s\n' "$AG_GREP_HITS"; FAIL=$((FAIL+1))
+else
+  echo "FAIL: grep 守卫自身出错(rc=$AG_GREP_RC),无法核验 aa-agent 边界 —— 绝不算过"; FAIL=$((FAIL+1))
 fi
 
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
