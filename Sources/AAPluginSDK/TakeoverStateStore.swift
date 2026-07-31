@@ -16,10 +16,12 @@ import Foundation
 ///
 /// 语义契约:
 /// - `load`:读取已持久化的字节;无(从未接管 / 已清除)返回 nil;存在但读取失败则抛错,不得误判为「无残留」。
-/// - `save`:**原子**写入字节(临时文件 + rename,杜绝半截文件)。写失败抛错(由域层收敛记日志,不崩)。
+/// - `loadRecovery`:读取独立恢复副本；主文件损坏/不可读时供域层恢复完整快照。
+/// - `save`:分别原子写入主文件与恢复副本。任一失败即抛错，调用方不得开始系统代理写入。
 /// - `clear`:清除持久化(还原成功后表示「无残留接管」)。幂等:本就不存在为 no-op。
 public protocol TakeoverStateStore: Sendable {
     func load() throws -> Data?
+    func loadRecovery() throws -> Data?
     func save(_ data: Data) throws
     func clear()
 }
@@ -29,6 +31,7 @@ public protocol TakeoverStateStore: Sendable {
 public struct NoopTakeoverStateStore: TakeoverStateStore {
     public init() {}
     public func load() throws -> Data? { nil }
+    public func loadRecovery() throws -> Data? { nil }
     public func save(_ data: Data) throws {}
     public func clear() {}
 }

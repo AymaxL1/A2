@@ -13,6 +13,8 @@ if [ -n "${SUBHTTP_PID:-}" ] && kill -0 "$SUBHTTP_PID" 2>/dev/null; then echo "F
 # 08:未污染真实 AppSupport 接管态文件的证明(跑前后 md5 一致;所有测试宿主的持久化都被 env seam 导向 $BUILD 临时区)。
 REAL_TAKEOVER_AFTER="$( [ -e "$REAL_TAKEOVER" ] && md5 -q "$REAL_TAKEOVER" 2>/dev/null || echo ABSENT )"
 if [ "$REAL_TAKEOVER_BEFORE" = "$REAL_TAKEOVER_AFTER" ]; then echo "PASS: 未污染真实 AppSupport 接管态文件(跑前后一致: $REAL_TAKEOVER_AFTER)"; PASS=$((PASS+1)); else echo "FAIL: 真实 AppSupport 接管态文件被本次运行改动(before=$REAL_TAKEOVER_BEFORE after=$REAL_TAKEOVER_AFTER)"; FAIL=$((FAIL+1)); fi
+REAL_TAKEOVER_RECOVERY_AFTER="$( [ -e "$REAL_TAKEOVER_RECOVERY" ] && md5 -q "$REAL_TAKEOVER_RECOVERY" 2>/dev/null || echo ABSENT )"
+if [ "$REAL_TAKEOVER_RECOVERY_BEFORE" = "$REAL_TAKEOVER_RECOVERY_AFTER" ]; then echo "PASS: 未污染真实 AppSupport 接管态恢复副本(跑前后一致: $REAL_TAKEOVER_RECOVERY_AFTER)"; PASS=$((PASS+1)); else echo "FAIL: 真实 AppSupport 接管态恢复副本被本次运行改动(before=$REAL_TAKEOVER_RECOVERY_BEFORE after=$REAL_TAKEOVER_RECOVERY_AFTER)"; FAIL=$((FAIL+1)); fi
 # 10:未污染真实 AppSupport 订阅目录的证明(所有测试宿主的订阅目录都被 env seam 导向 $BUILD 临时区)。
 REAL_SUBS_AFTER="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/null | md5 2>/dev/null || echo ABSENT )"
 if [ "$REAL_SUBS_BEFORE" = "$REAL_SUBS_AFTER" ]; then echo "PASS: 未污染真实 AppSupport 订阅目录(跑前后一致)"; PASS=$((PASS+1)); else echo "FAIL: 真实 AppSupport 订阅目录被本次运行改动(before=$REAL_SUBS_BEFORE after=$REAL_SUBS_AFTER)"; FAIL=$((FAIL+1)); fi

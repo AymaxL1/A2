@@ -232,7 +232,7 @@ public final class ProxyPlugin: @unchecked Sendable {
         let loaded = loadTakeover()
         guard case .state(let state) = loaded else {
             if case .invalid = loaded {
-                return recoverInvalidTakeoverMarker()
+                return SelfHealReport(decision: .deferred, reapedOrphanPID: nil, kernelRelaunched: false)
             }
             let decision = CrashRecovery.decide(hasPersistedMarker: false,
                                                 proxyStillPointsAtKernelPort: false,
@@ -326,49 +326,9 @@ public final class ProxyPlugin: @unchecked Sendable {
             }
             return SelfHealReport(decision: .alreadyHealthy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
 
-        case .clean, .failSafeDirect, .deferred:
+        case .clean, .deferred:
             // 三者均由前置分支提前返回；此处仅为 switch 完备。
             return SelfHealReport(decision: decision, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
-        }
-    }
-
-    /// 标记不可读/损坏时已无法精确还原原快照。此时只禁用指向 loopback 的代理，保留非本机第三方代理；
-    /// 全部隔离成功后才清无效标记。任一读取/写入失败则 deferred，宿主据报告禁止常规内核启停。
-    private func recoverInvalidTakeoverMarker() -> SelfHealReport {
-        let current: SystemProxySnapshot
-        do {
-            current = try SystemProxyController(net: networkConfigPort).capture()
-        } catch {
-            selfHealLog("无效接管标记的降级直连采集失败(\(error))，保留标记并禁止常规内核启停")
-            return SelfHealReport(decision: .deferred, reapedOrphanPID: nil, kernelRelaunched: false)
-        }
-
-        var failures: [String] = []
-        for state in current.services {
-            for kind in ProxyKind.allCases {
-                let setting = state.setting(for: kind)
-                guard setting.enabled, Self.isLoopbackHost(setting.host) else { continue }
-                do {
-                    try networkConfigPort.disableProxy(service: state.service, kind: kind)
-                } catch {
-                    failures.append("\(state.service)/\(kind.rawValue):\(error)")
-                }
-            }
-        }
-        guard failures.isEmpty else {
-            selfHealLog("无效接管标记的降级直连未完成(\(failures.joined(separator: ",")))，保留标记并禁止常规内核启停")
-            return SelfHealReport(decision: .deferred, reapedOrphanPID: nil, kernelRelaunched: false)
-        }
-
-        clearTakeover()
-        selfHealLog("接管标记不可恢复：已禁用指向本机的代理并降级直连，非本机第三方代理保持不变")
-        return SelfHealReport(decision: .failSafeDirect, reapedOrphanPID: nil, kernelRelaunched: false)
-    }
-
-    private static func isLoopbackHost(_ host: String) -> Bool {
-        switch host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "127.0.0.1", "localhost", "::1", "[::1]": return true
-        default: return false
         }
     }
 
@@ -405,21 +365,40 @@ public final class ProxyPlugin: @unchecked Sendable {
         case invalid
     }
 
-    /// 不存在与“存在但不可读/损坏”必须分开；后者进入降级直连隔离，绝不误判 clean。
+    /// 主文件不可读/损坏时尝试独立恢复副本；主副都不可用才 invalid/deferred，绝不猜测代理所有权。
     private func loadTakeover() -> TakeoverLoad {
-        let data: Data
+        var primaryMissing = false
         do {
-            guard let loaded = try stateStore.load() else { return .missing }
-            data = loaded
+            if let data = try stateStore.load() {
+                if let state = try? JSONDecoder().decode(TakeoverState.self, from: data) {
+                    return .state(state)
+                }
+                selfHealLog("接管态主清单损坏/无法解码(\(data.count) 字节)，尝试恢复副本")
+            } else {
+                primaryMissing = true
+            }
         } catch {
-            selfHealLog("接管态清单存在但读取失败(\(error))，保留标记并 deferred")
-            return .invalid
+            selfHealLog("接管态主清单读取失败(\(error))，尝试恢复副本")
         }
-        guard let state = try? JSONDecoder().decode(TakeoverState.self, from: data) else {
-            selfHealLog("持久化接管态清单损坏/无法解码(\(data.count) 字节)，保留标记并 deferred")
-            return .invalid
+
+        var recoveryMissing = false
+        do {
+            if let recovery = try stateStore.loadRecovery() {
+                guard let state = try? JSONDecoder().decode(TakeoverState.self, from: recovery) else {
+                    selfHealLog("接管态恢复副本损坏/无法解码(\(recovery.count) 字节)")
+                    return .invalid
+                }
+                selfHealLog("已从独立恢复副本取回完整接管快照")
+                return .state(state)
+            } else {
+                recoveryMissing = true
+            }
+        } catch {
+            selfHealLog("接管态恢复副本读取失败(\(error))")
         }
-        return .state(state)
+        if primaryMissing && recoveryMissing { return .missing }
+        selfHealLog("接管态主副清单均不可恢复，保留证据并 deferred；绝不猜测 loopback 代理所有权")
+        return .invalid
     }
 
     /// 编码并原子持久化接管态。调用方决定失败时是否允许任何后续系统写入。

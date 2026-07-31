@@ -381,7 +381,7 @@ sys.exit(0 if a==b else 1)' "$SHNET" "$BUILD/selfheal-initial.json" 2>/dev/null
 crash_generation() {
   teardown_hosts also-stub          # 轮询等上一剧本宿主真死 + 清默认标记(本剧本用独立 $SHSTATE,不受影响)
   write_shnet_initial
-  rm -f "$SHSTATE"
+  rm -f "$SHSTATE" "$SHSTATE.recovery"
   AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT" AA_NETWORKSETUP_FAKE_STATE="$SHNET" \
     AA_TAKEOVER_STATE_PATH="$SHSTATE" "$HOST_BIN" > "$HOSTLOG" 2>&1 &
   HOST_PID=$!
@@ -495,25 +495,30 @@ else
 fi
 teardown_hosts also-stub   # 剧本间清场:轮询等宿主+stub 真死(取代盲 sleep 1)
 
-# —— 剧本 D:损坏标记 + 本机死代理 → 启动前降级直连；随后宿主正常启停也不得重新留下死端口 ——
-printf '%s' 'not-json' > "$SHSTATE"
-cat > "$SHNET" <<'JSON'
-{"services":[
-{"service":"Wi-Fi","http":{"enabled":true,"host":"127.0.0.1","port":7890},"https":{"enabled":true,"host":"localhost","port":7890},"socks":{"enabled":false,"host":"","port":0}},
-{"service":"Ethernet","http":{"enabled":true,"host":"203.0.113.9","port":8080},"https":{"enabled":false,"host":"","port":0},"socks":{"enabled":false,"host":"","port":0}}
-]}
-JSON
-start_restart_host AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT"
-if [ "$SOCK_UP" -eq 1 ]; then
-  if grep -qF 'self-heal decision=failSafeDirect' "$HOSTLOG"; then echo "PASS: 剧本D 损坏标记走 failSafeDirect 隔离路径"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 未走 failSafeDirect。日志: $(grep -F self-heal "$HOSTLOG")"; FAIL=$((FAIL+1)); fi
-  if grep -qE '"host":"(127\.0\.0\.1|localhost|::1)"' "$SHNET"; then echo "FAIL: 剧本D 降级后仍有本机死代理: $(cat "$SHNET")"; FAIL=$((FAIL+1)); else echo "PASS: 剧本D 启动前已禁用本机死代理"; PASS=$((PASS+1)); fi
-  if grep -qF '"enabled":true,"host":"203.0.113.9","port":8080' "$SHNET"; then echo "PASS: 剧本D 非本机第三方代理保持不变"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 意外改动第三方代理: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
-  if [ ! -e "$SHSTATE" ]; then echo "PASS: 剧本D 降级成功后清除损坏标记"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 损坏标记仍在"; FAIL=$((FAIL+1)); fi
-  kill -USR1 "$HOST_PID" 2>/dev/null
-  for _ in $(seq 1 100); do kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.1; done
-  if grep -qE '"host":"(127\.0\.0\.1|localhost|::1)"' "$SHNET"; then echo "FAIL: 剧本D 宿主退出后重新留下本机死代理"; FAIL=$((FAIL+1)); else echo "PASS: 剧本D 宿主正常退出后仍无本机死代理"; PASS=$((PASS+1)); fi
+# —— 剧本 D:主标记损坏 → 从恢复副本取回快照；正常启停后精确恢复用户本地第三方代理 ——
+if crash_generation; then
+  python3 -c 'import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+for s in d["snapshot"]["services"]:
+    if s["service"] == "Ethernet":
+        s["http"]={"enabled":True,"host":"127.0.0.1","port":8888}
+        s["https"]={"enabled":True,"host":"127.0.0.1","port":8888}
+json.dump(d,open(p,"w"),sort_keys=True)' "$SHSTATE.recovery"
+  printf '%s' 'not-json' > "$SHSTATE"
+  start_restart_host AA_MIHOMO_KERNEL_PATH="$STUB" AA_MIHOMO_CONTROL_PORT="$MIHOMO_PORT"
+  if [ "$SOCK_UP" -eq 1 ]; then
+    if grep -qF '已从独立恢复副本取回完整接管快照' "$HOSTLOG"; then echo "PASS: 剧本D 主标记损坏后读回恢复副本"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 未读回恢复副本。日志: $(grep -F self-heal "$HOSTLOG")"; FAIL=$((FAIL+1)); fi
+    if grep -qF 'self-heal decision=recoverTakeover' "$HOSTLOG"; then echo "PASS: 剧本D 恢复副本驱动受管内核恢复接管"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 未恢复接管"; FAIL=$((FAIL+1)); fi
+    kill -USR1 "$HOST_PID" 2>/dev/null
+    for _ in $(seq 1 100); do kill -0 "$HOST_PID" 2>/dev/null || break; sleep 0.1; done
+    if grep -qF '"enabled":true,"host":"127.0.0.1","port":8888' "$SHNET"; then echo "PASS: 剧本D 退出后精确恢复用户本地第三方代理 127.0.0.1:8888"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 未恢复用户本地第三方代理: $(cat "$SHNET")"; FAIL=$((FAIL+1)); fi
+    if grep -qF '"port":7890' "$SHNET"; then echo "FAIL: 剧本D 退出后仍残留 AA 死端口 7890"; FAIL=$((FAIL+1)); else echo "PASS: 剧本D 退出后无 AA 死端口 7890"; PASS=$((PASS+1)); fi
+    if [ ! -e "$SHSTATE" ] && [ ! -e "$SHSTATE.recovery" ]; then echo "PASS: 剧本D 精确恢复成功后清除主副标记"; PASS=$((PASS+1)); else echo "FAIL: 剧本D 主副标记未清干净"; FAIL=$((FAIL+1)); fi
+  else
+    echo "FAIL: 剧本D 恢复副本宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  fi
 else
-  echo "FAIL: 剧本D 损坏标记宿主未就绪。宿主日志:"; cat "$HOSTLOG"; FAIL=$((FAIL+1))
+  echo "FAIL: 剧本D crash_generation 未成功"; FAIL=$((FAIL+1))
 fi
 teardown_hosts also-stub
-rm -f "$SHSTATE" "$AA_TAKEOVER_STATE_PATH"
+rm -f "$SHSTATE" "$SHSTATE.recovery" "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery"

@@ -12,6 +12,7 @@ import AAPluginSDK
 public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendable {
     private let lock = NSLock()
     private var blob: Data?
+    private var recoveryBlob: Data?
 
     /// save 调用次数(断言「接管成功即持久化」)。
     public private(set) var saveCount = 0
@@ -23,8 +24,9 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     public var failLoads = false
 
     /// 构造时可预置一坨已持久化字节(模拟「上一世代崩溃后残留的接管态清单」)。
-    public init(initial: Data? = nil) {
+    public init(initial: Data? = nil, initialRecovery: Data? = nil) {
         self.blob = initial
+        self.recoveryBlob = initialRecovery
     }
 
     public func load() throws -> Data? {
@@ -33,23 +35,30 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
         return blob
     }
 
+    public func loadRecovery() throws -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return recoveryBlob
+    }
+
     public func save(_ data: Data) throws {
         lock.lock(); defer { lock.unlock() }
         if failSaves { throw FakeStoreError.saveProgrammedToFail }
         blob = data
+        recoveryBlob = data
         saveCount += 1
     }
 
     public func clear() {
         lock.lock(); defer { lock.unlock() }
         blob = nil
+        recoveryBlob = nil
         clearCount += 1
     }
 
     /// 测试助手:当前是否有持久化(供断言「清标记后无残留」/「接管后有清单」)。
     public var isPersisted: Bool {
         lock.lock(); defer { lock.unlock() }
-        return blob != nil
+        return blob != nil || recoveryBlob != nil
     }
 
     public enum FakeStoreError: Error {

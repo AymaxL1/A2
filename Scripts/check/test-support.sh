@@ -38,7 +38,7 @@ teardown_hosts() {  # $1(可选)= also-stub:同时停 fake mihomo stub 并等其
     break   # 宿主(及 also-stub 时的 stub)均已真死
   done
   rm -f "$SOCK"
-  rm -f "$AA_TAKEOVER_STATE_PATH" 2>/dev/null   # 清默认标记:非接管类 E2E 宿主启动自愈恒 decision=clean,快速就绪、零跨 E2E 污染
+  rm -f "$AA_TAKEOVER_STATE_PATH" "$AA_TAKEOVER_STATE_PATH.recovery" 2>/dev/null   # 清默认主标记与恢复副本
 }
 
 # 轮询等宿主就绪(socket 出现)。$1=宿主 PID。置全局 SOCK_UP(1=就绪 / 0=失败)。返回 0/1 便于调用方分支。
