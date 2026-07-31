@@ -12,18 +12,23 @@
 //   * 三分支:nil(无 GUI 可用)→ fail-closed denied 绝不执行;false → denied;true → 执行 handler。
 
 import AAContracts
+import Foundation
 
 /// 能力处理器:纯闭包,吃 input(可空,已过 schema 校验)吐输出或业务错误。
 /// - `@Sendable`:handler 不得捕获可变状态(demo 用不可变/值语义),从而 `Capability`/`Registry` 天然 Sendable。
 public typealias CapabilityHandler = @Sendable (JSONValue?) -> Result<JSONValue, WireError>
 
 /// dangerous 能力的宿主确认回调:吃描述符(供 GUI 展示 id/summary)+ **本次请求的 input**(供 GUI 展示批的是哪些参数,
-/// 消除盲批;10 票加),吐 Bool(true=批准执行 / false=拒绝)。
-/// - 由宿主(AAHostMacOS)注入真实 GUI 确认(主线程 NSAlert;把 input 关键字段渲染进确认框);测试注入假件(直接返 true/false)。
-/// - `@Sendable`:确认回调会被后台连接处理线程调用(宿主实现内部再 `DispatchQueue.main.sync` 切主线程弹窗),
+/// 消除盲批;10 票加),并通过 completion 异步返回批准/拒绝。
+/// - 由宿主注入 GUI 确认并立即返回；测试可注入同步假件。
+/// - `@Sendable`:确认回调会被后台连接处理线程调用并跨队列完成，
 ///   标 `@Sendable` 才能让持有它的 `Registry` 维持 `Sendable`(03 立的「不可变存储 → 天然 Sendable」不变式)。
 /// - input 为收敛的**契约加法**:`input=nil`(如 demo.wipe 不带 input)时行为与 04 一致。
-public typealias ConfirmDangerous = @Sendable (CapabilityDescriptor, JSONValue?) -> Bool
+public typealias ConfirmDangerous = @Sendable (
+    CapabilityDescriptor,
+    JSONValue?,
+    @escaping @Sendable (Bool) -> Void
+) -> Void
 
 /// 一个已注册能力 = 描述符 + 处理器。
 public struct Capability: Sendable {
@@ -42,6 +47,41 @@ public enum InvokeOutcome: Sendable, Equatable {
     case success(JSONValue)
     /// 失败:结构化错误(code 决定退出码粗分类,见 `AAExitCode.forErrorCode`)。
     case failure(WireError)
+    /// Confirmation is running outside the request lifetime. Query this id for the result.
+    case pending(String)
+}
+
+public enum InvocationStatus: Sendable, Equatable {
+    case pending
+    case completed(InvokeOutcome)
+    case notFound
+}
+
+private final class PendingInvocations: @unchecked Sendable {
+    private enum State { case pending, completed(InvokeOutcome) }
+    private let lock = NSLock()
+    private var states: [String: State] = [:]
+
+    func create() -> String {
+        let id = UUID().uuidString.lowercased()
+        lock.lock(); states[id] = .pending; lock.unlock()
+        return id
+    }
+
+    func complete(_ id: String, with outcome: InvokeOutcome) {
+        lock.lock(); defer { lock.unlock() }
+        guard case .pending? = states[id] else { return }
+        states[id] = .completed(outcome)
+    }
+
+    func status(_ id: String) -> InvocationStatus {
+        lock.lock(); defer { lock.unlock() }
+        switch states[id] {
+        case .pending?: return .pending
+        case .completed(let outcome)?: return .completed(outcome)
+        case nil: return .notFound
+        }
+    }
 }
 
 /// 能力注册表。构造时收下一组 `Capability`(默认种入 demo 能力),对外暴露 `list()` / `describe(_:)` / `invoke(...)`。
@@ -126,6 +166,7 @@ public final class Registry: Sendable {
     /// dangerous 确认回调(注入点)。nil 表示「无 GUI 确认通道可用」——invoke 对 dangerous 能力 fail-closed 拒绝。
     /// 宿主注入真 GUI 确认;测试注入假件。存储为不可变 `let` + `@Sendable` 闭包,维持 `Registry` 的 Sendable 不变式。
     private let confirmDangerous: ConfirmDangerous?
+    private let pendingInvocations = PendingInvocations()
 
     /// - Parameters:
     ///   - capabilities: 待注册的能力集,缺省为 `demoCapabilities`。
@@ -147,6 +188,10 @@ public final class Registry: Sendable {
     /// 取单个能力的描述符(含 parameters);未知能力返回 nil。
     public func describe(_ id: String) -> CapabilityDescriptor? {
         byID[id]?.descriptor
+    }
+
+    public func invocationStatus(requestID: String) -> InvocationStatus {
+        pendingInvocations.status(requestID)
     }
 
     /// 宿主侧集中调用入口(不可绕过):校验 + 风险路由 + 执行。
@@ -181,16 +226,25 @@ public final class Registry: Sendable {
                 return .failure(WireError(code: WireErrorCode.denied,
                                           detail: "dangerous 能力被拒:无 GUI 确认通道可用(fail-closed),拒绝执行 \(capabilityID)"))
             }
-            guard confirm(cap.descriptor, input) else {   // 10 票:把本次请求 input 透传给确认层(GUI 展示批的是哪些参数,消除盲批)
-                return .failure(WireError(code: WireErrorCode.denied,
-                                          detail: "dangerous 能力被拒:宿主确认未通过 \(capabilityID)"))
+            let requestID = pendingInvocations.create()
+            confirm(cap.descriptor, input) { [pendingInvocations] approved in
+                let outcome: InvokeOutcome
+                if approved {
+                    switch cap.handler(input) {
+                    case .success(let output): outcome = .success(output)
+                    case .failure(let error): outcome = .failure(error)
+                    }
+                } else {
+                    outcome = .failure(WireError(code: WireErrorCode.denied,
+                                                 detail: "dangerous 能力被拒:宿主确认未通过 \(capabilityID)"))
+                }
+                pendingInvocations.complete(requestID, with: outcome)
             }
-            // 批准后才执行 handler(与 safe/normal 相同的成功/业务错误收敛)。
-            switch cap.handler(input) {
-            case .success(let output):
-                return .success(output)
-            case .failure(let bizErr):
-                return .failure(bizErr)
+            // Test/headless confirmers may decide synchronously. GUI confirmers enqueue and
+            // return, so the UDS request never waits on a modal dialog.
+            switch pendingInvocations.status(requestID) {
+            case .completed(let outcome): return outcome
+            case .pending, .notFound: return .pending(requestID)
             }
         }
     }

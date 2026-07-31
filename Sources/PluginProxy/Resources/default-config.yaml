@@ -1,0 +1,10 @@
+mixed-port: 7890
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: warning
+external-controller: 127.0.0.1:9090
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,DIRECT

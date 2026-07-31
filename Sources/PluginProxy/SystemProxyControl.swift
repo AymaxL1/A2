@@ -21,6 +21,17 @@ public struct SystemProxySnapshot: Sendable, Equatable, Codable {
     }
 }
 
+/// A fully captured takeover that is safe to persist before any system setting is changed.
+public struct SystemProxyTakeoverPlan: Sendable, Equatable {
+    public let snapshot: SystemProxySnapshot
+    public let services: [String]
+
+    public init(snapshot: SystemProxySnapshot, services: [String]) {
+        self.snapshot = snapshot
+        self.services = services
+    }
+}
+
 /// 系统代理接管/还原引擎(无状态纯逻辑;快照存放在调用方,如 ProxyPlugin)。
 /// 构造注入 `NetworkConfigPort`(真实现调 networksetup;假件模拟);capture/takeover/restore 只编排 Port 调用,可单测。
 public struct SystemProxyController: Sendable {
@@ -46,24 +57,43 @@ public struct SystemProxyController: Sendable {
     /// (用户中途接了 Ethernet / iPhone USB 网络等)。否则该新服务被接管却不在首次快照里,`restore` 只遍历快照 →
     /// disable/宿主退出后**永久指向已死的内核端口**(本平台最不能犯的错)。既有快照里的服务保持首次捕获的原状态
     /// (不被覆盖,幂等:重复 enable 不改「最初」)。
-    public func takeover(host: String, port: Int, into existing: SystemProxySnapshot?) throws -> SystemProxySnapshot {
+    public func prepareTakeover(into existing: SystemProxySnapshot?) throws -> SystemProxyTakeoverPlan {
         var order: [String] = []
         var captured: [String: ServiceProxyState] = [:]
         for state in existing?.services ?? [] {
             captured[state.service] = state          // 保留既有快照的首次原状态(不覆盖)
             order.append(state.service)
         }
-        for service in try net.networkServices() {
+        let services = try net.networkServices()
+        for service in services {
             if captured[service] == nil {
-                // 首次接管 / 接管后新出现的服务:先捕获接管前原状态并入快照(必须在 setProxy 之前读)。
+                // Capture every state before the first write so the complete rollback
+                // snapshot can be durably stored before takeover starts.
                 captured[service] = try net.proxyState(service: service)
                 order.append(service)
             }
+        }
+        return SystemProxyTakeoverPlan(
+            snapshot: SystemProxySnapshot(services: order.map { captured[$0]! }),
+            services: services
+        )
+    }
+
+    /// Apply a previously prepared takeover. Preparation and persistence belong to the
+    /// caller; this method performs writes only.
+    public func applyTakeover(_ plan: SystemProxyTakeoverPlan, host: String, port: Int) throws {
+        for service in plan.services {
             for kind in ProxyKind.allCases {
                 try net.setProxy(service: service, kind: kind, host: host, port: port)
             }
         }
-        return SystemProxySnapshot(services: order.map { captured[$0]! })
+    }
+
+    /// Compatibility convenience for callers that do not own durable transaction state.
+    public func takeover(host: String, port: Int, into existing: SystemProxySnapshot?) throws -> SystemProxySnapshot {
+        let plan = try prepareTakeover(into: existing)
+        try applyTakeover(plan, host: host, port: port)
+        return plan.snapshot
     }
 
     /// 按快照精确还原:逐服务逐类——原本开着(含第三方代理)→ 还原成那个 host:port;原本关着 → 还原成关闭。

@@ -31,6 +31,8 @@ extension ProxyConformanceTests {
         testPluginEnableDisableIdempotent(&report)
         testPluginEnableKernelNotReady(&report)
         testEnableReplayMergesNewService(&report)
+        testEnablePersistenceFailureDoesNotWrite(&report)
+        testEnablePartialWriteRollsBack(&report)
     }
 
     // ① SystemProxyController:capture → takeover → restore 全纯逻辑(含第三方代理精确还原)。
@@ -175,5 +177,51 @@ extension ProxyConformanceTests {
                      "07 重放:新增服务的其余各类也精确还原(HTTPS 回到关闭)")
         report.check(net.currentState(service: "Wi-Fi")?.http == .off,
                      "07 重放:最初的 Wi-Fi 仍精确还原为关闭(既有快照未被覆盖)")
+    }
+
+    /// P0 回归:持久化接管清单是任何 networksetup 写入的前置条件。保存失败必须 fail-closed、零写入。
+    private static func testEnablePersistenceFailureDoesNotWrite(_ report: inout TestReport) {
+        let initial = sampleInitialState()
+        let net = FakeNetworkConfigPort(initial: initial)
+        let http = FakeHTTPPort()
+        http.setResponse(pathSuffix: "/configs", json: #"{"mode":"rule","mixed-port":7890,"port":0}"#)
+        let store = FakeTakeoverStateStore()
+        store.failSaves = true
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: http,
+                                 networkConfigPort: net, kernelPath: nil, controlPort: 9090,
+                                 stateStore: store)
+
+        if case .failure = plugin.enableSystemProxy() {
+            report.check(true, "07 事务:P0 持久化失败 → enable 失败")
+        } else {
+            report.check(false, "07 事务:P0 持久化失败时 enable 不得成功")
+        }
+        report.check(net.setCalls.isEmpty && net.disableCalls.isEmpty,
+                     "07 事务:P0 持久化失败 → 系统代理零写入")
+        report.check((try? SystemProxyController(net: net).capture()) == SystemProxySnapshot(services: initial),
+                     "07 事务:P0 持久化失败 → 系统代理保持原样")
+    }
+
+    /// P0 回归:接管写到一半失败时,必须用预先保存的完整快照回滚已落地部分,不得留下半接管态。
+    private static func testEnablePartialWriteRollsBack(_ report: inout TestReport) {
+        let initial = sampleInitialState()
+        let net = FakeNetworkConfigPort(initial: initial)
+        net.failWriteAtCall = 3
+        let http = FakeHTTPPort()
+        http.setResponse(pathSuffix: "/configs", json: #"{"mode":"rule","mixed-port":7890,"port":0}"#)
+        let store = FakeTakeoverStateStore()
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: http,
+                                 networkConfigPort: net, kernelPath: nil, controlPort: 9090,
+                                 stateStore: store)
+
+        if case .failure = plugin.enableSystemProxy() {
+            report.check(true, "07 事务:P0 部分写失败 → enable 失败")
+        } else {
+            report.check(false, "07 事务:P0 部分写失败时 enable 不得成功")
+        }
+        report.check((try? SystemProxyController(net: net).capture()) == SystemProxySnapshot(services: initial),
+                     "07 事务:P0 部分写失败 → 已写代理全部回滚到原快照")
+        report.check(!store.isPersisted,
+                     "07 事务:P0 部分写失败且回滚成功 → 清除接管标记")
     }
 }

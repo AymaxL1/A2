@@ -179,7 +179,7 @@ public enum ProxyConformanceTests {
 
         // —— (a) groups() 解析组/候选/now ——
         let httpG = FakeHTTPPort()
-        httpG.setResponse(pathSuffix: "/proxies", method: "GET", json: proxiesJSON)
+        httpG.setResponse(pathSuffix: "/proxies", method: .get, json: proxiesJSON)
         let restG = MihomoRESTClient(http: httpG, port: 9090)
         let groups = (try? restG.groups()) ?? []
         let proxyGroup = groups.first { $0.name == "PROXY" }
@@ -191,10 +191,10 @@ public enum ProxyConformanceTests {
 
         // —— (b) setMode 构造对的 PATCH /configs(body mode=global)——(真核约定 PATCH,非 PUT)
         let httpM = FakeHTTPPort()
-        httpM.setResponse(pathSuffix: "/configs", method: "PATCH", statusCode: 204)
+        httpM.setResponse(pathSuffix: "/configs", method: .patch, statusCode: 204)
         let restM = MihomoRESTClient(http: httpM, port: 9090)
         let modeOK = (try? restM.setMode("global")) != nil
-        let patchConfigs = httpM.requests.first { $0.method == "PATCH" && $0.url.hasSuffix("/configs") }
+        let patchConfigs = httpM.requests.first { $0.method == .patch && $0.url.hasSuffix("/configs") }
         var modeBodyOK = false
         if let b = patchConfigs?.body, let j = try? JSONDecoder().decode(JSONValue.self, from: b) {
             modeBodyOK = j.objectValue?["mode"]?.stringValue == "global"
@@ -204,10 +204,10 @@ public enum ProxyConformanceTests {
 
         // —— (c) selectNode 构造对的 PUT /proxies/<group>(body name=NODE-B)——
         let httpN = FakeHTTPPort()
-        httpN.setResponse(pathSuffix: "/proxies/PROXY", method: "PUT", statusCode: 204)
+        httpN.setResponse(pathSuffix: "/proxies/PROXY", method: .put, statusCode: 204)
         let restN = MihomoRESTClient(http: httpN, port: 9090)
         let selOK = (try? restN.selectNode(group: "PROXY", node: "NODE-B")) != nil
-        let putProxies = httpN.requests.first { $0.method == "PUT" && $0.url.hasSuffix("/proxies/PROXY") }
+        let putProxies = httpN.requests.first { $0.method == .put && $0.url.hasSuffix("/proxies/PROXY") }
         var nodeBodyOK = false
         if let b = putProxies?.body, let j = try? JSONDecoder().decode(JSONValue.self, from: b) {
             nodeBodyOK = j.objectValue?["name"]?.stringValue == "NODE-B"
@@ -217,8 +217,8 @@ public enum ProxyConformanceTests {
 
         // —— (d) testGroupLatency 逐节点延迟 + 超时如实标注(SLOW-NODE 从 delay map 缺席=超时)——
         let httpL = FakeHTTPPort()
-        httpL.setResponse(pathSuffix: "/proxies", method: "GET", json: proxiesJSON)
-        httpL.setResponse(pathSuffix: "/delay", method: "GET",
+        httpL.setResponse(pathSuffix: "/proxies", method: .get, json: proxiesJSON)
+        httpL.setResponse(pathSuffix: "/delay", method: .get,
                           json: #"{"STUB-NODE":120,"NODE-B":340}"#)   // SLOW-NODE 缺席 → 超时
         let restL = MihomoRESTClient(http: httpL, port: 9090)
         let results = (try? restL.testGroupLatency(group: "PROXY", testURL: "http://example/generate_204", timeoutMs: 5000)) ?? []

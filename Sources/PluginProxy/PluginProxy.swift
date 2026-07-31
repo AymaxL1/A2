@@ -136,15 +136,29 @@ public final class ProxyPlugin: @unchecked Sendable {
         let controller = SystemProxyController(net: networkConfigPort)
         lock.lock(); defer { lock.unlock() }
         do {
-            // 接管:takeover 内部保证「凡被指向内核端口的服务,其接管前状态都并入快照」——含接管后新出现的服务
-            //   (修重放漏洞:否则新服务被接管却不进快照,还原遍历不到→永久指向死端口)。既有快照的服务保持首次原状态
-            //   不被覆盖(幂等:重复 enable 不改「最初」)。故直接把返回快照赋回。
-            proxySnapshot = try controller.takeover(host: host, port: port, into: proxySnapshot)
-            // 08:接管成功即持久化接管态清单(接管前快照 + 内核端口 + 内核 pid + 内核可执行路径)。崩溃/强杀后下次启动据此自愈。
-            //   在 lock 内读 handle 的 pid(避免 currentHandle() 二次取锁死锁);持久化失败不崩(记 stderr)。
+            // Transaction boundary: capture every affected service, then durably persist
+            // that complete rollback snapshot before the first system write.
+            let plan = try controller.prepareTakeover(into: proxySnapshot)
             let pid = handle.flatMap { processPort.processID($0) } ?? 0
-            persistTakeover(snapshot: proxySnapshot!, kernelPort: port, kernelPID: pid,
-                            kernelExecutablePath: kernelExecutablePath(pid: pid))
+            try persistTakeover(snapshot: plan.snapshot, kernelPort: port, kernelPID: pid,
+                                kernelExecutablePath: kernelExecutablePath(pid: pid))
+            proxySnapshot = plan.snapshot
+            do {
+                try controller.applyTakeover(plan, host: host, port: port)
+            } catch {
+                // A write may have partially landed. Restore the complete pre-write
+                // snapshot. Clear the durable marker only after rollback succeeds.
+                do {
+                    try controller.restore(plan.snapshot)
+                    proxySnapshot = nil
+                    clearTakeover()
+                } catch let rollbackError {
+                    return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                              detail: "接管系统代理失败: \(error);回滚亦失败: \(rollbackError)(已保留接管标记供下次启动自愈)"))
+                }
+                return .failure(WireError(code: WireErrorCode.capabilityFailed,
+                                          detail: "接管系统代理失败: \(error)(已回滚)"))
+            }
             return .success(.object([
                 "enabled": .bool(true),
                 "host": .string(host),
@@ -274,11 +288,12 @@ public final class ProxyPlugin: @unchecked Sendable {
             // 先把「接管前原状态」播种为将来还原目标(**不是**当前指向死端口的态),再重指到存活端口。
             lock.lock(); proxySnapshot = state.snapshot; lock.unlock()
             do {
-                let merged = try controller.takeover(host: "127.0.0.1", port: port, into: state.snapshot)
-                lock.lock(); proxySnapshot = merged; lock.unlock()
+                let plan = try controller.prepareTakeover(into: state.snapshot)
                 let pid = currentHandle().flatMap { processPort.processID($0) } ?? 0
-                persistTakeover(snapshot: merged, kernelPort: port, kernelPID: pid,
-                                kernelExecutablePath: kernelExecutablePath(pid: pid))   // 更新标记(新 pid/port)
+                try persistTakeover(snapshot: plan.snapshot, kernelPort: port, kernelPID: pid,
+                                    kernelExecutablePath: kernelExecutablePath(pid: pid))
+                lock.lock(); proxySnapshot = plan.snapshot; lock.unlock()
+                try controller.applyTakeover(plan, host: "127.0.0.1", port: port)
                 return SelfHealReport(decision: .recoverTakeover, reapedOrphanPID: reapedPID, kernelRelaunched: true)
             } catch {
                 // 重指失败 → 兜底退化为还原快照(绝不留死端口)。**只有还原真成功才清标记**。
@@ -296,8 +311,12 @@ public final class ProxyPlugin: @unchecked Sendable {
         case .alreadyHealthy:
             // 启动早期不会走到(kernelPortHealthy=false);为完整性保留:仅校正标记(重写清单)。
             let pid = currentHandle().flatMap { processPort.processID($0) } ?? state.kernelPID
-            persistTakeover(snapshot: state.snapshot, kernelPort: state.kernelPort, kernelPID: pid,
-                            kernelExecutablePath: pid == state.kernelPID ? state.kernelExecutablePath : kernelExecutablePath(pid: pid))
+            do {
+                try persistTakeover(snapshot: state.snapshot, kernelPort: state.kernelPort, kernelPID: pid,
+                                    kernelExecutablePath: pid == state.kernelPID ? state.kernelExecutablePath : kernelExecutablePath(pid: pid))
+            } catch {
+                selfHealLog("校正接管标记失败(\(error)),保留原标记待下次重试")
+            }
             return SelfHealReport(decision: .alreadyHealthy, reapedOrphanPID: reapedPID, kernelRelaunched: relaunched)
 
         case .clean, .deferred:
@@ -341,20 +360,16 @@ public final class ProxyPlugin: @unchecked Sendable {
         return nil
     }
 
-    /// 编码并原子持久化接管态(失败不崩,记 stderr)。
+    /// 编码并原子持久化接管态。调用方决定失败时是否允许任何后续系统写入。
     private func persistTakeover(snapshot: SystemProxySnapshot, kernelPort: Int, kernelPID: Int32,
-                                kernelExecutablePath: String) {
+                                kernelExecutablePath: String) throws {
         let state = TakeoverState(snapshot: snapshot, kernelPort: kernelPort, kernelPID: kernelPID,
                                   kernelExecutablePath: kernelExecutablePath,
                                   active: true, takeoverAt: Date().timeIntervalSince1970)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        do {
-            let data = try encoder.encode(state)
-            try stateStore.save(data)
-        } catch {
-            FileHandle.standardError.write(Data("[PluginProxy] 持久化接管态失败(不影响本世代): \(error)\n".utf8))
-        }
+        let data = try encoder.encode(state)
+        try stateStore.save(data)
     }
 
     /// 清除持久化接管态(幂等)。

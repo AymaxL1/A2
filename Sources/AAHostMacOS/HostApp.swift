@@ -3,9 +3,7 @@
 // 入口用 @main @MainActor struct(顶层代码非 MainActor 上下文,不能在 main.swift 顶层构造 @MainActor 对象;S1/S2 已验证)。
 // socket 路径读 Contracts 常量(AAPaths),父目录启动时自建,旧 socket 由 server bind 前 unlink。
 //
-// 04 票:宿主向 Registry 注入 dangerous 确认回调(真 GUI 确认)。实现照 S2 spike 已真机点验的线程模型:
-//   后台连接处理线程需弹窗时 `DispatchQueue.main.sync` 同步切主线程 → `NSApp.activate` → critical `NSAlert`
-//   `runModal` → 「确认执行」=true /「取消」=false,再把 Bool 带回后台线程写响应(无死锁)。
+// dangerous 确认异步入主线程队列；UDS 立即返回 pending/requestId，GUI 决定由 result 查询读取。
 
 import AppKit
 import AAContracts
@@ -15,9 +13,8 @@ import PluginProxy
 
 /// dangerous 确认的 test-only 自动化档位(读环境变量 `AA_CONFIRM_AUTO`)。
 ///
-/// ⚠️ **test-only,12/13 真机分发前必须移除或编译期门控**:headless check.sh 靠它无人值守跑 deny/approve 两分支
-///    (不弹窗、即时返回),绝不能让生产默认放行。安全缺省是 `.interactive`——未设该变量时走真 NSAlert,
-///    人不点就阻塞(天然 fail-safe,不会静默批准)。
+/// 仅在 `AA_TESTING` 编译中存在；生产二进制不包含读取该环境变量的代码。
+#if AA_TESTING
 private enum AutoConfirm {
     case approve       // AA_CONFIRM_AUTO=approve → 回调直接返 true(不弹窗)
     case deny          // AA_CONFIRM_AUTO=deny    → 回调直接返 false(不弹窗)
@@ -32,6 +29,7 @@ private enum AutoConfirm {
         }
     }
 }
+#endif
 
 /// 宿主日志助手:每行后 fflush(stdout 重定向到文件时为块缓冲,不 flush 会看不到实时日志)。
 /// 串行化避免多线程 print 交错(accept/handle 都在后台线程)。
@@ -60,9 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var proxyPlugin: ProxyPlugin!
     /// test/dev seam:SIGUSR1 → 优雅退出的 DispatchSource(exercise applicationWillTerminate→reclaimKernel→terminate 完整回收路径)。
     var gracefulQuitSource: DispatchSourceSignal?
-    /// dangerous 确认串行化闸门(10 票还 04 债):同一时刻只允许一个确认在途,从根上消除并发嵌套 runModal。
-    /// 从多个后台连接处理线程进入 `confirmDangerous` 时在此排队,一个决定完再放下一个。
-    private let confirmGate = NSLock()
+    private struct ConfirmationRequest {
+        let descriptor: CapabilityDescriptor
+        let input: JSONValue?
+        let completion: @Sendable (Bool) -> Void
+    }
+    private var confirmationQueue: [ConfirmationRequest] = []
+    private var confirmationInFlight = false
 
     /// 可选无人值守自动拒绝定时器秒数(手动/真机跑用,防夜里留挂着的对话框)。读 `AA_AUTO_DENY_SECONDS`。
     /// 仅在 `.interactive`(真弹窗)分支生效;headless 门禁用的是 `AA_CONFIRM_AUTO`(不弹窗),二者不冲突。
@@ -70,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⚠️ **test-only,与 `AA_CONFIRM_AUTO` 同口径:12/13 真机分发前必须移除或编译期门控**。
     ///    方向上安全(缺省 nil = 不自动决定;设了也只会到点 deny,绝不自动批准),但不该随产品出厂。
     let autoDenySeconds: Double? = {
+#if AA_TESTING
         if let s = ProcessInfo.processInfo.environment["AA_AUTO_DENY_SECONDS"], let v = Double(s) { return v }
+#endif
         return nil
     }()
 
@@ -81,14 +85,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let processPort = SystemProcessPort()   // 反孤儿退出钩子在此进程级安装一次(atexit + 信号)
         let httpPort = SocketHTTPPort()
         let env = ProcessInfo.processInfo.environment
-        let kernelPath = env["AA_MIHOMO_KERNEL_PATH"]                 // nil = 不拉起内核
         let controlPort = Int(env["AA_MIHOMO_CONTROL_PORT"] ?? "") ?? 9090
-        // 默认拉起参数 `--port <控制端口>`(对齐 fake stub);E2E 可经 AA_MIHOMO_KERNEL_EXTRA_ARGS 追加(如 --ignore-sigterm)。
-        // 真 mihomo 的参数/配置形态(-d/-f + config 里的 external-controller)入库时由用户决定,留用户。
-        var kernelArgs = ["--port", String(controlPort)]
+        let kernelPath: String?
+        var kernelArgs: [String]
+#if AA_TESTING
+        if let fakePath = env["AA_MIHOMO_KERNEL_PATH"], !fakePath.isEmpty {
+            kernelPath = fakePath
+            kernelArgs = ["--port", String(controlPort)]
+        } else {
+            kernelPath = nil
+            kernelArgs = []
+        }
         if let extra = env["AA_MIHOMO_KERNEL_EXTRA_ARGS"], !extra.isEmpty {
             kernelArgs += extra.split(separator: " ").map(String.init)
         }
+#else
+        kernelPath = MihomoKernelResource.executablePath
+        let dataDirectory = AAPaths.socketDirectoryURL.appendingPathComponent("mihomo", isDirectory: true).path
+        do {
+            try FileManager.default.createDirectory(atPath: dataDirectory, withIntermediateDirectories: true)
+        } catch {
+            hostFatal("mihomo 数据目录创建失败: \(error.localizedDescription)")
+        }
+        kernelArgs = ["-d", dataDirectory, "-f", MihomoKernelResource.defaultConfigPath,
+                      "-ext-ctl", "127.0.0.1:\(controlPort)"]
+#endif
         // 07 票:系统代理读写 Port。缺省为真 networksetup;test-only env seam AA_NETWORKSETUP_FAKE_STATE 指定
         //   文件后端假件(E2E 用,绝不碰真设置)。与 AA_CONFIRM_AUTO / AA_MIHOMO_KERNEL_PATH 同口径,12/13 前按需门控。
         let networkConfigPort: any NetworkConfigPort
@@ -132,8 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 hostLog("mihomo 内核拉起失败: \(kp)(proxy.status 将如实报未运行)")
             }
         } else {
-            hostLog("未配置 AA_MIHOMO_KERNEL_PATH,不拉起内核;proxy.status 将如实报未运行。"
-                    + "真 mihomo 锁版入库留用户决策。")
+            hostLog("测试构建未配置 fake mihomo,不拉起内核")
         }
 
         // 0d') 10 票(F3)重启后机械补齐:内核确认拉起之后,若清单有激活订阅,让内核从其物化配置重载
@@ -152,8 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //     插件产 [PluginCapability](只依赖 SDK/Contracts),宿主零成本适配成 Registry 的 Capability(handler 形状一致)。
         let pluginCaps = plugin.capabilities().map { Capability(descriptor: $0.descriptor, handler: $0.handler) }
         registry = Registry(capabilities: Registry.demoCapabilities + pluginCaps,
-                            confirmDangerous: { [weak self] descriptor, input in
-            self?.confirmDangerous(descriptor, input) ?? false
+                            confirmDangerous: { [weak self] descriptor, input, completion in
+            guard let self else { completion(false); return }
+            self.confirmDangerous(descriptor, input, completion: completion)
         })
 
         // 1) socket 路径与父目录(路径常量集中在 Contracts.AAPaths);父目录建不出即快速失败,不带病常驻
@@ -178,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
 
         NSApp.setActivationPolicy(.accessory) // 无 Dock 图标,菜单栏常驻
+#if AA_TESTING
         switch AutoConfirm.current() {
         case .approve: hostLog("dangerous 确认模式: AA_CONFIRM_AUTO=approve(test-only 自动批准,不弹窗)")
         case .deny:    hostLog("dangerous 确认模式: AA_CONFIRM_AUTO=deny(test-only 自动拒绝,不弹窗)")
@@ -185,6 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hostLog("dangerous 确认模式: interactive(真 NSAlert 确认)"
                     + (autoDenySeconds.map { " · AA_AUTO_DENY_SECONDS=\($0)s 自动拒绝" } ?? ""))
         }
+#else
+        hostLog("dangerous 确认模式: interactive(生产构建不读取 AA_CONFIRM_AUTO)")
+#endif
         // test/dev seam:SIGUSR1 → 优雅退出。用 DispatchSource(非 raw handler,安全)在主线程调 NSApp.terminate,
         //   完整走 applicationWillTerminate → reclaimKernel → ProcessPort.terminate 的回收路径(供 headless E2E 验证
         //   「terminate 对 SIGTERM-忽略型内核仍 SIGKILL 兜底、无孤儿」)。须先 SIG_IGN 让默认处置不抢先杀进程。
@@ -228,34 +253,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // ============ dangerous 宿主确认(注入进 Registry 的回调实现)============
 
-    /// dangerous 确认回调实现。从后台连接处理线程(经 Registry.invoke → 注入的 @Sendable 闭包)同步调用。
-    /// `nonisolated`:@Sendable 闭包处于非隔离上下文,不能同步调 @MainActor 方法;故本入口与切主线程桥都是 nonisolated,
-    ///   真正的 @MainActor 弹窗代码(showConfirmAlert)在主线程上经 `MainActor.assumeIsolated` 访问。
+    /// dangerous 确认回调实现。非隔离入口只负责入队并立即返回；弹窗由主线程串行处理。
     ///
     /// ⚠️ **test-only env seam(`AA_CONFIRM_AUTO`)**:approve→true / deny→false,均不弹窗、即时返回,
     ///    供 headless check.sh 无人值守跑两分支;未设 → 走真 NSAlert(生产缺省,fail-safe)。
-    ///    **12/13 真机分发前必须移除或编译期门控**(见 `AutoConfirm` 注释),绝不能让生产默认放行。
-    nonisolated private func confirmDangerous(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
-        // F8(记债转显式崩溃):本入口是**硬性不变式 = 只在后台连接处理线程被调用**。若哪天有人从主线程调它并叠加
-        //   confirmGate 持锁 + 下面的 DispatchQueue.main.sync,就会自锁死;precondition 把这条未来的静默死锁转成显式崩溃(更安全的失败)。
-        precondition(!Thread.isMainThread, "confirmDangerous 必须在后台线程调用(否则 confirmGate + main.sync 会死锁)")
-        // 10 票(还 04 债):整段串行化——同一时刻只允许一个 dangerous 确认在途,消除并发嵌套 runModal
-        //   (旧 auto-deny 定时器 stopModal 停最内层会话可能误关另一弹窗的隐患由此根除)。
-        //   headless 两分支(approve/deny)不弹窗即时返回,加锁开销可忽略;interactive 分支下一个确认排队等待前一个决定完。
-        // 记债(D3,04 家族行为):串行化排队意味着后到的确认可能在其客户端 SO_RCVTIMEO 早已超时后才弹出,
-        //   用户点了「确认」但客户端已判超时退出(退出码3)。属可接受的既有行为,记债不改;将来可加「入队时间戳 + 过期即自动 deny」。
-        confirmGate.lock(); defer { confirmGate.unlock() }
+    ///    该分支受 `AA_TESTING` 编译期门控，生产构建不可达。
+    nonisolated private func confirmDangerous(_ descriptor: CapabilityDescriptor, _ input: JSONValue?,
+                                               completion: @escaping @Sendable (Bool) -> Void) {
         // F2:把本次请求的 input 关键字段落一行日志(证明 input 到达确认层,消除盲批;E2E 可 grep `[confirm] <id> ...`)。
         hostLog("[confirm] \(descriptor.id) \(Self.renderInput(input))")
+#if AA_TESTING
         switch AutoConfirm.current() {
         case .approve:
             hostLog("AA_CONFIRM_AUTO=approve → 自动批准(test-only,不弹窗)[\(descriptor.id)]")
-            return true
+            completion(true)
+            return
         case .deny:
             hostLog("AA_CONFIRM_AUTO=deny → 自动拒绝(test-only,不弹窗)[\(descriptor.id)]")
-            return false
+            completion(false)
+            return
         case .interactive:
-            return confirmDangerousOnMain(descriptor, input)
+            break
+        }
+#endif
+        // Enqueue and return immediately. The UDS request receives pending/requestId;
+        // modal lifetime is no longer coupled to the client's socket timeout.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { completion(false); return }
+            self.confirmationQueue.append(ConfirmationRequest(descriptor: descriptor, input: input,
+                                                               completion: completion))
+            self.showNextConfirmationIfNeeded()
         }
     }
 
@@ -272,27 +299,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return pairs.joined(separator: " ")
     }
 
-    /// 后台线程入口:同步切回主线程弹窗并取回结果(阻塞本连接直到用户/自动决定)。照 S2 已真机点验的模型。
-    /// 主线程内用 `MainActor.assumeIsolated` 进入 @MainActor 隔离域调 showConfirmAlert(此时确在主线程,断言成立)。
-    nonisolated private func confirmDangerousOnMain(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
-        let approved: Bool
-        if Thread.isMainThread {
-            approved = MainActor.assumeIsolated { self.showConfirmAlert(descriptor, input) }
-        } else {
-            approved = DispatchQueue.main.sync {
-                MainActor.assumeIsolated { self.showConfirmAlert(descriptor, input) }
-            }
-        }
-        hostLog("dangerous 确认结果 [\(descriptor.id)]: \(approved ? "approved" : "denied")")
-        return approved
+    /// 主线程一次展示一个确认；结束后在后台完成 pending invocation，避免能力 handler 占用 UI 线程。
+    private func showNextConfirmationIfNeeded() {
+        guard !confirmationInFlight, !confirmationQueue.isEmpty else { return }
+        confirmationInFlight = true
+        let request = confirmationQueue.removeFirst()
+        let approved = showConfirmAlert(request.descriptor, request.input)
+        hostLog("dangerous 确认结果 [\(request.descriptor.id)]: \(approved ? "approved" : "denied")")
+        confirmationInFlight = false
+        DispatchQueue.global(qos: .userInitiated).async { request.completion(approved) }
+        showNextConfirmationIfNeeded()
     }
 
     /// 主线程弹 dangerous 确认框(critical NSAlert)。accessory app 弹窗前必须 activate 带到前台。
     /// 支持 `AA_AUTO_DENY_SECONDS` 定时自动拒绝(定时器须加进 `.modalPanel` 模式,否则模态循环里不触发)。
     ///
-    /// 已串行化(10 票还 04 债):`confirmDangerous` 入口用 `confirmGate` 把整段确认串行化——同一时刻只允许一个确认
-    /// 在途,故这里的 `runModal` 不再有并发嵌套,auto-deny 定时器的 `stopModal` 只会作用于当前唯一的模态会话
-    /// (从根上消除了旧的「误关到另一个弹窗」隐患)。
+    /// 主线程队列保证同一时刻只有一个 `runModal`，auto-deny 只作用于当前会话。
     /// F2:把本次请求的 input 关键字段渲染进确认框——用户看得见批的是哪个源/替换哪条,不再盲批。
     private func showConfirmAlert(_ descriptor: CapabilityDescriptor, _ input: JSONValue?) -> Bool {
         NSApp.activate(ignoringOtherApps: true)

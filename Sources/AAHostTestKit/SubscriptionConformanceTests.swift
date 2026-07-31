@@ -56,7 +56,7 @@ extension ProxyConformanceTests {
     }
 
     private static func putConfigsCount(_ http: FakeHTTPPort) -> Int {
-        http.requests.filter { $0.method == "PUT" && $0.url.hasSuffix("/configs") }.count
+        http.requests.filter { $0.method == .put && $0.url.hasSuffix("/configs") }.count
     }
 
     private static func isFailure(_ r: Result<JSONValue, WireError>) -> Bool {
@@ -161,7 +161,7 @@ extension ProxyConformanceTests {
         let store = FakeSubscriptionStore()
         let src = FakeSubscriptionSourcePort()
         let http = FakeHTTPPort()
-        http.setResponse(pathSuffix: "/configs", method: "PUT", statusCode: 204)   // reload 成功
+        http.setResponse(pathSuffix: "/configs", method: .put, statusCode: 204)   // reload 成功
         let mgr = makeManager(store: store, source: src, http: http)
 
         src.program(source: "srcA", [.success(Data("A".utf8))])
@@ -193,7 +193,7 @@ extension ProxyConformanceTests {
         let store = FakeSubscriptionStore()
         let src = FakeSubscriptionSourcePort()
         let http = FakeHTTPPort()
-        http.setResponse(pathSuffix: "/configs", method: "PUT", statusCode: 500)   // reload 失败
+        http.setResponse(pathSuffix: "/configs", method: .put, statusCode: 500)   // reload 失败
         let mgr = makeManager(store: store, source: src, http: http)
         src.program(source: "srcA", [.success(Data("A".utf8))])
         guard let idA = idOf(mgr.add(name: "A", source: "srcA")) else {
@@ -208,7 +208,7 @@ extension ProxyConformanceTests {
         let store = FakeSubscriptionStore()
         let src = FakeSubscriptionSourcePort()
         let http = FakeHTTPPort()
-        http.setResponse(pathSuffix: "/configs", method: "PUT", statusCode: 204)
+        http.setResponse(pathSuffix: "/configs", method: .put, statusCode: 204)
         let mgr = makeManager(store: store, source: src, http: http)
 
         src.program(source: "srcA", [.success(Data("v1".utf8))])
@@ -261,7 +261,7 @@ extension ProxyConformanceTests {
         let src = FakeSubscriptionSourcePort()
         src.program(source: "srcA", [.success(Data("NEW".utf8))])
         let http = FakeHTTPPort()
-        http.setResponse(pathSuffix: "/configs", method: "PUT", statusCode: 500)   // 新配置重载必失败
+        http.setResponse(pathSuffix: "/configs", method: .put, statusCode: 500)   // 新配置重载必失败
         let mgr = makeManager(store: store, source: src, http: http)
 
         let r = mgr.update(id: "a")
@@ -283,7 +283,7 @@ extension ProxyConformanceTests {
         let src = FakeSubscriptionSourcePort()
         src.program(source: "srcA", [.success(Data("NEW".utf8))])
         let http = FakeHTTPPort()
-        http.setResponse(pathSuffix: "/configs", method: "PUT", statusCode: 500)
+        http.setResponse(pathSuffix: "/configs", method: .put, statusCode: 500)
         let mgr = makeManager(store: store, source: src, http: http)
 
         report.check(isFailure(mgr.update(id: "a")), "10 F6 回滚自身失败:业务失败")

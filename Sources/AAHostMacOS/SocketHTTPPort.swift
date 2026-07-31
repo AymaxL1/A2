@@ -17,7 +17,7 @@ public final class SocketHTTPPort: HTTPPort, @unchecked Sendable {
         self.timeoutSeconds = timeoutSeconds
     }
 
-    public func send(method: String, url: String, body: Data?) throws -> HTTPResponse {
+    public func send(method: HTTPMethod, url: String, body: Data?) throws -> HTTPResponse {
         guard let comps = URLComponents(string: url), let host = comps.host, let port = comps.port else {
             throw SocketHTTPError.badURL(url)
         }
@@ -47,7 +47,7 @@ public final class SocketHTTPPort: HTTPPort, @unchecked Sendable {
         guard connRes == 0 else { throw SocketHTTPError.connectFailed(errno) }  // 内核死亡 → ECONNREFUSED
 
         // 组请求(HTTP/1.0 + Connection: close)。
-        var head = "\(method) \(path) HTTP/1.0\r\nHost: \(host)\r\nConnection: close\r\n"
+        var head = "\(method.rawValue) \(path) HTTP/1.0\r\nHost: \(host)\r\nConnection: close\r\n"
         if let b = body {
             head += "Content-Type: application/json\r\nContent-Length: \(b.count)\r\n"
         }

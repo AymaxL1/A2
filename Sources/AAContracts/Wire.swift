@@ -19,6 +19,8 @@ public enum WireOp {
     public static let capabilitiesDescribe = "capabilities.describe"
     /// 调用单个能力(带 input,经宿主侧集中 schema 校验与风险路由)。
     public static let capabilitiesCall = "capabilities.call"
+    /// 按 request id 查询异步 dangerous 调用。
+    public static let capabilitiesResult = "capabilities.result"
 }
 
 /// 统一 `error.code` 常量表(单一来源)。粗分类走退出码(见 `AAExitCode`),细因走这里的字符串码。
@@ -60,11 +62,14 @@ public struct WireRequest: Codable, Sendable, Equatable {
     public let capability: String?
     /// 调用输入(call 用;任意 JSON,经 `JSONValue` 承载;list/describe 省略)。
     public let input: JSONValue?
+    /// 异步 dangerous 调用的查询 id(`capabilities.result` 用)。
+    public let requestID: String?
 
-    public init(op: String, capability: String? = nil, input: JSONValue? = nil) {
+    public init(op: String, capability: String? = nil, input: JSONValue? = nil, requestID: String? = nil) {
         self.op = op
         self.capability = capability
         self.input = input
+        self.requestID = requestID
     }
 }
 
@@ -128,9 +133,19 @@ public struct DescribeResult: Codable, Sendable, Equatable {
 
 /// `capabilities.call` 的 result 载荷:承载能力输出(任意 JSON,经 `JSONValue`)。
 public struct CallResult: Codable, Sendable, Equatable {
-    public let output: JSONValue
+    public let output: JSONValue?
+    public let pending: Bool
+    public let requestID: String?
 
     public init(output: JSONValue) {
         self.output = output
+        self.pending = false
+        self.requestID = nil
+    }
+
+    public init(pending requestID: String) {
+        self.output = nil
+        self.pending = true
+        self.requestID = requestID
     }
 }

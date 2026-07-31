@@ -1,0 +1,4 @@
+Mihomo Meta v1.19.28 darwin arm64
+SHA-256: 55b7286331cb30a54b2564013b02b84a0c280e8b690bd1e5da4b9d4f4ca007ac
+Source: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.28
+License: GPL-3.0

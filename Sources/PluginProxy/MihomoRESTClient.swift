@@ -206,7 +206,7 @@ public struct MihomoRESTClient: Sendable {
     // ============ 私有助手 ============
 
     /// 发一个写请求(method 由调用方指定:切模式=PATCH,选节点=PUT)并要求 2xx;非 2xx 抛 httpStatus(mihomo 写成功常回 204 No Content)。
-    private func sendExpectingSuccess(method: String, path: String, body: Data) throws {
+    private func sendExpectingSuccess(method: HTTPMethod, path: String, body: Data) throws {
         let resp = try http.send(method: method, url: baseURL + path, body: body)
         guard (200..<300).contains(resp.statusCode) else {
             throw MihomoRESTError.httpStatus(resp.statusCode)

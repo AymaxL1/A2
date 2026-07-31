@@ -78,6 +78,8 @@ public enum RegistryConformanceTests {
             report.check(out.objectValue?["mode"]?.stringValue == "global", "09 allowedValues:合法取值(global)放行执行")
         case .failure:
             report.check(false, "09 allowedValues:合法取值不应失败")
+        case .pending:
+            report.check(false, "09 allowedValues:safe 能力不应 pending")
         }
 
         // 无 allowedValues 的参数(向后兼容):任意 string 取值放行(不因加法而收紧既有能力)。
@@ -89,6 +91,7 @@ public enum RegistryConformanceTests {
         switch free.invoke(capabilityID: "fake.free", input: .object(["x": .string("anything")])) {
         case .success: report.check(true, "09 allowedValues:未声明 allowedValues 的参数不约束取值(向后兼容)")
         case .failure: report.check(false, "09 allowedValues:无约束参数任意取值应放行")
+        case .pending: report.check(false, "09 allowedValues:safe 能力不应 pending")
         }
     }
 
@@ -156,6 +159,8 @@ public enum RegistryConformanceTests {
             report.check(out.objectValue?["echo"]?.stringValue == "hi", "invoke demo.echo 成功且回显 message")
         case .failure:
             report.check(false, "invoke demo.echo(合法 input)应成功")
+        case .pending:
+            report.check(false, "invoke demo.echo(safe)不应 pending")
         }
 
         // 业务失败:message=="boom" → capability_failed(→ 退出码 5)
@@ -169,6 +174,8 @@ public enum RegistryConformanceTests {
             report.check(out.objectValue?["set"] == JSONValue.bool(true), "invoke demo.note.set(normal)成功、零 GUI 直执行")
         case .failure:
             report.check(false, "invoke demo.note.set(合法 input)应成功")
+        case .pending:
+            report.check(false, "invoke demo.note.set(normal)不应 pending")
         }
     }
 
@@ -186,17 +193,19 @@ public enum RegistryConformanceTests {
 
         // 分支①:假 confirm 返 true → 批准 → 执行 handler 成功,且恰执行一次。
         let c1 = CallCounter()
-        switch makeRegistry(confirm: { _, _ in true }, counter: c1).invoke(capabilityID: "fake.danger", input: nil) {
+        switch makeRegistry(confirm: { _, _, reply in reply(true) }, counter: c1).invoke(capabilityID: "fake.danger", input: nil) {
         case .success(let out):
             report.check(out.objectValue?["executed"] == .bool(true), "dangerous + 假 confirm=true → 执行 handler 成功")
         case .failure:
             report.check(false, "dangerous + 假 confirm=true 应成功执行")
+        case .pending:
+            report.check(false, "同步假 confirm=true 不应 pending")
         }
         report.check(c1.count == 1, "假 confirm=true 时 handler 恰执行一次")
 
         // 分支②:假 confirm 返 false → denied,且 handler 绝不执行。
         let c2 = CallCounter()
-        report.check(errorCode(makeRegistry(confirm: { _, _ in false }, counter: c2).invoke(capabilityID: "fake.danger", input: nil))
+        report.check(errorCode(makeRegistry(confirm: { _, _, reply in reply(false) }, counter: c2).invoke(capabilityID: "fake.danger", input: nil))
                         == WireErrorCode.denied, "dangerous + 假 confirm=false → denied")
         report.check(c2.count == 0, "假 confirm=false 时 handler 绝不执行(未被绕过)")
 
@@ -209,16 +218,44 @@ public enum RegistryConformanceTests {
         // 分支④(10 票 F2:确认回调确实收到 input → 不再盲批)。invoke 把本次请求 input 透传给确认回调。
         let c4 = CallCounter()
         let received = ReceivedInputBox()
-        let reg4 = makeRegistry(confirm: { _, input in received.value = input; return true }, counter: c4)
+        let reg4 = makeRegistry(confirm: { _, input, reply in received.value = input; reply(true) }, counter: c4)
         _ = reg4.invoke(capabilityID: "fake.danger", input: .object(["target": .string("disk9")]))
         report.check(received.value == .object(["target": .string("disk9")]),
                      "10 F2:dangerous 确认回调确实收到本次请求的 input(不再盲批)")
         report.check(c4.count == 1, "10 F2:批准后 handler 执行一次(input 透传不影响执行语义)")
+
+        // Delayed GUI-style confirmation must not hold the invoking request open.
+        let c5 = CallCounter()
+        let delayed = ConfirmationReplyBox()
+        let reg5 = makeRegistry(confirm: { _, _, reply in delayed.reply = reply }, counter: c5)
+        let pendingID: String?
+        switch reg5.invoke(capabilityID: "fake.danger", input: nil) {
+        case .pending(let id): pendingID = id
+        default: pendingID = nil
+        }
+        report.check(pendingID != nil, "dangerous 异步确认 → invoke 立即返回 pending requestId")
+        if let id = pendingID {
+            report.check(reg5.invocationStatus(requestID: id) == .pending,
+                         "结果查询:用户决定前状态为 pending")
+            delayed.reply?(true)
+            switch reg5.invocationStatus(requestID: id) {
+            case .completed(.success(let output)):
+                report.check(output.objectValue?["executed"] == .bool(true),
+                             "结果查询:批准后返回能力输出")
+            default:
+                report.check(false, "结果查询:批准后应 completed(success)")
+            }
+        }
+        report.check(c5.count == 1, "异步批准后 handler 恰执行一次")
     }
 
     /// 捕获确认回调收到的 input(证明不再盲批)。`@unchecked Sendable`:测试同步单线程驱动。
     private final class ReceivedInputBox: @unchecked Sendable {
         var value: JSONValue?
+    }
+
+    private final class ConfirmationReplyBox: @unchecked Sendable {
+        var reply: (@Sendable (Bool) -> Void)?
     }
 
     // ⑤ 契约往返:RiskLevel 与 JSONValue 经 JSON 编解码稳定

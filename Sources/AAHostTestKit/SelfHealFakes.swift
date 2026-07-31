@@ -17,6 +17,8 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     public private(set) var saveCount = 0
     /// clear 调用次数(断言「还原/用户改过后清标记」)。
     public private(set) var clearCount = 0
+    /// 编程:让 save 抛错,用于证明接管态持久化失败时绝不开始修改系统代理。
+    public var failSaves = false
 
     /// 构造时可预置一坨已持久化字节(模拟「上一世代崩溃后残留的接管态清单」)。
     public init(initial: Data? = nil) {
@@ -30,6 +32,7 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
 
     public func save(_ data: Data) throws {
         lock.lock(); defer { lock.unlock() }
+        if failSaves { throw FakeStoreError.saveProgrammedToFail }
         blob = data
         saveCount += 1
     }
@@ -44,6 +47,10 @@ public final class FakeTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
     public var isPersisted: Bool {
         lock.lock(); defer { lock.unlock() }
         return blob != nil
+    }
+
+    public enum FakeStoreError: Error {
+        case saveProgrammedToFail
     }
 }
 

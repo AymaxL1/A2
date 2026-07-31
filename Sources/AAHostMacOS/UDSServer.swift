@@ -136,6 +136,23 @@ final class UDSServer {
                 return encode(encoder, response)
             case .failure(let err):
                 return encodeFailure(encoder, code: err.code, detail: err.detail)
+            case .pending(let requestID):
+                return encode(encoder, WireResponse<CallResult>.success(CallResult(pending: requestID)))
+            }
+
+        case WireOp.capabilitiesResult:
+            guard let requestID = request.requestID, !requestID.isEmpty else {
+                return encodeFailure(encoder, code: WireErrorCode.invalidParams, detail: "result 请求缺 requestID 字段")
+            }
+            switch registry.invocationStatus(requestID: requestID) {
+            case .pending:
+                return encode(encoder, WireResponse<CallResult>.success(CallResult(pending: requestID)))
+            case .completed(.success(let output)):
+                return encode(encoder, WireResponse<CallResult>.success(CallResult(output: output)))
+            case .completed(.failure(let error)):
+                return encodeFailure(encoder, code: error.code, detail: error.detail)
+            case .completed(.pending), .notFound:
+                return encodeFailure(encoder, code: WireErrorCode.invalidParams, detail: "未知 requestID: \(requestID)")
             }
 
         default:

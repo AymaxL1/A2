@@ -97,12 +97,12 @@ public struct HTTPResponse: Sendable, Equatable {
     }
 }
 
-/// HTTP 方法常量(避免散写魔法字符串)。
-public enum HTTPMethod {
-    public static let get = "GET"
-    public static let put = "PUT"
-    public static let patch = "PATCH"
-    public static let post = "POST"
+/// HTTP 方法是封闭、可传输的领域值；调用方不能传任意字符串。
+public enum HTTPMethod: String, Sendable, Equatable, Codable {
+    case get = "GET"
+    case put = "PUT"
+    case patch = "PATCH"
+    case post = "POST"
 }
 
 /// 单发 HTTP 请求 Port。真实现(AAHostMacOS)对 `127.0.0.1:<port>` 发同步 HTTP;假件(AAHostTestKit)按 URL 返回预置 JSON。
@@ -112,7 +112,7 @@ public enum HTTPMethod {
 public protocol HTTPPort: Sendable {
     /// 发一个请求:`method`(见 `HTTPMethod`)、完整 `url`(如 `http://127.0.0.1:9090/version`)、可选 `body`。
     /// 返回状态码 + 响应体;传输失败(连不上 / 超时 / 响应不可解析)抛错。
-    func send(method: String, url: String, body: Data?) throws -> HTTPResponse
+    func send(method: HTTPMethod, url: String, body: Data?) throws -> HTTPResponse
 }
 
 // ============ PluginCapability —— 插件把能力交给宿主注册的载体 ============

@@ -78,23 +78,23 @@ public final class FakeHTTPPort: HTTPPort, @unchecked Sendable {
     private let lock = NSLock()
     /// 预置响应表:URL 后缀 + 可选 method(nil=任意方法)→ 响应。
     /// method 维度是 09 票新增:GET /configs 与 PUT /configs 后缀相同,靠 method 区分,避免误配。
-    private var responses: [(suffix: String, method: String?, resp: HTTPResponse)] = []
+    private var responses: [(suffix: String, method: HTTPMethod?, resp: HTTPResponse)] = []
 
     /// 请求记录(方法 + URL + body),供断言「REST 客户端确实按预期打了哪些路径 / 写了什么 body」。
     /// (09 票新增 body:mode.set / node.select 需核验 PUT body 内容,如 {"mode":"global"} / {"name":"NODE-B"}。)
-    public private(set) var requests: [(method: String, url: String, body: Data?)] = []
+    public private(set) var requests: [(method: HTTPMethod, url: String, body: Data?)] = []
 
     public init() {}
 
     /// 预置一个响应:URL 以 `pathSuffix` 结尾(且 method 匹配,nil=任意)时返回该 JSON。
-    public func setResponse(pathSuffix: String, method: String? = nil, statusCode: Int = 200, json: String = "") {
+    public func setResponse(pathSuffix: String, method: HTTPMethod? = nil, statusCode: Int = 200, json: String = "") {
         lock.lock(); defer { lock.unlock() }
         responses.append((pathSuffix, method, HTTPResponse(statusCode: statusCode, body: Data(json.utf8))))
     }
 
     public enum FakeError: Error, Equatable { case noPreset(String) }
 
-    public func send(method: String, url: String, body: Data?) throws -> HTTPResponse {
+    public func send(method: HTTPMethod, url: String, body: Data?) throws -> HTTPResponse {
         lock.lock(); defer { lock.unlock() }
         requests.append((method, url, body))
         // 按「路径」后缀匹配:先剥掉 query(如 /group/<g>/delay?url=&timeout= 的 ?… 部分),

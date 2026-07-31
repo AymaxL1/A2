@@ -47,7 +47,11 @@ let package = Package(
         .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
         // 铁律:PluginProxy 只依赖 SDK / Contracts / UISystem,绝不依赖任何 Host* target。
         //   06 票新增的 ProcessPort/HTTPPort **协议**定在 AAPluginSDK(插件只依赖 SDK),真实现/假件在 Host* 侧——边界不破。
-        .target(name: "PluginProxy", dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"]),
+        .target(
+            name: "PluginProxy",
+            dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"],
+            resources: [.copy("Resources")]
+        ),
 
         // ④ CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),
