@@ -40,12 +40,14 @@ swiftc "${SWIFTC_COMMON[@]}" \
   Sources/AAHostMacOS/*.swift \
   || { echo "FAIL: 编译 AAHostMacOS 失败"; exit 1; }
 
-echo "-- 类型检查生产 AAHostMacOS(不含 AA_TESTING;证明生产构建不接受自动确认 seam)"
+echo "-- 编译生产 E2E 宿主(不含 AA_TESTING;真锁版内核 + 生产确认路径)"
 swiftc "${SWIFTC_COMMON[@]}" \
-  -parse-as-library -typecheck \
+  -parse-as-library -D AA_E2E \
   -I "$MODULES" \
+  -o "$PROD_HOST_BIN" \
+  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
   Sources/AAHostMacOS/*.swift \
-  || { echo "FAIL: 生产 AAHostMacOS 类型检查失败"; exit 1; }
+  || { echo "FAIL: 生产 E2E AAHostMacOS 编译失败"; exit 1; }
 
 # ④ CLI 可执行:@main 入口需 -parse-as-library;链接其依赖 AAContracts.o;产真二进制。
 echo "-- 编译可执行 target: aa"

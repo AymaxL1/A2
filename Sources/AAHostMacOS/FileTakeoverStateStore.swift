@@ -20,10 +20,11 @@ public final class FileTakeoverStateStore: TakeoverStateStore, @unchecked Sendab
         self.url = URL(fileURLWithPath: path)
     }
 
-    /// 读取字节;文件不存在 / 读失败 → nil(按「无残留」保守处理,自愈据此走 clean)。
-    public func load() -> Data? {
+    /// 文件不存在返回 nil；存在但不可读时抛错，绝不能与“无残留”混为一谈。
+    public func load() throws -> Data? {
         lock.lock(); defer { lock.unlock() }
-        return try? Data(contentsOf: url)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
     }
 
     /// 原子写入:先写同目录下的临时文件,再 `replaceItemAt` rename 覆盖目标(POSIX rename 原子,杜绝半截文件)。

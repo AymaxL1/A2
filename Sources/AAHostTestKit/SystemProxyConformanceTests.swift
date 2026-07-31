@@ -33,6 +33,8 @@ extension ProxyConformanceTests {
         testEnableReplayMergesNewService(&report)
         testEnablePersistenceFailureDoesNotWrite(&report)
         testEnablePartialWriteRollsBack(&report)
+        testReplayFailurePreservesExistingTakeover(&report)
+        testRollbackFailureKeepsMarker(&report)
     }
 
     // ① SystemProxyController:capture → takeover → restore 全纯逻辑(含第三方代理精确还原)。
@@ -223,5 +225,42 @@ extension ProxyConformanceTests {
                      "07 事务:P0 部分写失败 → 已写代理全部回滚到原快照")
         report.check(!store.isPersisted,
                      "07 事务:P0 部分写失败且回滚成功 → 清除接管标记")
+    }
+
+    /// 重复 enable 失败只能撤销本次调用，不能把此前已生效的接管一并关闭。
+    private static func testReplayFailurePreservesExistingTakeover(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: [ServiceProxyState(service: "Wi-Fi", http: .off, https: .off, socks: .off)])
+        let http = FakeHTTPPort()
+        http.setResponse(pathSuffix: "/configs", json: #"{"mode":"rule","mixed-port":7890,"port":0}"#)
+        let store = FakeTakeoverStateStore()
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: http, networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        _ = plugin.enableSystemProxy()
+        net.addService(ServiceProxyState(service: "Ethernet",
+                                         http: ProxySetting(enabled: true, host: "198.51.100.7", port: 3128),
+                                         https: .off, socks: .off))
+        net.failWriteAtCall = 5 // 首次 enable 3 写；重放第 2 写失败。
+        _ = plugin.enableSystemProxy()
+
+        report.check(net.currentState(service: "Wi-Fi")?.http.host == "127.0.0.1",
+                     "07 重放事务:重放失败后既有 Wi-Fi 接管仍保持启用")
+        report.check(net.currentState(service: "Ethernet")?.http == ProxySetting(enabled: true, host: "198.51.100.7", port: 3128),
+                     "07 重放事务:重放失败后新增服务恢复到本次调用前状态")
+        report.check(store.isPersisted,
+                     "07 重放事务:既有接管仍生效时保留持久化标记")
+    }
+
+    /// 回滚本身失败时必须保留标记，供下次启动继续自愈。
+    private static func testRollbackFailureKeepsMarker(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: sampleInitialState())
+        net.failWritesStartingAtCall = 3
+        let http = FakeHTTPPort()
+        http.setResponse(pathSuffix: "/configs", json: #"{"mode":"rule","mixed-port":7890,"port":0}"#)
+        let store = FakeTakeoverStateStore()
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: http, networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        _ = plugin.enableSystemProxy()
+        report.check(store.isPersisted && store.clearCount == 0,
+                     "07 事务:P0 回滚失败 → 保留接管标记供下次启动自愈")
     }
 }

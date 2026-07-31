@@ -70,6 +70,7 @@ BIN="$BUILD/bin"           # 可执行产物
 RUNNER="$BUILD/registry-runner" # 门禁生成的 TestKit runner 入口 shim
 
 HOST_BIN="$BIN/aahost"           # AppKit accessory 宿主可执行
+PROD_HOST_BIN="$BIN/aahost-production-e2e" # 不含 AA_TESTING，真核全链 E2E 宿主
 TESTRUNNER="$BIN/registry-tests" # Registry 纯逻辑测试 runner
 HOSTLOG="$BUILD/aahost.log"      # E2E 里宿主 stdout/stderr
 
@@ -106,6 +107,7 @@ TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 # 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
+  pkill -f "$PROD_HOST_BIN" 2>/dev/null
   pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null

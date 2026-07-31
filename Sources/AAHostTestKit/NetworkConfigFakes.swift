@@ -25,6 +25,8 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
     public var failWrites = false
     /// 编程:仅第 N 次写入失败一次。用于模拟接管已部分落地后才失败,验证事务回滚。
     public var failWriteAtCall: Int?
+    /// 编程:从第 N 次写开始持续失败，用于模拟接管失败后回滚也失败。
+    public var failWritesStartingAtCall: Int?
     private var writeAttemptCount = 0
 
     public init(initial: [ServiceProxyState]) {
@@ -58,6 +60,7 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
         writeAttemptCount += 1
         if failWrites { throw FakeError.writeProgrammedToFail }
         if failWriteAtCall == writeAttemptCount { throw FakeError.writeProgrammedToFail }
+        if let n = failWritesStartingAtCall, writeAttemptCount >= n { throw FakeError.writeProgrammedToFail }
         setCalls.append((service, kind, host, port))
         guard let s = state[service] else { throw FakeError.unknownService(service) }
         state[service] = s.replacing(kind, with: ProxySetting(enabled: true, host: host, port: port))
@@ -68,6 +71,7 @@ public final class FakeNetworkConfigPort: NetworkConfigPort, @unchecked Sendable
         writeAttemptCount += 1
         if failWrites { throw FakeError.writeProgrammedToFail }
         if failWriteAtCall == writeAttemptCount { throw FakeError.writeProgrammedToFail }
+        if let n = failWritesStartingAtCall, writeAttemptCount >= n { throw FakeError.writeProgrammedToFail }
         disableCalls.append((service, kind))
         guard let s = state[service] else { throw FakeError.unknownService(service) }
         state[service] = s.replacing(kind, with: .off)

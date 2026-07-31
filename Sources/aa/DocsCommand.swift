@@ -54,6 +54,7 @@ func agentsMarkdownSnippet() -> String {
     aa capabilities list --json                           # enumerate capabilities (id, risk, summary, schema)
     aa capabilities describe <id> --json                  # full structured schema (parameters) for one capability
     aa capabilities call <id> --input '<json>' --json     # invoke with a JSON input object
+    aa capabilities result <request-id> --json             # query a pending dangerous invocation
     ```
 
     Ergonomic domain sub-commands map registry metadata onto `<domain> <verb...>`
@@ -91,10 +92,13 @@ func agentsMarkdownSnippet() -> String {
     ### Dangerous capabilities
 
     Capabilities marked `dangerous` (trust-surface changes) require final
-    confirmation in the host GUI. The CLI never blocks and never prompts: if the
-    user approves, the call proceeds; if they refuse — or no GUI is available —
-    the call returns `error.code=denied` with exit code `2`. Do not attempt to
-    bypass this; there is no CLI flag that approves a dangerous capability.
+    confirmation in the host GUI. The CLI never blocks and never prompts. While
+    the dialog is open, `call` exits `0` immediately with
+    `{"pending":true,"requestId":"..."}`. Poll that id with
+    `aa capabilities result <request-id> --json`: it remains pending until the
+    user decides, then returns the capability output on approval or
+    `error.code=denied` with exit `2` on refusal. Do not treat the initial pending
+    response as completion, and do not attempt to bypass host confirmation.
 
     ### Trust setup for a sandboxed Codex (one-time)
 

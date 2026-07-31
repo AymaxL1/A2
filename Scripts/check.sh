@@ -1,5 +1,5 @@
 #!/bin/bash
-# One stable gate; implementation is split by responsibility under Scripts/check/.
+# 保留一个稳定门禁入口；具体实现按职责拆到 Scripts/check/。
 set -uo pipefail
 
 CHECK_DIR="$(cd "$(dirname "$0")/check" && pwd)"

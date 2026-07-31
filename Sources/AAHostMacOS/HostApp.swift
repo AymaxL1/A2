@@ -101,7 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 #else
         kernelPath = MihomoKernelResource.executablePath
+#if AA_E2E
+        let dataDirectory = env["AA_MIHOMO_DATA_DIR"] ?? AAPaths.socketDirectoryURL.appendingPathComponent("mihomo", isDirectory: true).path
+#else
         let dataDirectory = AAPaths.socketDirectoryURL.appendingPathComponent("mihomo", isDirectory: true).path
+#endif
         do {
             try FileManager.default.createDirectory(atPath: dataDirectory, withIntermediateDirectories: true)
         } catch {
@@ -276,8 +280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         }
 #endif
-        // Enqueue and return immediately. The UDS request receives pending/requestId;
-        // modal lifetime is no longer coupled to the client's socket timeout.
+        // 入队后立即返回；UDS 请求收到 pending/requestId，
+        // 模态框生命周期不再与客户端 socket 超时耦合。
         DispatchQueue.main.async { [weak self] in
             guard let self else { completion(false); return }
             self.confirmationQueue.append(ConfirmationRequest(descriptor: descriptor, input: input,

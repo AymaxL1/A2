@@ -47,7 +47,7 @@ public enum InvokeOutcome: Sendable, Equatable {
     case success(JSONValue)
     /// 失败:结构化错误(code 决定退出码粗分类,见 `AAExitCode.forErrorCode`)。
     case failure(WireError)
-    /// Confirmation is running outside the request lifetime. Query this id for the result.
+    /// 确认流程在本次请求生命周期之外继续运行；调用方凭此 id 查询最终结果。
     case pending(String)
 }
 
@@ -240,8 +240,8 @@ public final class Registry: Sendable {
                 }
                 pendingInvocations.complete(requestID, with: outcome)
             }
-            // Test/headless confirmers may decide synchronously. GUI confirmers enqueue and
-            // return, so the UDS request never waits on a modal dialog.
+            // 测试/无界面确认器可能同步给出决定；GUI 确认器入队后立即返回，
+            // 因此 UDS 请求不会等待模态对话框。
             switch pendingInvocations.status(requestID) {
             case .completed(let outcome): return outcome
             case .pending, .notFound: return .pending(requestID)

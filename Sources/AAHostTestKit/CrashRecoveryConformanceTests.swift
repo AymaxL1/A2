@@ -26,6 +26,8 @@ extension ProxyConformanceTests {
         testExecutorPidIdentityMismatch(&report)   // 修盲杀:pid 身份不符 → 不杀,走网络自愈
         testExecutorRestoreFailureKeepsMarker(&report) // 修清标记 bug:还原失败 → 保留标记待重试
         testExecutorCaptureFailureDefers(&report)  // 修误判:读代理失败 → deferred 保留标记,不误判用户改过
+        testCorruptMarkerDefers(&report)
+        testUnreadableMarkerDefers(&report)
     }
 
     // ============ ① 自愈判定纯函数(五分支,注入布尔信号,无 I/O)============
@@ -322,5 +324,35 @@ extension ProxyConformanceTests {
                      "08 修误判:读代理失败 → 保留持久化标记(不清、不误判 userChanged),待下次启动重试")
         report.check(net.setCalls.isEmpty && net.disableCalls.isEmpty,
                      "08 修误判:采集失败即中止,未对系统代理做任何写入")
+    }
+
+    /// 标记存在但损坏绝不能等同于“不存在”；应保留证据并 deferred。
+    private static func testCorruptMarkerDefers(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: [
+            ServiceProxyState(service: "Wi-Fi",
+                              http: ProxySetting(enabled: true, host: "127.0.0.1", port: 7890),
+                              https: .off, socks: .off)
+        ])
+        let store = FakeTakeoverStateStore(initial: Data("not-json".utf8))
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        let result = plugin.selfHeal()
+        report.check(result.decision == .deferred,
+                     "08 损坏标记:存在但解码失败 → deferred(不得误判 clean)")
+        report.check(store.isPersisted && store.clearCount == 0,
+                     "08 损坏标记:保留原文件供诊断/后续恢复")
+    }
+
+    private static func testUnreadableMarkerDefers(_ report: inout TestReport) {
+        let net = FakeNetworkConfigPort(initial: [ServiceProxyState(service: "Wi-Fi", http: .off, https: .off, socks: .off)])
+        let store = FakeTakeoverStateStore(initial: Data("present".utf8))
+        store.failLoads = true
+        let plugin = ProxyPlugin(processPort: FakeProcessPort(), httpPort: FakeHTTPPort(), networkConfigPort: net,
+                                 kernelPath: nil, controlPort: 9090, stateStore: store)
+        let result = plugin.selfHeal()
+        report.check(result.decision == .deferred,
+                     "08 不可读标记:load 抛错 → deferred(不得误判 missing/clean)")
+        report.check(store.isPersisted && store.clearCount == 0,
+                     "08 不可读标记:不清除持久化证据")
     }
 }

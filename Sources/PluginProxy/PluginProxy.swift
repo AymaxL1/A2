@@ -136,8 +136,8 @@ public final class ProxyPlugin: @unchecked Sendable {
         let controller = SystemProxyController(net: networkConfigPort)
         lock.lock(); defer { lock.unlock() }
         do {
-            // Transaction boundary: capture every affected service, then durably persist
-            // that complete rollback snapshot before the first system write.
+            // 事务边界：先捕获全部受影响服务，再持久化完整最终还原快照，最后才开始系统写入。
+            let previousSnapshot = proxySnapshot
             let plan = try controller.prepareTakeover(into: proxySnapshot)
             let pid = handle.flatMap { processPort.processID($0) } ?? 0
             try persistTakeover(snapshot: plan.snapshot, kernelPort: port, kernelPID: pid,
@@ -146,12 +146,16 @@ public final class ProxyPlugin: @unchecked Sendable {
             do {
                 try controller.applyTakeover(plan, host: host, port: port)
             } catch {
-                // A write may have partially landed. Restore the complete pre-write
-                // snapshot. Clear the durable marker only after rollback succeeds.
+                // 写入可能部分落地，只回滚到“本次调用前”状态。首次 enable 回滚成功后清标记；
+                // 重复 enable 回滚后既有接管仍生效，因此保留合并后的快照和标记。
                 do {
-                    try controller.restore(plan.snapshot)
-                    proxySnapshot = nil
-                    clearTakeover()
+                    try controller.restore(plan.rollbackSnapshot)
+                    if previousSnapshot == nil {
+                        proxySnapshot = nil
+                        clearTakeover()
+                    } else {
+                        proxySnapshot = plan.snapshot
+                    }
                 } catch let rollbackError {
                     return .failure(WireError(code: WireErrorCode.capabilityFailed,
                                               detail: "接管系统代理失败: \(error);回滚亦失败: \(rollbackError)(已保留接管标记供下次启动自愈)"))
@@ -226,7 +230,10 @@ public final class ProxyPlugin: @unchecked Sendable {
     public func selfHeal() -> SelfHealReport {
         // 读持久化接管态。无 → decide 即 .clean(不读网络/内核,避免无标记时无谓触达真 networksetup)。
         let loaded = loadTakeover()
-        guard let state = loaded else {
+        guard case .state(let state) = loaded else {
+            if case .invalid = loaded {
+                return SelfHealReport(decision: .deferred, reapedOrphanPID: nil, kernelRelaunched: false)
+            }
             let decision = CrashRecovery.decide(hasPersistedMarker: false,
                                                 proxyStillPointsAtKernelPort: false,
                                                 kernelPortHealthy: false,
@@ -352,12 +359,27 @@ public final class ProxyPlugin: @unchecked Sendable {
         return kernelPath ?? ""
     }
 
-    /// 读并解码持久化接管态;无 → nil;**有数据但解码失败(损坏/半截)→ 记日志后按「无残留」处理(clean)**。
-    private func loadTakeover() -> TakeoverState? {
-        guard let data = stateStore.load() else { return nil }
-        if let state = try? JSONDecoder().decode(TakeoverState.self, from: data) { return state }
-        selfHealLog("持久化接管态清单损坏/无法解码(\(data.count) 字节),按无残留处理(clean);下次接管将重写")
-        return nil
+    private enum TakeoverLoad {
+        case missing
+        case state(TakeoverState)
+        case invalid
+    }
+
+    /// 不存在与“存在但不可读/损坏”必须分开；后者保留标记并 deferred，绝不误判 clean。
+    private func loadTakeover() -> TakeoverLoad {
+        let data: Data
+        do {
+            guard let loaded = try stateStore.load() else { return .missing }
+            data = loaded
+        } catch {
+            selfHealLog("接管态清单存在但读取失败(\(error))，保留标记并 deferred")
+            return .invalid
+        }
+        guard let state = try? JSONDecoder().decode(TakeoverState.self, from: data) else {
+            selfHealLog("持久化接管态清单损坏/无法解码(\(data.count) 字节)，保留标记并 deferred")
+            return .invalid
+        }
+        return .state(state)
     }
 
     /// 编码并原子持久化接管态。调用方决定失败时是否允许任何后续系统写入。

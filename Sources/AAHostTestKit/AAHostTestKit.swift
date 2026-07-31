@@ -224,7 +224,7 @@ public enum RegistryConformanceTests {
                      "10 F2:dangerous 确认回调确实收到本次请求的 input(不再盲批)")
         report.check(c4.count == 1, "10 F2:批准后 handler 执行一次(input 透传不影响执行语义)")
 
-        // Delayed GUI-style confirmation must not hold the invoking request open.
+        // 延迟的 GUI 式确认不得占住调用请求。
         let c5 = CallCounter()
         let delayed = ConfirmationReplyBox()
         let reg5 = makeRegistry(confirm: { _, _, reply in delayed.reply = reply }, counter: c5)

@@ -15,11 +15,11 @@ import Foundation
 /// 接管态持久化 Port(原子字节存储;域层负责 Codable 编解码)。
 ///
 /// 语义契约:
-/// - `load`:读取已持久化的字节;无(从未接管 / 已清除)返回 nil。读失败(半截/损坏)亦返回 nil(按「无残留」保守处理)。
+/// - `load`:读取已持久化的字节;无(从未接管 / 已清除)返回 nil;存在但读取失败则抛错,不得误判为「无残留」。
 /// - `save`:**原子**写入字节(临时文件 + rename,杜绝半截文件)。写失败抛错(由域层收敛记日志,不崩)。
 /// - `clear`:清除持久化(还原成功后表示「无残留接管」)。幂等:本就不存在为 no-op。
 public protocol TakeoverStateStore: Sendable {
-    func load() -> Data?
+    func load() throws -> Data?
     func save(_ data: Data) throws
     func clear()
 }
@@ -28,7 +28,7 @@ public protocol TakeoverStateStore: Sendable {
 /// 用于「持久化关闭」的场景(如纯逻辑单测不关心持久化时);生产/E2E 由宿主注入文件后端真实现。
 public struct NoopTakeoverStateStore: TakeoverStateStore {
     public init() {}
-    public func load() -> Data? { nil }
+    public func load() throws -> Data? { nil }
     public func save(_ data: Data) throws {}
     public func clear() {}
 }

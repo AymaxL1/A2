@@ -21,13 +21,17 @@ public struct SystemProxySnapshot: Sendable, Equatable, Codable {
     }
 }
 
-/// A fully captured takeover that is safe to persist before any system setting is changed.
+/// 在修改任何系统设置前已完整捕获、可安全持久化的接管计划。
 public struct SystemProxyTakeoverPlan: Sendable, Equatable {
+    /// 首次接管前快照（并入本次新服务），最终 disable/self-heal 使用。
     public let snapshot: SystemProxySnapshot
+    /// 本次调用开始时的即时状态，仅用于本次 apply 失败回滚。
+    public let rollbackSnapshot: SystemProxySnapshot
     public let services: [String]
 
-    public init(snapshot: SystemProxySnapshot, services: [String]) {
+    public init(snapshot: SystemProxySnapshot, rollbackSnapshot: SystemProxySnapshot, services: [String]) {
         self.snapshot = snapshot
+        self.rollbackSnapshot = rollbackSnapshot
         self.services = services
     }
 }
@@ -65,22 +69,24 @@ public struct SystemProxyController: Sendable {
             order.append(state.service)
         }
         let services = try net.networkServices()
+        var rollbackStates: [ServiceProxyState] = []
         for service in services {
+            let current = try net.proxyState(service: service)
+            rollbackStates.append(current)
             if captured[service] == nil {
-                // Capture every state before the first write so the complete rollback
-                // snapshot can be durably stored before takeover starts.
-                captured[service] = try net.proxyState(service: service)
+                // 首次见到的服务并入最终还原快照；所有读取均发生在第一笔写入前。
+                captured[service] = current
                 order.append(service)
             }
         }
         return SystemProxyTakeoverPlan(
             snapshot: SystemProxySnapshot(services: order.map { captured[$0]! }),
+            rollbackSnapshot: SystemProxySnapshot(services: rollbackStates),
             services: services
         )
     }
 
-    /// Apply a previously prepared takeover. Preparation and persistence belong to the
-    /// caller; this method performs writes only.
+    /// 应用已准备好的接管计划；本方法只写，捕获与持久化由调用方负责。
     public func applyTakeover(_ plan: SystemProxyTakeoverPlan, host: String, port: Int) throws {
         for service in plan.services {
             for kind in ProxyKind.allCases {
@@ -89,7 +95,7 @@ public struct SystemProxyController: Sendable {
         }
     }
 
-    /// Compatibility convenience for callers that do not own durable transaction state.
+    /// 供不持有持久事务状态的调用方使用的兼容便利入口。
     public func takeover(host: String, port: Int, into existing: SystemProxySnapshot?) throws -> SystemProxySnapshot {
         let plan = try prepareTakeover(into: existing)
         try applyTakeover(plan, host: host, port: port)
