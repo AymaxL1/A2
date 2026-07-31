@@ -3,10 +3,19 @@ echo
 echo "==== 阶段 B:assert 测试 ===="
 PASS=0; FAIL=0
 assert_contains() {  # $1 实际文本  $2 期望子串(定长字符串,非正则)  $3 描述
-  if printf '%s' "$1" | grep -qF -- "$2"; then
+  # 不用 `printf | grep -q`：在 pipefail 下，大输出命中后 grep 提前退出会让
+  # printf 收到 SIGPIPE，整条管道反而被误判为失败。
+  if grep -qF -- "$2" <<<"$1"; then
     echo "PASS: $3"; PASS=$((PASS+1))
   else
     echo "FAIL: $3 (未找到 '$2';实际输出: $1)"; FAIL=$((FAIL+1))
+  fi
+}
+assert_not_contains() {  # $1 实际文本  $2 禁止子串(定长字符串,非正则)  $3 描述
+  if grep -qF -- "$2" <<<"$1"; then
+    echo "FAIL: $3 (不应包含 '$2';实际输出: $1)"; FAIL=$((FAIL+1))
+  else
+    echo "PASS: $3"; PASS=$((PASS+1))
   fi
 }
 assert_exit() {  # $1 期望码  $2 实际码  $3 描述

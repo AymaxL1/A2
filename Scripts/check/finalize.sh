@@ -7,6 +7,8 @@ RES_LIS="$(pgrep -f "timeout_listener.py")"
 if [ -z "$RES_HOST" ]; then echo "PASS: 无残留宿主进程"; PASS=$((PASS+1)); else echo "FAIL: 残留宿主进程: $RES_HOST"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_STUB" ]; then echo "PASS: 无残留 fake mihomo stub 进程"; PASS=$((PASS+1)); else echo "FAIL: 残留 stub 进程: $RES_STUB"; FAIL=$((FAIL+1)); fi
 if [ -z "$RES_LIS" ]; then echo "PASS: 无残留超时假监听器进程"; PASS=$((PASS+1)); else echo "FAIL: 残留假监听器: $RES_LIS"; FAIL=$((FAIL+1)); fi
+RES_AGENT_SLEEP="$(pgrep -f "$AGENT_SLEEP_SUITE"; pgrep -f "$AGENT_SLEEP_PROBE")"
+if [ -z "$RES_AGENT_SLEEP" ]; then echo "PASS: 无残留 agent 被测子进程"; PASS=$((PASS+1)); else echo "FAIL: 残留 agent 被测子进程: $RES_AGENT_SLEEP"; FAIL=$((FAIL+1)); fi
 # 10:订阅 http 假源按 PID 核验已收场(不残留);SUB5 内已 kill+等真死,此处兜底核验。
 if [ -n "${SUBHTTP_PID:-}" ] && kill -0 "$SUBHTTP_PID" 2>/dev/null; then echo "FAIL: 残留订阅 http 假源进程: $SUBHTTP_PID"; FAIL=$((FAIL+1)); else echo "PASS: 无残留订阅 http 假源进程(按 PID 收场)"; PASS=$((PASS+1)); fi
 

@@ -1,6 +1,6 @@
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
 echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
-OUT="$("$TESTRUNNER" 2>&1)"; RC=$?
+OUT="$(AA_SPIKE_DIR="$ROOT/.scratch/agent-delegation/research" "$TESTRUNNER" 2>&1)"; RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 assert_exit 0 $RC "registry-tests 全绿退出码"
 assert_contains "$OUT" "demo.echo" "纯逻辑测试覆盖 demo.echo"
@@ -23,6 +23,20 @@ assert_contains "$OUT" "REST 客户端:解析 /proxies → 当前节点 STUB-NOD
 assert_contains "$OUT" "status 域逻辑:内核存活 → running=true" "③status 域逻辑:内核存活→反映真实"
 assert_contains "$OUT" "内核死亡 → running=false(如实未运行,不报错)" "③status 域逻辑:内核死亡→如实未运行(退出码 0)"
 assert_contains "$OUT" "无内核句柄 → running=false" "③status 域逻辑:无内核句柄→如实未运行"
+
+# agent-delegation 01–07：runner 内每个套件逐条输出并共同决定退出码；这里再钉住套件均被实际执行。
+echo "--- 断言组 A:agent 委托适配层完整单元/真进程套件 ---"
+assert_contains "$OUT" "AGENTCORE_TESTS passed=" "agent 01:核心消息与 FakeAgentPort 套件已运行"
+assert_contains "$OUT" "CLAUDEADAPTER_TESTS passed=" "agent 02:Claude 黄金样本归一化套件已运行"
+assert_contains "$OUT" "CODEXADAPTER_TESTS passed=" "agent 03:Codex 黄金样本归一化套件已运行"
+assert_contains "$OUT" "AGENTTASK_TESTS passed=" "agent 04:任务状态机与工作区套件已运行"
+assert_contains "$OUT" "WATCHDOG_TESTS passed=" "agent 05:看门狗与取消语义套件已运行"
+assert_contains "$OUT" "SYSTEMPORT_TESTS passed=" "agent 06:真进程组与反孤儿套件已运行"
+assert_contains "$OUT" "LAUNCHASM_TESTS passed=" "agent 07:启动参数与 CODEX_HOME 隔离套件已运行"
+assert_contains "$OUT" "Claude adapter:被拒样本(03)产出 permission-denied" "Claude 被拒信号被归一化"
+assert_contains "$OUT" "Codex adapter:invalid-model 样本(exec6)双层解码后 reason" "Codex 双层错误原因被解码"
+assert_contains "$OUT" "工作区:raw.ndjson 里不含归一化消息" "任务 raw/normalized 日志保持隔离"
+assert_contains "$OUT" "SystemAgentPort:terminate 后整个进程组零残留" "真进程组终止不留子树"
 
 # 07 票纯逻辑断言(同一 runner 输出;SystemProxyConformanceTests:快照/接管/还原,注入内存假 NetworkConfigPort)
 echo "--- 断言组 1c:07 票系统代理快照/接管/还原纯逻辑(SystemProxyConformanceTests)---"

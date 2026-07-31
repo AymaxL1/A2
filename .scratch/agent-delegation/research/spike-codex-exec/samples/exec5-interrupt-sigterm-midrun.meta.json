@@ -1,0 +1,33 @@
+{
+  "scenario": "exec5-interrupt-sigterm-midrun",
+  "cmd": [
+    "/Users/heqianbin/.codex/plugins/.plugin-appserver/codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-s",
+    "read-only",
+    "Using the shell, run exactly this single command: sleep 60 ; echo done   Then report its output."
+  ],
+  "cwd": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/sandbox",
+  "codex_home": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home",
+  "env_overrides_intentional": {
+    "CODEX_HOME": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home"
+  },
+  "timeout_s": 60.0,
+  "interrupt_after_s": 8.0,
+  "interrupt_signal": "SIGTERM",
+  "start_iso": "2026-07-29T02:50:52+0800",
+  "end_iso": "2026-07-29T02:51:00+0800",
+  "duration_s": 8.515,
+  "returncode": -15,
+  "returncode_meaning": "terminated by signal 15 (SIGTERM)",
+  "interrupt_actually_sent": true,
+  "interrupt_sent_at_s": 8.310195922851562,
+  "escalated_to_sigkill": false,
+  "leftover_processes_in_pgid_after_exit": [],
+  "stdout_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec5-interrupt-sigterm-midrun.stdout.jsonl",
+  "stderr_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec5-interrupt-sigterm-midrun.stderr.txt",
+  "stdout_lines": 2,
+  "stderr_bytes": 39
+}

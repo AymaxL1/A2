@@ -61,6 +61,24 @@ else
   echo "FAIL: 10 新 Port 协议不应声明在 Host*(命中: $SUBPORT_DECL_HOST)"; FAIL=$((FAIL+1))
 fi
 
+# agent-delegation 的三层边界：纯逻辑核、系统桥接和 CLI 都不得反向依赖 Host*/PluginProxy。
+for agent_area in AAAgentCore AAAgentSystem aa-agent; do
+  case "$agent_area" in
+    AAAgentCore) agent_dir="Sources/AAAgentCore" ;;
+    AAAgentSystem) agent_dir="Sources/AAAgentSystem" ;;
+    aa-agent) agent_dir="Sources/aa-agent" ;;
+  esac
+  AGENT_IMPORTS="$(grep -REn 'import[[:space:]]+([a-z]+[[:space:]]+)?(AAHost(Runtime|MacOS|TestKit)|AAPluginSDK|PluginProxy)' "$agent_dir")"
+  AGENT_IMPORT_RC=$?
+  if [ "$AGENT_IMPORT_RC" -eq 1 ]; then
+    echo "PASS: $agent_area 不依赖 Host*/AAPluginSDK/PluginProxy"; PASS=$((PASS+1))
+  elif [ "$AGENT_IMPORT_RC" -eq 0 ]; then
+    echo "FAIL: $agent_area 出现被禁依赖:"; printf '%s\n' "$AGENT_IMPORTS"; FAIL=$((FAIL+1))
+  else
+    echo "FAIL: 无法核验 $agent_area 的依赖边界(rc=$AGENT_IMPORT_RC)"; FAIL=$((FAIL+1))
+  fi
+done
+
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
 echo "--- 断言组 4:aa --help 退出码语义表(逐码)---"
 HELP="$("$BIN/aa" --help 2>&1)"; RC=$?

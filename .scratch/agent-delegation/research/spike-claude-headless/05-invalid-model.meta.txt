@@ -1,0 +1,7 @@
+cmd: cd '/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-claude-headless/sandbox/s5' && '/usr/local/bin/claude' -p 'Reply with the word OK' --output-format stream-json --verbose --permission-mode bypassPermissions --model this-model-does-not-exist-xyz123 < /dev/null
+cap_secs: 60
+waited_secs: 5
+natural_exit: yes(自然退出,未触发超时)
+sigkill_needed: n/a
+exit_code: 1
+duration_s: 5

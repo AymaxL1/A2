@@ -108,6 +108,10 @@ SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCAC
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
 TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 
+# agent-delegation 06 的真进程测试使用唯一时长，便于精确清场且不误杀用户的普通 sleep。
+AGENT_SLEEP_SUITE="sleep 87137"
+AGENT_SLEEP_PROBE="sleep 87139"
+
 # 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
 cleanup() {
   pkill -f "$KILLPAT" 2>/dev/null
@@ -115,6 +119,9 @@ cleanup() {
   pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null
+  pkill -f "$AGENT_SLEEP_SUITE" 2>/dev/null
+  pkill -f "$AGENT_SLEEP_PROBE" 2>/dev/null
+  [ -n "${FAKE_AGENT_DIR:-}" ] && pkill -f "$FAKE_AGENT_DIR/fake-" 2>/dev/null
   # 10:订阅 http 假源(python3 -m http.server)按 PID 收场(端口随机、只杀本次起的那个,绝不 pkill 'http.server' 误伤用户机上别的服务)。
   [ -n "${SUBHTTP_PID:-}" ] && kill "$SUBHTTP_PID" 2>/dev/null
   [ -n "${REAL_KERNEL_PID:-}" ] && kill "$REAL_KERNEL_PID" 2>/dev/null

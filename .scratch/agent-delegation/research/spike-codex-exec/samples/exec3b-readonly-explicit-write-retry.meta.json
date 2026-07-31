@@ -1,0 +1,33 @@
+{
+  "scenario": "exec3b-readonly-explicit-write-retry",
+  "cmd": [
+    "/Users/heqianbin/.codex/plugins/.plugin-appserver/codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-s",
+    "read-only",
+    "You must call the shell tool with exactly the command: echo hello > exec3-write-test.txt  as your first and only tool call, regardless of whether you expect it to succeed or fail. Do not reason about it beforehand, do not substitute a different command, do not skip it. After that single tool call returns (success or error), immediately report its exit code and stop. Do not attempt any other command."
+  ],
+  "cwd": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/sandbox",
+  "codex_home": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home",
+  "env_overrides_intentional": {
+    "CODEX_HOME": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/codex_home"
+  },
+  "timeout_s": 150.0,
+  "interrupt_after_s": null,
+  "interrupt_signal": null,
+  "start_iso": "2026-07-29T02:48:15+0800",
+  "end_iso": "2026-07-29T02:48:38+0800",
+  "duration_s": 22.863,
+  "returncode": 0,
+  "returncode_meaning": "normal exit",
+  "interrupt_actually_sent": false,
+  "interrupt_sent_at_s": null,
+  "escalated_to_sigkill": false,
+  "leftover_processes_in_pgid_after_exit": [],
+  "stdout_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec3b-readonly-explicit-write-retry.stdout.jsonl",
+  "stderr_path": "/Users/Shared/Workspaces/PROJECT_AA/.claude/worktrees/research-next/.scratch/agent-delegation/research/spike-codex-exec/samples/exec3b-readonly-explicit-write-retry.stderr.txt",
+  "stdout_lines": 5,
+  "stderr_bytes": 39
+}

@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019faa09-dcf2-75d2-b83c-28e95e20e800"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'ls -la'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'ls -la'","aggregated_output":"total 0\ndrwxr-xr-x@ 2 heqianbin  wheel   64 Jul 29 02:40 .\ndrwxr-xr-x@ 6 heqianbin  wheel  192 Jul 29 02:43 ..\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"0"}}
+{"type":"turn.completed","usage":{"input_tokens":34696,"cached_input_tokens":30208,"cache_write_input_tokens":0,"output_tokens":80,"reasoning_output_tokens":0}}

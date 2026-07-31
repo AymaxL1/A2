@@ -15,6 +15,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "aa", targets: ["aa"]),
+        // agent-delegation 07:委托试驾 CLI(与 `aa` 各自独立,互不影响 —— 守并行红线)。
+        .executable(name: "aa-agent", targets: ["aa-agent"]),
         .library(name: "AAContracts", targets: ["AAContracts"]),
         .library(name: "AAPluginSDK", targets: ["AAPluginSDK"]),
         .library(name: "AAHostRuntime", targets: ["AAHostRuntime"]),
@@ -22,6 +24,10 @@ let package = Package(
         .library(name: "AAHostMacOS", targets: ["AAHostMacOS"]),
         .library(name: "AAHostTestKit", targets: ["AAHostTestKit"]),
         .library(name: "PluginProxy", targets: ["PluginProxy"]),
+        // agent-delegation 模块(「宿主调用本地 agent」适配层)——与 v1-core-proxy 的 16 票并行落地。
+        .library(name: "AAAgentCore", targets: ["AAAgentCore"]),
+        .library(name: "AAAgentSystem", targets: ["AAAgentSystem"]),
+        .library(name: "AAAgentTestKit", targets: ["AAAgentTestKit"]),
     ],
     targets: [
         // ① 零依赖底座
@@ -31,6 +37,16 @@ let package = Package(
         .target(name: "AAPluginSDK", dependencies: ["AAContracts"]),
         .target(name: "AAHostRuntime", dependencies: ["AAContracts"]),
         .target(name: "AAUISystem", dependencies: ["AAContracts"]),
+        // agent-delegation:AAAgentCore 是「宿主调用本地 agent」适配层的纯逻辑地基,
+        //   **只依赖 AAContracts**(不依赖 SDK / Host*),故与 v1-core-proxy 的 16 票并行落地、互不踩施工面。
+        //   铁律与 PluginProxy 同级:check.sh grep 强制不 import 任何 Host*。
+        .target(name: "AAAgentCore", dependencies: ["AAContracts"]),
+        // agent-delegation 06:AAAgentSystem 是 AgentPort 的**生产实现**所在的薄桥接层(碰 posix_spawn/管道/信号)。
+        //   刻意不进 AAAgentCore(纯逻辑核零系统调用),也刻意不进 AAHostMacOS(守与 v1-core-proxy 的并行红线)。
+        //   check.sh 断言组 3e grep 强制它不 import 任何 Host*。
+        //   依赖**只有 AAAgentCore**:全部源码(SystemAgentPort.swift)只 import Foundation/Darwin/AAAgentCore,
+        //   一行 AAContracts 都没有 —— 按本文件下面「依赖边须与源码实际 import 一一对应」的口径,不挂空头依赖。
+        .target(name: "AAAgentSystem", dependencies: ["AAAgentCore"]),
 
         // ③ 依赖 HostRuntime 的宿主具体层 / 假件;以及插件域逻辑
         // 依赖边须与源码实际 import 一一对应(两个 target 都同时 import AAHostRuntime 与 AAContracts)。
@@ -52,9 +68,19 @@ let package = Package(
             dependencies: ["AAPluginSDK", "AAContracts", "AAUISystem"],
             resources: [.copy("Resources")]
         ),
+        // agent-delegation:AAAgentTestKit 是 AAAgentCore 的**独立**测试基建(FakeAgentPort + 纯逻辑一致性测试)。
+        //   刻意不并入 AAHostTestKit——后者正被 v1-core-proxy 施工,合用会制造合并冲突。只依赖 AAAgentCore + Contracts。
+        //   06 票追加 AAAgentSystem:真实现的一致性测试(真进程/进程组/反孤儿)要驱动生产端口本身。
+        .target(name: "AAAgentTestKit", dependencies: ["AAAgentCore", "AAAgentSystem", "AAContracts"]),
 
         // ④ CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),
+        // agent-delegation 07:委托试驾 CLI(`run|status|cancel|list|prune`)。
+        //   依赖边与源码实际 import 一一对应:AAAgentCore(组装 / 状态机 / 归一化 / 看门狗)+
+        //   AAAgentSystem(真进程端口与真文件系统端口)+ AAContracts(退出码单一来源)。
+        //   **绝不依赖 AAHostMacOS / AAHostRuntime / PluginProxy**:它是 agent-delegation 模块自己的入口,
+        //   与 v1-core-proxy 的 16 票并行落地、互不踩施工面(现有 `aa` 一个字节都不动)。
+        .executableTarget(name: "aa-agent", dependencies: ["AAContracts", "AAAgentCore", "AAAgentSystem"]),
     ],
     swiftLanguageVersions: [.v5]
 )

@@ -45,4 +45,25 @@ public enum AAPaths {
     public static var subscriptionsDirectory: String {
         socketDirectoryURL.appendingPathComponent(subscriptionsSubdirectory, isDirectory: true).path
     }
+
+    // MARK: - agent 委托(agent-delegation 04:任务工作区根目录)
+
+    /// AA 用户域根目录名(`~/.aa`)。agent 委托任务工作区落在它下面。
+    ///
+    /// 为何不复用上面的 Application Support 路径:那条路径是**运行时**产物(socket)的家,
+    ///   用户不会去翻;而 agent 任务工作区是**用户要亲自 `cd` 进去、`tail -f`、`open report.html`** 的东西
+    ///   (提案 §5 的三种消费姿态),放在 `~/.aa/` 下才敲得动。二者定位不同,故是两条路径。
+    public static let userRootDirectoryName = ".aa"
+
+    /// agent 委托任务工作区根目录(`~/.aa/agent-tasks/`)。**单一来源,禁止各处各拼**。
+    ///
+    /// 目录结构由 `AAAgentCore.AgentTaskWorkspace` 拥有(03 票《任务工作区结构提案》);
+    /// 这里只负责回答「根在哪」,好让 CLI / 宿主 / 适配层不会各写各的路径字面量。
+    public static var agentTasksRoot: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home
+            .appendingPathComponent(userRootDirectoryName, isDirectory: true)
+            .appendingPathComponent("agent-tasks", isDirectory: true)
+            .path
+    }
 }
