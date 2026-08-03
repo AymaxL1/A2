@@ -65,10 +65,22 @@
 #   * `Sources/PluginProxy/MihomoKernelResource.swift` 在 `Bundle.module` 之前先查
 #     `Bundle.main.resourceURL/PROJECT_AA_PluginProxy.bundle/Resources/<name>` ——
 #     实测「`Bundle.module` 能找到的落点」与「`codesign` 接受的落点」在 `.app` 形态下没有交集,详见 build-app.sh。
-#   * 新增断言组 APP(`Scripts/check/app-bundle.sh`,6 条):production 档只做静态断言(结构 / plist / 签名),
+#   * 新增断言组 APP(`Scripts/check/app-bundle.sh`,6 条;15 票追加 4 条 → 现共 10 条):production 档只做静态断言(结构 / plist / 签名),
 #     **绝不启动**(AA_MIHOMO_DATA_DIR 是 `#if AA_E2E` 门控的,起 production 宿主会往真实 AppSupport 写);
 #     e2e 档直接 exec `.app` 内的 aahost 跑全链(UDS / capabilities / 真内核 / install-cli)。
 #   * 断言组 3f:反孤儿信号钩子「无可执行同时装两套」的依赖闭包守卫(此前只在文档里声称存在,门禁里其实没有)。
+#
+# 15 票增量(GPL 关于页 + 内核重签入构建链;ADR 0007 义务落地):
+#   * 新能力 `proxy.license`(safe,cliAlias `aa proxy license`)—— 报随包内核的版本/许可证/GPL 全文路径/
+#     源码地址/子进程红线。**纯静态资源信息,内核不必在跑**。关于页的数据一律经它取(GUI 薄壳无私有逻辑)。
+#   * `MihomoKernelResource` 补 `license` / `sourceURL`(由 version 派生)/ `licenseTextPath`(复用同一条资源查找)
+#     / `subprocessBoundary` —— **内核版本与出处的单一来源就是这个类型**,与本文件解析的 $MIHOMO_VERSION 同源。
+#   * 关于页落地为独立类型 `Sources/AAHostMacOS/AboutWindow.swift`(14 票重建菜单时原样复用,不必重写 GPL 呈现面)。
+#   * `Scripts/build-app.sh` 给内嵌可执行签名时显式 `--identifier <bundle id>.<文件名>`,替掉 mihomo 官方产物
+#     带来的 Go 默认 `Identifier=a.out`。
+#   * 断言组 APP 追加 4 条(APP7–APP10):GPL 全文随包完整(SHA-256 现算现比)、`.app` 内 Mach-O 全签且身份一致
+#     (**ad-hoc 下无证书链,口径见 app-bundle.sh 里的告示**)、`aa proxy license` 报出的内核版本与本文件解析值一致、
+#     子进程红线原文真的经能力面暴露。后两条复用 e2e 档那一个已就绪的宿主,不另起。
 
 # 接口契约(11 票换引擎前后**逐字不变**,这正是 11 票要守的那条):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。

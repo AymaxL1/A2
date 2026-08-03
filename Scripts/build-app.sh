@@ -198,12 +198,25 @@ PLIST
 #   不可靠(会漏签非标准落点、也会用错身份/entitlements)。这里显式逐个签,签了哪些一目了然。
 echo "-- 签名(identity='$CODESIGN_IDENTITY')"
 # ① 资源 bundle 里所有带执行位的普通文件(当前只有 mihomo 内核;写成遍历是为了将来加内核/工具时不漏签)。
-#    15 票「内核重签入构建链」接着用的就是这一步。
+#    这一步就是 15 票「内核重签入构建链」——重签**自动发生在构建里,手工零步骤**。
+#
+# 15 票补的一件事:**显式给 `-i <标识符>`**。不给的话 codesign 会沿用 Mach-O 里已有的标识符,
+#   而 mihomo 官方产物是 Go 编译器签出来的,带着默认的 `Identifier=a.out` —— 于是我们分发的 `.app`
+#   里躺着一个自称 `a.out` 的可执行。它不影响能否运行,但两处会咬人:
+#     ① 用户/审查者 `codesign -dv` 一看,分不清这是哪个应用的哪个组件;
+#     ② 13 票上真证书 + 公证之后,标识符是 Apple 侧记录与撤销的抓手,`a.out` 这种通用名毫无意义。
+#   标识符**从文件名派生**、不为内核特判:这一步是个遍历,将来加进来的第二个内嵌可执行同样需要标识符,
+#   写死 `.mihomo` 只会让下一个文件重新掉进 `a.out` 的坑。派生规则:`<bundle id>.<文件名>`,
+#   文件名里 codesign 标识符不接受的字符统一换成 `-`。当前唯一命中项 = `com.aa.host.mihomo-darwin-arm64`。
+#
 # 三步都把 codesign 的输出捕下来一起报:签名失败的原因几乎总在 stderr 里(证书不可用、
 #   落点被拒、时间戳服务器不通……),吞掉它只剩「签名失败: <文件名>」,等于把诊断信息扔了。
 while IFS= read -r exe; do
-  echo "   sign: ${exe#$APP/}"
-  if ! CS_OUT="$(codesign --force --sign "$CODESIGN_IDENTITY" "$exe" 2>&1)"; then
+  # `printf '%s'` 而不是直接管 basename:`tr -c` 的补集里含换行,basename 的结尾换行会被换成 `-`,
+  #   而它在 `$( )` 里不再是「尾随换行」故不会被剥掉 —— 标识符会平白多一个尾巴(实测踩过)。
+  EXE_IDENT="$BUNDLE_ID.$(printf '%s' "$(basename "$exe")" | tr -c 'A-Za-z0-9.-' '-')"
+  echo "   sign: ${exe#$APP/}  (identifier=$EXE_IDENT)"
+  if ! CS_OUT="$(codesign --force --identifier "$EXE_IDENT" --sign "$CODESIGN_IDENTITY" "$exe" 2>&1)"; then
     echo "FAIL: 签名内嵌可执行失败: $exe"; echo "$CS_OUT" | sed 's/^/    /'; exit 1
   fi
 done < <(find "$APP/Contents/Resources/$RES_BUNDLE_NAME" -type f -perm +111)

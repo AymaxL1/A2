@@ -137,7 +137,7 @@ public enum ProxyConformanceTests {
         let net = FakeNetworkConfigPort(initial: [])
         let plugin = ProxyPlugin(processPort: pp, httpPort: http, networkConfigPort: net, kernelPath: nil, controlPort: 9090)
         let caps = plugin.capabilities()
-        report.check(caps.count == 11, "插件能力:ProxyPlugin 暴露 11 条能力(status + system.enable/disable + 09 groups/latency/mode/node + 10 subscription.list/activate/update/add)")
+        report.check(caps.count == 12, "插件能力:ProxyPlugin 暴露 12 条能力(status + 15 license + system.enable/disable + 09 groups/latency/mode/node + 10 subscription.list/activate/update/add)")
 
         let status = caps.first { $0.descriptor.id == "proxy.status" }?.descriptor
         report.check(status?.risk == .safe, "插件能力:proxy.status 风险档为 safe")

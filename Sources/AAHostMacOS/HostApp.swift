@@ -60,6 +60,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     /// 代理插件(V1 内封栈:宿主静态装配,不搞动态加载)。持有内核句柄,随宿主启停。
     var proxyPlugin: ProxyPlugin!
+    /// 15 票:关于页(GPL 义务呈现面)。**必须由 AppDelegate 持有** —— 菜单项的 target 是弱引用,
+    /// 不持有的话「关于 AA」点了没反应(而且是静默的,没有任何日志)。14 票重建菜单时沿用这一条。
+    var aboutWindowController: AboutWindowController!
     /// test/dev seam:SIGUSR1 → 优雅退出的 DispatchSource(exercise applicationWillTerminate→reclaimKernel→terminate 完整回收路径)。
     var gracefulQuitSource: DispatchSourceSignal?
     private struct ConfirmationRequest {
@@ -257,6 +260,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                          action: nil, keyEquivalent: "")
         }
         menu.addItem(.separator())
+        // 15 票:关于页入口(GPL-3.0 全文 / 内核版本 / 源码指引 / 子进程红线)。
+        //   实现在 AboutWindow.swift 的独立类型里,这里只取它造好的那一项 —— 14 票重建菜单时原样搬走即可。
+        aboutWindowController = AboutWindowController(registry: registry)
+        menu.addItem(aboutWindowController.makeMenuItem())
         menu.addItem(NSMenuItem(title: "退出",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))

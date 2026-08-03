@@ -444,6 +444,7 @@ public final class ProxyPlugin: @unchecked Sendable {
 
     /// 暴露给宿主注册的能力集:
     ///   * `proxy.status`(safe 只读:内核状态);
+    ///   * `proxy.license`(safe 只读:随包内核的版本/许可证/GPL 全文路径/源码地址/子进程红线;cliAlias `aa proxy license`);
     ///   * `proxy.system.enable`(normal:接管系统代理;cliAlias `aa proxy on`);
     ///   * `proxy.system.disable`(normal:还原系统代理;cliAlias `aa proxy off`);
     ///   * `proxy.groups.list`(safe 只读:组/节点/当前选中;cliAlias `aa proxy groups`);
@@ -474,6 +475,36 @@ public final class ProxyPlugin: @unchecked Sendable {
                     let h = self?.currentHandle() ?? nil
                     // 内核未运行也返回 .success(running:false)——如实呈现,退出码 0,绝不报错。
                     return .success(ProxyStatus.statusJSON(processPort: processPort, handle: h, rest: restClient))
+                }
+            ),
+            // 15 票:GPL 义务的能力面。**关于页的数据一律走这里,不许 GUI 自己去读版本号或许可证文件** ——
+            //   本仓库铁律是「GUI 与 CLI 同源、薄壳无私有逻辑」;让关于页直连 MihomoKernelResource 就等于
+            //   开了一条只有 GUI 能走的私有读取路径,CLI 与门禁都验不到它,GPL 义务的呈现从此无人把关。
+            // **纯静态资源信息,不需要内核在跑**:handler 只读随包常量与资源路径,不碰 REST、不碰进程 ——
+            //   故门禁核验它时无须起 mihomo,`.app` 里双击刚起来(内核还没就绪)也照样能看关于页。
+            PluginCapability(
+                descriptor: CapabilityDescriptor(
+                    id: "proxy.license",
+                    risk: .safe,
+                    summary: "报告随包 mihomo 内核的版本 / 许可证 / GPL-3.0 全文路径 / 源码获取地址 / 子进程集成红线(safe 只读;纯静态资源信息,内核不必在跑)",
+                    schemaSummary: "input: {} → output: { kernelVersion, license, licenseTextPath, licenseTextAvailable: Bool, sourceURL, subprocessBoundary }",
+                    parameters: [],
+                    cliAlias: ["proxy", "license"]
+                ),
+                handler: { _ in
+                    let path = MihomoKernelResource.licenseTextPath
+                    return .success(.object([
+                        "kernelVersion": .string(MihomoKernelResource.version),
+                        "license": .string(MihomoKernelResource.license),
+                        "licenseTextPath": .string(path),
+                        // 如实报告全文是否真的在盘上:关于页据此决定「打开全文」按钮是否可点。
+                        //   licenseTextPath 是**非致命**查找(见 MihomoKernelResource.licenseTextPath):
+                        //   文件不在时它返回「期望落点」而不崩,故这个布尔是真信号,不是恒 true 的摆设。
+                        //   ——「打包漏了许可证」由门禁断言 APP7 在构建期抓(SHA-256 比对),不靠运行时崩溃。
+                        "licenseTextAvailable": .bool(FileManager.default.fileExists(atPath: path)),
+                        "sourceURL": .string(MihomoKernelResource.sourceURL),
+                        "subprocessBoundary": .string(MihomoKernelResource.subprocessBoundary)
+                    ]))
                 }
             ),
             PluginCapability(
