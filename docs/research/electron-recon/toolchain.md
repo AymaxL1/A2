@@ -8,6 +8,18 @@
 
 **Electron 路线的开发→打包→签名→公证全链，在本机现状下不需要 Xcode.app；node-gyp 只在触发原生模块编译时才需要 CLT（已健康），V1 已知依赖面（Tray/UDS/子进程/通知）可零原生模块。Swift 路线里 `xcodebuild`（含 XcodeGen 产物）/XCUITest/SPM 清单解析三项官方证实非完整 Xcode.app 不可，vfsoverlay workaround 只解锁裸 swiftc 单文件直编，够不到这三项；签名+公证环节两条路线成本相同（CLT 即可，Apple 官方证实不需要 Xcode.app）。** 今晚 E1 冒烟 spike 已用真机数据把开发循环这条结论坐实（见 §1.4）。
 
+> ### 勘误 2026-08-04 —— 上面这段关于 Swift 路线的推论已被本机实测部分推翻
+>
+> **仍然成立的**：`xcodebuild`（含 XcodeGen 产物）、XCUITest、SPM 清单解析三项，确实非完整 Xcode.app 不可（本机复测：`xcodebuild -version` 仍报 `requires Xcode`）。
+>
+> **不再成立的**：由此推出的「Swift 正式架构必须装完整 Xcode.app」。**造 `.app` 根本不需要 `xcodebuild`。** 2026-08-04 在本机从零跑通：`swiftc` 编 AppKit → 手工组 bundle（`Info.plist` + `Contents/MacOS/`）→ `codesign -s -` ad-hoc 签名（`valid on disk` + `satisfies its Designated Requirement`）→ `NSStatusItem` 菜单栏项装上 → `open` 走 LaunchServices 正常启动、正常退出。整条链零 Xcode。
+>
+> **另两处需要更新的事实**：
+> 1. 「vfsoverlay workaround 只解锁裸 swiftc 单文件直编」——低估了。它支撑的门禁已实跑到 **PASS=403 FAIL=0**，覆盖 9 个 target 的拓扑序编译 + 全套 E2E。且 2026-08-04 起本机 CLT 的重复 modulemap 已由 `sudo mv` 根治，overlay 退役，门禁改为自动探测工具链。
+> 2. SPM 坏的成因当年记作「`libPackageDescription.dylib` 空导出符号」——复测为 **880 个符号但零个 `Package.__allocating_init`**，是 dylib 与 `.swiftmodule` 接口错配，不是空库。修它同样**不需要 Xcode**：可装官方独立工具链到家目录（`installer -pkg ... -target CurrentUserHomeDirectory`，无需 sudo）。
+>
+> 本勘误**不动**已终裁的 Electron/Swift 路线选择（裁决见 `.scratch/electron-recon/issues/09-final-ruling.md`，不翻案）；只修正「Xcode 是 Swift 路线硬前置」这一条事实判断，因为它此后一直被当作票 11–16 的阻塞理由。
+
 ---
 
 ## 1. 开发循环：Node 安装 + `npm install` + `electron .`

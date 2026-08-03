@@ -5,6 +5,8 @@
 # 实测：即便纯 Foundation/Darwin 的 aa（不 import AppKit）也报同一 SwiftBridging 重定义错，
 #       故两个二进制都要加 overlay——这是 CLT 层面的坏 modulemap，与是否用 AppKit 无关。
 # -module-cache-path 用 S2 自己的缓存目录。首次编译 S2Host 约 1–4 分钟（AppKit），后续秒级。
+# 2026-08-04：本机 CLT 已修（旧 module.modulemap 已改名 .disabled），overlay 在此机上已成冗余——
+#   保留不删，好让本 spike 在 CLT 仍坏的机器上照样能跑。门禁走自动探测，见 Scripts/check/bootstrap.sh。
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p .build

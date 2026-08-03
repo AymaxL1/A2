@@ -20,7 +20,7 @@ build_lib AAUISystem
 echo "-- 编译库 target: PluginProxy(受限 -I:仅 SDK/Contracts/UISystem,无 Host*;产 .o + module)"
 cp "$MODULES/AAContracts.swiftmodule" "$MODULES/AAPluginSDK.swiftmodule" "$MODULES/AAUISystem.swiftmodule" "$PPMODS/" \
   || { echo "FAIL: 准备 PluginProxy 受限模块目录失败"; exit 1; }
-swiftc "${SWIFTC_COMMON[@]}" -wmo \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" -wmo \
   -parse-as-library \
   -module-name PluginProxy \
   -c -o "$OBJ/PluginProxy.o" \
@@ -36,7 +36,7 @@ build_lib AAAgentTestKit
 # ⑤ 宿主(库,但门禁单独把它编成可执行做冒烟;@main 是过桥,终态是 12 票 XcodeGen app 壳)。
 #    06 票:宿主装配 ProxyPlugin(注入真 SystemProcessPort/SocketHTTPPort),故链接补 AAPluginSDK.o / PluginProxy.o / AAUISystem.o。
 echo "-- 编译可执行 target: AAHostMacOS(库→冒烟可执行;AppKit,首次编译约 30s)"
-swiftc "${SWIFTC_COMMON[@]}" \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
   -parse-as-library \
   -D AA_TESTING \
   -I "$MODULES" \
@@ -46,7 +46,7 @@ swiftc "${SWIFTC_COMMON[@]}" \
   || { echo "FAIL: 编译 AAHostMacOS 失败"; exit 1; }
 
 echo "-- 编译生产 E2E 宿主(不含 AA_TESTING;真锁版内核 + 生产确认路径)"
-swiftc "${SWIFTC_COMMON[@]}" \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
   -parse-as-library -D AA_E2E \
   -I "$MODULES" \
   -o "$PROD_HOST_BIN" \
@@ -56,7 +56,7 @@ swiftc "${SWIFTC_COMMON[@]}" \
 
 # ④ CLI 可执行:@main 入口需 -parse-as-library;链接其依赖 AAContracts.o;产真二进制。
 echo "-- 编译可执行 target: aa"
-swiftc "${SWIFTC_COMMON[@]}" \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
   -parse-as-library \
   -I "$MODULES" \
   -o "$BIN/aa" \
@@ -65,7 +65,7 @@ swiftc "${SWIFTC_COMMON[@]}" \
   || { echo "FAIL: 编译 aa 失败"; exit 1; }
 
 echo "-- 编译可执行 target: aa-agent"
-swiftc "${SWIFTC_COMMON[@]}" \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
   -parse-as-library \
   -I "$MODULES" \
   -o "$BIN/aa-agent" \
@@ -117,7 +117,7 @@ print("ALL_UNIT passed=\(passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)
 SWIFT
-swiftc "${SWIFTC_COMMON[@]}" \
+"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
   -I "$MODULES" \
   -o "$TESTRUNNER" \
   "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAHostTestKit.o" \

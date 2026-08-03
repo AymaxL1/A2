@@ -1,11 +1,14 @@
 #!/bin/bash
 # PROJECT_AA V1 骨架期编译门禁 —— 一条命令的红绿循环入口。
 #
-# 姿态:本机 CLT 损坏(module.modulemap 与 bridging.modulemap 重复定义 SwiftBridging),SPM 整体不可用,
-# 故不走 swift build,改用 spike 已固化的 vfsoverlay 直编:
-#   swiftc + -vfsoverlay <空 modulemap 遮掉重复定义> + -module-cache-path <独立缓存>。
-# 按 07 票拓扑序逐 target 编译(库 target 产 .swiftmodule,后续 target 用 -I 指向前序模块目录;
-# aa 产真可执行;AAHostMacOS 是库,但门禁借 vfsoverlay 把它单独编成可执行做冒烟),再跑 assert 测试。
+# 姿态:本机 SPM 不可用(libPackageDescription 与其接口错配),故不走 swift build,改用 swiftc 直编:
+#   swiftc + -module-cache-path <独立缓存>,按 07 票拓扑序逐 target 编译
+#   (库 target 产 .swiftmodule,后续 target 用 -I 指向前序模块目录;aa 产真可执行;
+#    AAHostMacOS 是库,但门禁单独把它编成可执行做冒烟),再跑 assert 测试。
+#
+# 工具链状态**不写死假设**:见下方「工具链探测」段。历史上本机 CLT 还坏了第二处
+# (module.modulemap 与 bridging.modulemap 重复定义 SwiftBridging → 裸 swiftc 必挂),
+# 靠 -vfsoverlay 遮掉;该绕过法现已降级为**回落分支**,CLT 修好即自动退役。
 #
 # 02 票增量:
 #   * AAHostMacOS 落地为 AppKit accessory 宿主(菜单栏 + UDS server)。注意其终态是「库」(Host Port 的 macOS 实现);
@@ -57,7 +60,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# vfsoverlay 只读复用 S1 spike 里那份(遮掉 CLT 重复的 SwiftBridging modulemap);CLT 修好后可移除该旗标。
+# vfsoverlay 只读复用 S1 spike 里那份(遮掉 CLT 重复的 SwiftBridging modulemap)。
+# 现为**回落用**:仅当裸 swiftc 编不过时才启用,见下方「工具链探测」。
 OVERLAY="$ROOT/Spikes/S1PetOverlay/toolchain-workaround/overlay.yaml"
 
 # 全部中间产物落在 .build/(已被 .gitignore 忽略),不污染仓库。
@@ -103,7 +107,9 @@ REAL_TAKEOVER_CLEARED_BEFORE="$( [ -e "$REAL_TAKEOVER_CLEARED" ] && md5 -q "$REA
 REAL_SUBS_DIR="$HOME/Library/Application Support/AA/subscriptions"
 REAL_SUBS_BEFORE="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/null | md5 2>/dev/null || echo ABSENT )"
 
-SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
+# SWIFTC_BIN / SWIFTC_COMMON 由下方「工具链探测」段现场决定(须在 $BUILD 建好之后)。
+# env seam:AA_SWIFTC 可显式指定 swiftc(例如独立工具链里的绝对路径),缺省用 PATH 上的。
+SWIFTC_BIN="${AA_SWIFTC:-swiftc}"
 
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
 TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
@@ -131,18 +137,65 @@ cleanup() {
 trap cleanup EXIT
 
 echo "========================================"
-echo " PROJECT_AA check.sh —— vfsoverlay 直编门禁"
+echo " PROJECT_AA check.sh —— swiftc 直编门禁"
 echo " ROOT   = $ROOT"
-echo " OVERLAY= $OVERLAY"
 echo "========================================"
-
-if [ ! -f "$OVERLAY" ]; then
-  echo "FAIL: 找不到 vfsoverlay:$OVERLAY"
-  exit 1
-fi
 
 rm -rf "$BUILD"
 mkdir -p "$MCACHE" "$MODULES" "$OBJ" "$PPMODS" "$BIN" "$RUNNER"
+
+# ---- 工具链探测 ---------------------------------------------------------------
+# 不写死「一定要 vfsoverlay」——拿一个最小样例现场探:
+#   ① 裸 swiftc 能编过     → clean 模式,不带任何绕过旗标(CLT 已修好 / 用的是干净工具链)
+#   ② 裸编挂、带 overlay 过 → overlay 模式,沿用历史绕过法(CLT 仍有重复 modulemap)
+#   ③ 两者都挂             → 工具链真的不可用,如实报错退出,不假装能跑
+# 11 票要求的「vfsoverlay 退役」由此自动完成:CLT 一修好,下一次跑门禁就自动进 clean 模式。
+PROBE="$BUILD/toolchain-probe"
+mkdir -p "$PROBE"
+cat > "$PROBE/probe.swift" <<'PROBE_EOF'
+import Foundation
+public func aaToolchainProbe() -> Int { NSString(string: "ok").length }
+PROBE_EOF
+
+if ! command -v "$SWIFTC_BIN" >/dev/null 2>&1 && [ ! -x "$SWIFTC_BIN" ]; then
+  echo "FAIL: 找不到 swiftc:$SWIFTC_BIN(可用 AA_SWIFTC 指定绝对路径)"
+  exit 1
+fi
+
+if "$SWIFTC_BIN" -swift-version 5 -module-cache-path "$PROBE/mcache-clean" \
+     -parse-as-library -c -o "$PROBE/probe-clean.o" "$PROBE/probe.swift" \
+     >"$PROBE/clean.log" 2>&1; then
+  TOOLCHAIN_MODE="clean"
+  SWIFTC_COMMON=(-swift-version 5 -module-cache-path "$MCACHE")
+elif [ -f "$OVERLAY" ] && "$SWIFTC_BIN" -swift-version 5 -vfsoverlay "$OVERLAY" \
+     -module-cache-path "$PROBE/mcache-ovl" \
+     -parse-as-library -c -o "$PROBE/probe-ovl.o" "$PROBE/probe.swift" \
+     >"$PROBE/overlay.log" 2>&1; then
+  TOOLCHAIN_MODE="overlay"
+  SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
+else
+  echo "FAIL: swiftc 不可用 —— 裸编与 vfsoverlay 回落均失败。"
+  echo "  swiftc      = $SWIFTC_BIN"
+  echo "  裸编日志    = $PROBE/clean.log"
+  if [ -f "$OVERLAY" ]; then
+    echo "  overlay 日志 = $PROBE/overlay.log"
+  else
+    echo "  (overlay 文件缺失,回落分支未能尝试:$OVERLAY)"
+  fi
+  echo "---- 裸编错误前 20 行 ----"
+  sed -n '1,20p' "$PROBE/clean.log"
+  exit 1
+fi
+
+echo " 工具链   = $("$SWIFTC_BIN" --version 2>/dev/null | head -1)"
+echo " swiftc   = $(command -v "$SWIFTC_BIN" 2>/dev/null || echo "$SWIFTC_BIN")"
+if [ "$TOOLCHAIN_MODE" = "clean" ]; then
+  echo " 编译模式 = clean(裸 swiftc,无绕过旗标)"
+else
+  echo " 编译模式 = overlay(回落:CLT 重复 modulemap 仍在,靠 vfsoverlay 遮蔽)"
+  echo "            OVERLAY = $OVERLAY"
+fi
+echo "========================================"
 
 # ---- 编 1 个库 target:同时产 .swiftmodule(到 $MODULES,供下游 import)与 .o(到 $OBJ,供可执行链接)----
 #      -c 为主动作(产目标文件),-emit-module-path 为附带产物;-wmo 让多源文件汇成单一 .o。
@@ -150,7 +203,7 @@ mkdir -p "$MCACHE" "$MODULES" "$OBJ" "$PPMODS" "$BIN" "$RUNNER"
 build_lib() {  # $1 = target 名
   local name="$1"
   echo "-- 编译库 target: $name"
-  swiftc "${SWIFTC_COMMON[@]}" -wmo \
+  "$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" -wmo \
     -parse-as-library \
     -module-name "$name" \
     -c -o "$OBJ/$name.o" \

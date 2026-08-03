@@ -42,3 +42,12 @@ cd Spikes/S1PetOverlay && ./run.sh
 - **微创**（当场解锁 `run.sh`，可逆）：`sudo mv /Library/Developer/CommandLineTools/usr/include/swift/module.modulemap{,.bak}`（保留 bridging.modulemap 那份）。SPM 仍坏。
 - **根治 + Phase 0 刚需**：装完整 Xcode（App Store）→ `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` → 首次启动装组件。`swift run`/`xcodebuild`/XCUITest 全部就位。
 - 或重装 CLT：`sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install`。
+
+### 2026-08-04 结局（上面那段是历史记录，以下为最终处置）
+
+**上文第 1 条已修复，第 2 条的描述有误、且仍未修复。逐条结账：**
+
+- **重复 modulemap（第 1 条）—— 已修。** 用户执行了「微创」那条：`sudo mv .../module.modulemap .../module.modulemap.disabled`。修后实测裸 `swiftc` 零旗标编译并运行成功。**vfsoverlay 就此退役**：`Scripts/check/bootstrap.sh` 改为开跑时现场探测工具链，裸编过即走 `clean` 模式，不再传该旗标；本目录 `toolchain-workaround/` 保留为**历史归档 + 回落分支**（万一在 CLT 仍坏的机器上跑，探测器会自动回落用它）。
+- **SPM（第 2 条）—— 仍坏，但当年的描述不准。** 当年记的是「导出符号为空」；2026-08-04 复测为 **880 个 PackageDescription 符号，但零个 `Package.__allocating_init`**，即 dylib 与 `PackageDescription.swiftmodule` 接口错配，不是空库。tools-version 6.0/6.1/5.9 全部 `Invalid manifest` + `Undefined symbols`。
+- **「根治需装 Xcode」这个判断已被推翻。** 2026-08-04 实测：`swiftc` 编 AppKit → 手工组 `.app`（Info.plist + Contents/MacOS）→ `codesign -s -` ad-hoc 签名 → `NSStatusItem` 菜单栏项装上 → `open` 正常启动，**全程无 Xcode**。造 `.app` 不需要 `.xcodeproj`/`xcodebuild`。修 SPM 也不需要 Xcode（可装官方独立工具链到家目录，`installer -target CurrentUserHomeDirectory`，无需 sudo）。
+- **⚠️ 上面最后那条「`sudo rm -rf` CLT 再 `xcode-select --install`」不要执行。** `/usr/bin/` 下的 `git`/`clang`/`swift`/`make` 等 **78 个命令是同一个 118KB 存根的硬链接**，真身全在 CLT 里；删掉 CLT 会让 `git` 当场失效，而本仓库无远端、全部历史只在本地 `.git`。要重装请走覆盖安装（developer.apple.com 下 dmg 装到现有安装上；`xcode-select --install` 在已装时只会说 already installed）。
