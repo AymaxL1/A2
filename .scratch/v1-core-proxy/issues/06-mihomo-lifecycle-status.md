@@ -4,7 +4,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done(`e22908a`;验收勾已由 `23da16a` 勾齐)
 
 **验证环:** vfsoverlay(今天可验,mihomo 为独立 Go 二进制可直接运行)。
 

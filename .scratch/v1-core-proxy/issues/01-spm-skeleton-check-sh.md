@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** done(`ff8990b`,门禁 10/10;后经 `23da16a` 将 check.sh 拆成 `Scripts/check/` 模块,一条命令的接口不变)
 
 **验证环:** vfsoverlay(今天可验);`Package.swift` 的解析验证归 11 票。
 

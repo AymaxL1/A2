@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done(`068805f`)
 
 **验证环:** vfsoverlay(今天可验,S2 已证宿主进程与 UDS 可直编运行)。
 

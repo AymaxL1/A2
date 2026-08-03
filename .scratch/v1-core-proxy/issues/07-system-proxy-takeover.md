@@ -4,7 +4,7 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done(`8f5c3e5`;接管态持久化后经 `854cb63`/`38b5eac`/`bf5ab58` 审后收口)
 
 **验证环:** vfsoverlay(今天可验;改系统代理需管理员账户,真机断言经 networksetup 读回)。
 

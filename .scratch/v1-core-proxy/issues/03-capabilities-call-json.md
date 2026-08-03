@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done(`09de695`)
 
 **验证环:** vfsoverlay(今天可验)。
 

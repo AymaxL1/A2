@@ -4,7 +4,7 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done(`ed22cfb`;CR 两真 bug 已在该提交内修:切 mode 改 PATCH /configs、latency timeout 越界钳位)
 
 **验证环:** vfsoverlay(今天可验,需一份含多组多节点的测试配置)。
 

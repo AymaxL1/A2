@@ -4,7 +4,7 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** done(`b982aa5`;审后修复 `2efe51f`/`854cb63`/`38b5eac`/`bf5ab58`:非法接管态 fail-safe、恢复时保留本地代理、tombstone 清态)
 
 **验证环:** vfsoverlay(今天可验,E2E 用 kill -9 剧本)。
 

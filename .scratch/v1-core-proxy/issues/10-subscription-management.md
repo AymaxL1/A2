@@ -4,7 +4,7 @@
 
 **Blocked by:** 04, 06
 
-**Status:** ready-for-agent
+**Status:** done(`3368d3b`,PASS=337)
 
 **验证环:** vfsoverlay(今天可验;订阅源可用本地文件/本地 HTTP 假源)。
 

@@ -4,7 +4,7 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done(`4842d96`)
 
 **验证环:** vfsoverlay(今天可验,GUI 弹窗直编可跑,两分支需真机点验)。
 
