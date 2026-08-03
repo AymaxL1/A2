@@ -172,10 +172,41 @@ REAL_SUBS_BEFORE="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/
 #   否则守卫坏掉的表现会是「跑前跑后都是空 → 一致 → PASS」,又是一次白送(见 finalize.sh 同款口径)。
 #   pgrep 退出码:0=有匹配,1=无匹配(正常),>1=自身出错。
 foreign_mihomo_pids() {
-  local out rc
-  out="$(pgrep -fl mihomo 2>/dev/null)"; rc=$?
+  local pids rc pid exe
+  # 先用 `pgrep -f`(匹配整条命令行)**宽召回**,再逐个按**可执行路径**筛 —— 两步都必要:
+  #   * 只用 -f 会误报:任何 argv 里出现 "mihomo" 字样的进程(比如一条 `grep "…mihomo…" 日志` 的 shell)
+  #     都会被算成「用户的 mihomo」。13 票实测撞过一次:守卫报「多了一个 pid」,查出来是监控用的 shell。
+  #     那种红最坏 —— 它长得像「门禁误伤了用户内核」,会把人吓一跳,查半天发现是自己。
+  #   * 但**不能**因此改成只匹配可执行名:`pgrep` 的名字匹配有长度截断,宽召回这一步要留着。
+  # 按 `ps -o comm=` 筛。**这里必须把话说准,不许含糊**:
+  #   * macOS 上 `comm` 严格说是 **argv[0]**,不是内核记录的可执行真实路径 —— 进程可以改写它。
+  #     实测本机 `ps -p 553 -o comm=` 给的是 `/usr/local/bin/mihomo`,够用,但别把它当防伪凭证。
+  #   * 这次收窄**主要**是更精确(消掉 argv 误报),**但确实有一类变松了**:
+  #     如果有人把 mihomo 二进制**改了名**(可执行名不含 mihomo)再配 mihomo 配置目录跑,
+  #     旧的 argv 判据能抓到它,新判据会放过。这是双轴 CR 指出来的,如实记下,不粉饰。
+  #   * 之所以仍然收窄:误报率高的守卫会被人学会无视,那比守卫窄一点更危险 —— 而且这条守卫本就是
+  #     **兜底网**(第一道防线是「每个 pkill 都只盯仓库树内绝对路径」,那条没有放松)。
+  #   取舍记在 13 票票面,要不要换更硬的判据(如比对可执行 inode)由用户定。
+  pids="$(pgrep -f mihomo 2>/dev/null)"; rc=$?
   if [ "$rc" -gt 1 ]; then printf 'PGREP_ERROR(rc=%s)' "$rc"; return 0; fi
-  printf '%s' "$out" | grep -v "$ROOT" | awk '{print $1}' | sort -n | tr '\n' ' '
+  for pid in $pids; do
+    exe="$(ps -p "$pid" -o comm= 2>/dev/null)"
+    if [ -z "$exe" ]; then
+      # ps 拿不到:两种情形要分开,**不能一律当「不是 mihomo」丢掉**。
+      #   进程已经退出(pgrep 与 ps 之间的竞态)→ 无所谓,跳过;
+      #   进程**还活着**而 ps 失败 → 守卫此刻是瞎的。若照旧静默跳过,它就不进跑前快照;
+      #     万一门禁随后真误杀了它,跑后同样查不到 → 前后相等 → **白送一个 PASS**。
+      #   这正是本函数头上那条规矩(守卫自身出错要出哨兵、不许装作一个都没有)。
+      if kill -0 "$pid" 2>/dev/null; then printf 'PS_ERROR(pid=%s)' "$pid"; return 0; fi
+      continue
+    fi
+    case "$exe" in
+      "$ROOT"/*) continue ;;              # 仓库自带的锁版内核 / fake stub,不在看护范围
+                                          #   末尾带 `/` 是边界:否则 `<ROOT>-something/mihomo` 会被误判成仓库内
+      *mihomo*)  printf '%s ' "$pid" ;;   # 仓库外的真 mihomo —— 正是要看护的那些
+      *)         continue ;;              # argv[0] 不含 mihomo(监控 shell 之类)
+    esac
+  done
 }
 FOREIGN_MIHOMO_BEFORE="$(foreign_mihomo_pids)"
 

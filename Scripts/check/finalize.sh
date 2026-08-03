@@ -41,7 +41,7 @@ FOREIGN_MIHOMO_AFTER="$(foreign_mihomo_pids)"
 case "$FOREIGN_MIHOMO_BEFORE$FOREIGN_MIHOMO_AFTER" in
   # 守卫自身坏掉时必须显式判 FAIL:否则「pgrep 出错 → 前后都空 → 一致 → PASS」又是一次白送,
   #   而这条守的恰恰是「别把用户的网络掐了」,是最不能白送的一条。
-  *PGREP_ERROR*)
+  *PGREP_ERROR*|*PS_ERROR*)
     echo "FAIL: 外部 mihomo 守卫自身出错,无法核验是否误伤用户内核 —— 绝不算过(before=[$FOREIGN_MIHOMO_BEFORE] after=[$FOREIGN_MIHOMO_AFTER])"; FAIL=$((FAIL+1)) ;;
   *)
     if [ "$FOREIGN_MIHOMO_BEFORE" = "$FOREIGN_MIHOMO_AFTER" ]; then

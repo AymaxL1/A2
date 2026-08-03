@@ -5,6 +5,12 @@
 # 15 票在本组追加 4 条(APP7–APP10),**共用同一批产物、共用 e2e 档那一个宿主**:
 #   多起一次宿主 = 门禁多花几秒 + 多一份残留风险,而这 4 条要的东西那个宿主全都有。
 #
+# 13 票在本组追加 1 条(APP11:签名身份 seam 必须 fail-closed)。**为什么落在本组而不是新模块**:
+#   它要被测的正是 `Scripts/build-app.sh` 的签名段,而本组已经把那个脚本跑热了 ——
+#   production 档的 SPM scratch($ROOT/.build/app-build-production,跨轮保留)此刻已是最新,
+#   APP11 那次构建的 `swift build` 是 no-op,整条只花 ~1 秒(实测,见票面)。
+#   另起模块要么重复一遍工具链/路径变量,要么再触发一次构建,两样都是白花的钱。
+#
 # ⚠️ **硬约束:只有 e2e 档能起宿主,production 档一律只做静态断言,绝不启动。**
 #    理由不是洁癖,是会污染用户真实环境:把内核数据目录导向临时区的 env seam `AA_MIHOMO_DATA_DIR`
 #    在 `Sources/AAHostMacOS/HostApp.swift` 里是 `#if AA_E2E` 门控的 —— production 构建里**根本没有
@@ -172,6 +178,50 @@ else
   echo "FAIL: .app 内 Mach-O 签名不齐或身份不一致(共 $APP8_N 个):$APP8_ERR"; FAIL=$((FAIL+1))
 fi
 
+# (APP11,13 票) **签名身份 seam 必须 fail-closed**:喂一个不存在的签名身份,构建必须**明确失败、
+#   并在输出里说明原因**,绝不能静默回落到 ad-hoc 然后报「OK」。
+#
+# 为什么值得一条门禁:这是换真开发证书那天最容易出的事故 —— 以为签上了,其实没签。
+#   `AA_CODESIGN_IDENTITY` 是 12 票留的 env seam,将来换证书**只改这一个值**;如果打错一个字、
+#   或者证书没装进钥匙串,而构建链选择「找不到就当 ad-hoc 用」,产出的 `.app` 会一路通过
+#   APP1/APP3/APP8(它们在 ad-hoc 下全绿),最后被当成「已带开发证书」发出去。本条把那条路堵死。
+#
+# ⚠️ **判据里必须有「产物不是有效签名 bundle」这一条,不能只看 `codesign -dv` 报没报签名。**
+#   实测:构建失败留下的那个残缺 `.app`,`codesign -dv` 照样报 `Signature=adhoc`、
+#   `flags=0x2(adhoc)` —— 那是 **链接器自动加的 ad-hoc 签名**(arm64 上 ld 给每个可执行都签,
+#   否则内核不给执行),不是我们签的。只看「有没有签名」会被它整个骗过。
+#   真正的区分点是 `codesign --verify --strict` 在这个残缺 bundle 上失败
+#   (实测原话:`code has no resources but signature indicates they must be present`),
+#   以及 `Identifier` 停留在 codesign 派生值(`aahost-5555…`)而不是 `com.aa.host`。
+#
+# 四个判据缺一不可(任一条单独成立都不足以证明 fail-closed):
+#   ① 退出码非零;② 失败发生在**签名这一步**(日志里有 `FAIL: 签名`,不是别处炸的);
+#   ③ 日志里出现那个不存在的身份串(证明它真拿这个身份去签了,没有偷偷换成 `-`);
+#   ④ 残留产物过不了 `codesign --verify --strict`(证明没有静默产出一个「看着像签好了」的 bundle)。
+#
+# **独立 --output 目录**:绝不覆盖 $APP_OUT_PROD / $APP_OUT_E2E 那两个正被其余断言消费的 `.app`。
+#   落在 $BUILD 下 → 每轮门禁开头随 `rm -rf "$BUILD"` 一起清掉,不留旧产物。
+#   本产物**从不被启动**(它连有效签名都没有),故不进 finalize.sh 的残留宿主守卫。
+APP11_ID="AA-NONEXISTENT-IDENTITY-FOR-GATE"
+APP11_OUT="$BUILD/app-failclosed"
+APP11_LOG="$BUILD/build-app-failclosed.log"
+AA_CODESIGN_IDENTITY="$APP11_ID" AA_SWIFT="$SWIFT_BIN" \
+  bash "$ROOT/Scripts/build-app.sh" --variant production --output "$APP11_OUT" >"$APP11_LOG" 2>&1
+APP11_RC=$?
+codesign --verify --strict "$APP11_OUT/AA.app" >/dev/null 2>&1; APP11_VRC=$?
+APP11_ERR=""
+[ "$APP11_RC" -ne 0 ]              || APP11_ERR="$APP11_ERR 构建居然成功了(rc=0)——静默回落嫌疑;"
+grep -qF 'FAIL: 签名' "$APP11_LOG"  || APP11_ERR="$APP11_ERR 日志里没有「FAIL: 签名」——失败不在签名这一步;"
+grep -qF "$APP11_ID" "$APP11_LOG"   || APP11_ERR="$APP11_ERR 日志里找不到传入的身份串——它可能压根没用这个身份;"
+[ "$APP11_VRC" -ne 0 ]             || APP11_ERR="$APP11_ERR 残留 .app 竟能过 codesign --verify --strict——确实静默签成了别的东西;"
+if [ -z "$APP11_ERR" ]; then
+  echo "PASS: 签名身份 seam fail-closed(AA_CODESIGN_IDENTITY='$APP11_ID' → build-app.sh rc=$APP11_RC 且在签名步骤报出原因;残留产物过不了 --verify --strict rc=$APP11_VRC —— 没有静默回落到 ad-hoc 报成功)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: 签名身份 seam 不是 fail-closed:$APP11_ERR"; FAIL=$((FAIL+1))
+  tail -20 "$APP11_LOG" 2>/dev/null | sed 's/^/    /'
+fi
+
 # ---- e2e 档:真起一次宿主,验全链 ------------------------------------------------
 AA_SWIFT="$SWIFT_BIN" bash "$ROOT/Scripts/build-app.sh" \
   --variant e2e --output "$APP_OUT_E2E" >>"$APP_BUILD_LOG" 2>&1
@@ -187,7 +237,8 @@ APP_E2E_NET="$BUILD/app-e2e-netfake.json"
 printf '%s\n' '{"services":[]}' > "$APP_E2E_NET"
 
 if [ "$APP_E2E_RC" -ne 0 ]; then
-  # e2e 档构建都没成,后面五条(APP4/5/6 + 15 票的 APP9/APP10)都没法核验 —— 各记 1 条 FAIL,保持本组恒为 10 条。
+  # e2e 档构建都没成,后面五条(APP4/5/6 + 15 票的 APP9/APP10)都没法核验 —— 各记 1 条 FAIL,保持本组恒为 11 条
+  #   (APP1/2/3 + 7/8 + 13 票的 APP11 已在上面各记过 1 条,与本分支无关)。
   echo "FAIL: build-app.sh --variant e2e 退出码=$APP_E2E_RC —— 以下五条无法核验"; FAIL=$((FAIL+1))
   tail -20 "$APP_BUILD_LOG" 2>/dev/null | sed 's/^/    /'
   echo "FAIL: 无 e2e 档 .app,无法核验「mihomo 从 .app 内资源被拉起」"; FAIL=$((FAIL+1))

@@ -207,22 +207,36 @@ echo "-- 签名(identity='$CODESIGN_IDENTITY')"
 #     ② 13 票上真证书 + 公证之后,标识符是 Apple 侧记录与撤销的抓手,`a.out` 这种通用名毫无意义。
 #   标识符**从文件名派生**、不为内核特判:这一步是个遍历,将来加进来的第二个内嵌可执行同样需要标识符,
 #   写死 `.mihomo` 只会让下一个文件重新掉进 `a.out` 的坑。派生规则:`<bundle id>.<文件名>`,
-#   文件名里 codesign 标识符不接受的字符统一换成 `-`。当前唯一命中项 = `com.aa.host.mihomo-darwin-arm64`。
+#   文件名里 codesign 标识符不接受的字符统一换成 `-`。命中项 = `com.aa.host.mihomo-darwin-arm64`。
+#
+# 13 票补齐的一处(12 票留下的债):**`Contents/MacOS/aa` 当时没给 `-i`**,于是它的标识符是 codesign
+#   自己派生的 `aa-5555494453364e7889e631f083dd9d33a665cd1a`(文件名 + 一串路径派生的十六进制,实测原文)。
+#   与内核那个 `a.out` 是同一类问题的两个面:分发出去的 `.app` 里躺着一个标识符谁也认不出的可执行,
+#   而标识符正是上真证书 + 公证后 Apple 侧记录/撤销的抓手。既然规则已经有了,就让 `aa` 走同一条,
+#   别留一个「只有内核讲究、CLI 不讲究」的例外。补后 = `com.aa.host.aa`。
+#   (`aahost` 不在此列:它是 CFBundleExecutable,由第 ③ 步签壳时一并签,标识符直接取 CFBundleIdentifier,
+#    实测已经是 `com.aa.host`,本来就没掉进这个坑。)
+#
+# 派生规则收成一个函数、两处共用:写两遍必然漂,而「标识符怎么来的」是将来查签名问题的第一现场。
+# `printf '%s'` 而不是直接管 basename:`tr -c` 的补集里含换行,basename 的结尾换行会被换成 `-`,
+#   而它在 `$( )` 里不再是「尾随换行」故不会被剥掉 —— 标识符会平白多一个尾巴(实测踩过)。
+exe_identifier() {  # $1=可执行绝对路径 → <bundle id>.<清洗过的文件名>
+  printf '%s.%s' "$BUNDLE_ID" "$(printf '%s' "$(basename "$1")" | tr -c 'A-Za-z0-9.-' '-')"
+}
 #
 # 三步都把 codesign 的输出捕下来一起报:签名失败的原因几乎总在 stderr 里(证书不可用、
 #   落点被拒、时间戳服务器不通……),吞掉它只剩「签名失败: <文件名>」,等于把诊断信息扔了。
 while IFS= read -r exe; do
-  # `printf '%s'` 而不是直接管 basename:`tr -c` 的补集里含换行,basename 的结尾换行会被换成 `-`,
-  #   而它在 `$( )` 里不再是「尾随换行」故不会被剥掉 —— 标识符会平白多一个尾巴(实测踩过)。
-  EXE_IDENT="$BUNDLE_ID.$(printf '%s' "$(basename "$exe")" | tr -c 'A-Za-z0-9.-' '-')"
+  EXE_IDENT="$(exe_identifier "$exe")"
   echo "   sign: ${exe#$APP/}  (identifier=$EXE_IDENT)"
   if ! CS_OUT="$(codesign --force --identifier "$EXE_IDENT" --sign "$CODESIGN_IDENTITY" "$exe" 2>&1)"; then
     echo "FAIL: 签名内嵌可执行失败: $exe"; echo "$CS_OUT" | sed 's/^/    /'; exit 1
   fi
 done < <(find "$APP/Contents/Resources/$RES_BUNDLE_NAME" -type f -perm +111)
-# ② CLI。
-echo "   sign: Contents/MacOS/aa"
-if ! CS_OUT="$(codesign --force --sign "$CODESIGN_IDENTITY" "$APP/Contents/MacOS/aa" 2>&1)"; then
+# ② CLI(走与①同一条标识符派生规则,理由见上)。
+AA_IDENT="$(exe_identifier "$APP/Contents/MacOS/aa")"
+echo "   sign: Contents/MacOS/aa  (identifier=$AA_IDENT)"
+if ! CS_OUT="$(codesign --force --identifier "$AA_IDENT" --sign "$CODESIGN_IDENTITY" "$APP/Contents/MacOS/aa" 2>&1)"; then
   echo "FAIL: 签名 Contents/MacOS/aa 失败"; echo "$CS_OUT" | sed 's/^/    /'; exit 1
 fi
 # ③ 最后签 `.app` 本体。主可执行 `aahost` 由这一步一并签(它是 CFBundleExecutable,属于壳的一部分),
