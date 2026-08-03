@@ -33,6 +33,9 @@ let r8 = SystemAgentPortTests.run()
 for line in r8.lines { print(line) }
 let r9 = AgentLaunchAssemblerTests.run()
 for line in r9.lines { print(line) }
+// 14 票:菜单栏轻壳的菜单模型(覆盖面/可追溯性 + 三态如实反映)。纯逻辑,不碰 AppKit。
+let r10 = MenuModelConformanceTests.run()
+for line in r10.lines { print(line) }
 print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
 print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
 print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
@@ -42,8 +45,9 @@ print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
 print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
 print("SYSTEMPORT_TESTS passed=\(r8.passed) failed=\(r8.failed)")
 print("LAUNCHASM_TESTS passed=\(r9.passed) failed=\(r9.failed)")
-let passed = r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed + r9.passed
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed + r9.failed
+print("MENUMODEL_TESTS passed=\(r10.passed) failed=\(r10.failed)")
+let passed = r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed + r9.passed + r10.passed
+let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed + r9.failed + r10.failed
 print("ALL_UNIT passed=\(passed) failed=\(failed)")
 fflush(stdout)
 exit(failed == 0 ? 0 : 1)

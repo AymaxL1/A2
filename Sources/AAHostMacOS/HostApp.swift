@@ -63,6 +63,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 15 票:关于页(GPL 义务呈现面)。**必须由 AppDelegate 持有** —— 菜单项的 target 是弱引用,
     /// 不持有的话「关于 AA」点了没反应(而且是静默的,没有任何日志)。14 票重建菜单时沿用这一条。
     var aboutWindowController: AboutWindowController!
+    /// 14 票:菜单栏轻壳的菜单控制器。同上,**必须持有** —— 它是所有可点菜单项的 target(弱引用)。
+    var menuBarController: AAMenuBarController!
     /// test/dev seam:SIGUSR1 → 优雅退出的 DispatchSource(exercise applicationWillTerminate→reclaimKernel→terminate 完整回收路径)。
     var gracefulQuitSource: DispatchSourceSignal?
     private struct ConfirmationRequest {
@@ -236,6 +238,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         self.gracefulQuitSource = quitSource
 
         hostLog("启动完成。")
+
+        // 14 票 test-only seam:`AA_MENU_CLICK_PROBE=<能力id>` → 启动后程序化激活菜单里绑定该能力的那一项。
+        //   为什么需要它:门禁是 headless 的,没人能去点菜单;而「dangerous 从**菜单路径**发起仍走宿主确认」
+        //   这条验收,只有真的走一遍 NSMenuItem 的 target/action 连线才算数(直接调 registry.invoke
+        //   证明不了菜单项接对了线)。探针只负责「找到那一项并让 AppKit 派发它的 action」,
+        //   之后的一切(收输入 → registry.invoke → 风险路由 → 确认)与用户真点一下逐字相同。
+        //   放 DispatchQueue.main.async:让 applicationDidFinishLaunching 先返回、NSApp 进入正常运行循环,
+        //   否则模态确认框会在启动流程里就地弹起,与 UDS server 的就绪顺序纠缠。
+#if AA_TESTING
+        if let probeCapability = env["AA_MENU_CLICK_PROBE"], !probeCapability.isEmpty {
+            hostLog("菜单点击探针: AA_MENU_CLICK_PROBE=\(probeCapability)(test-only)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if !self.menuBarController.simulateMenuClick(capabilityID: probeCapability) {
+                    hostLog("[menu-probe] 激活失败: \(probeCapability)")
+                }
+            }
+        }
+#endif
     }
 
     /// 宿主优雅退出(菜单退出 / NSApplication.terminate)时:先还原系统代理,再回收内核。
@@ -248,26 +269,52 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         proxyPlugin?.reclaimKernel()              // ② 再停内核
     }
 
+    /// 菜单栏菜单(14 票):**只读能力清单**已被换成真正的轻壳菜单。
+    ///
+    /// 02–13 期间这里挂的是「把 registry.list() 一行行打出来」的只读清单 —— 它是纵切期的脚手架,
+    ///   证明注册表通了,但用户点不了任何东西。14 票把它换成 ClashX Meta 式的可操作菜单:
+    ///   模型在 `AAUISystem.AAMenuModel`(纯数据),渲染与动作路由在 `MenuBarController.swift`。
+    ///   关于页仍是 15 票那一项,原样挂进去(见 AboutWindow.swift 头部的约定)。
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "⚡"
-        let menu = NSMenu()
-        menu.addItem(withTitle: "AA 能力注册表", action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
-        for cap in registry.list() {
-            // 只读项:nil action → 自动 disabled
-            menu.addItem(withTitle: "\(cap.id)  ·  \(cap.risk.rawValue)  ·  \(cap.summary)",
-                         action: nil, keyEquivalent: "")
-        }
-        menu.addItem(.separator())
         // 15 票:关于页入口(GPL-3.0 全文 / 内核版本 / 源码指引 / 子进程红线)。
-        //   实现在 AboutWindow.swift 的独立类型里,这里只取它造好的那一项 —— 14 票重建菜单时原样搬走即可。
+        //   必须由 AppDelegate 持有(菜单项 target 是弱引用),这条在 14 票重建菜单后依然成立。
         aboutWindowController = AboutWindowController(registry: registry)
-        menu.addItem(aboutWindowController.makeMenuItem())
-        menu.addItem(NSMenuItem(title: "退出",
-                                action: #selector(NSApplication.terminate(_:)),
-                                keyEquivalent: "q"))
-        statusItem.menu = menu
+        let controller = AAMenuBarController(registry: registry,
+                                             aboutItemProvider: { [unowned self] in
+                                                 self.aboutWindowController.makeMenuItem()
+                                             },
+                                             promptCollector: AppDelegate.testOnlyPromptCollector())
+        menuBarController = controller
+        statusItem.menu = controller.makeMenu()
+    }
+
+    /// test-only:菜单输入框的替身。
+    ///
+    /// 读 `AA_MENU_PROMPT_AUTO`(一个 JSON 对象),设了就**不弹输入框**,直接把它当成用户填好的内容返回。
+    ///   与 `AA_CONFIRM_AUTO` 同口径 —— headless 门禁要走「从菜单点 dangerous 项」这条路,
+    ///   而那条路上第一道拦路虎是「换订阅源要用户填 name/source」的模态输入框。
+    /// 生产构建里这个函数恒返回 nil(整段读环境变量的代码根本不编译进去),菜单一律弹真输入框。
+    ///
+    /// ⚠️ 与 `AA_CONFIRM_AUTO` / `AA_AUTO_DENY_SECONDS` 同级的 test-only 债务:13 真机分发前须一并处置。
+    private static func testOnlyPromptCollector() -> AAMenuBarController.PromptCollector? {
+#if AA_TESTING
+        guard let raw = ProcessInfo.processInfo.environment["AA_MENU_PROMPT_AUTO"], !raw.isEmpty else { return nil }
+        guard let obj = try? JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)).objectValue else {
+            hostLog("AA_MENU_PROMPT_AUTO 不是合法 JSON 对象,忽略(菜单仍弹真输入框): \(raw)")
+            return nil
+        }
+        hostLog("菜单输入模式: AA_MENU_PROMPT_AUTO(test-only 自动填入,不弹输入框)\(AppDelegate.renderInput(.object(obj)))")
+        return { prompts, _ in
+            // 只交回本项真正声明要问的参数,多余的键丢掉 —— 免得 env 里多写一个键就悄悄改了调用形状。
+            var out: [String: JSONValue] = [:]
+            for p in prompts { if let v = obj[p.name] { out[p.name] = v } }
+            return out
+        }
+#else
+        return nil
+#endif
     }
 
     // ============ dangerous 宿主确认(注入进 Registry 的回调实现)============

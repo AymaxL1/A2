@@ -81,6 +81,23 @@
 #   * 断言组 APP 追加 4 条(APP7–APP10):GPL 全文随包完整(SHA-256 现算现比)、`.app` 内 Mach-O 全签且身份一致
 #     (**ad-hoc 下无证书链,口径见 app-bundle.sh 里的告示**)、`aa proxy license` 报出的内核版本与本文件解析值一致、
 #     子进程红线原文真的经能力面暴露。后两条复用 e2e 档那一个已就绪的宿主,不另起。
+#
+# 14 票增量(菜单栏轻壳 + 手搓快照):
+#   * 菜单从「只读能力清单」换成可操作的 ClashX Meta 式轻壳。核心是**一个模型、两个渲染器**:
+#     纯数据模型 `AAUISystem.AAMenuModel` / `AAMenuModelBuilder`(零 AppKit,可单测)→
+#     渲染器 A `AAMenuModel → NSMenu`(Sources/AAHostMacOS/MenuBarController.swift,真菜单 + 动作路由)、
+#     渲染器 B `AAMenuModel → PNG`(Sources/AAHostMacOS/MenuSnapshotRenderer.swift,门禁可 diff 的那份)。
+#     NSMenu 本身无法离屏截图 —— 拆出模型层正是「快照能进 headless 门禁」的唯一前提。
+#   * **薄壳铁律**:每个可点菜单项的 action 都经同一个 `registry.invoke(capabilityID:input:)` 出口,
+#     菜单里没有任何业务逻辑;dangerous(proxy.subscription.add)因此自动走宿主确认路由。
+#   * 新可执行 `menu-snapshot`(门禁内部工具,无 product):渲染三种状态 → 落 `$BUILD/snapshots/` →
+#     与入库 golden(`Snapshots/menubar/`,含 README)比像素 + 比模型文本。`AA_SNAPSHOT_RECORD=1` 显式重录
+#     (且以非零码结束;门禁自己**永不**传它 —— 否则断言永远为真)。
+#   * 两个 test-only env seam(与 AA_CONFIRM_AUTO 同口径,均在 HostApp.swift 的 `#if AA_TESTING` 内):
+#     `AA_MENU_PROMPT_AUTO`(替掉「换源要用户填 name/source」的模态输入框)、
+#     `AA_MENU_CLICK_PROBE`(启动后经 NSApp.sendAction 激活**真 NSMenuItem** 的 action)。13 票分发前须一并处置。
+#   * 新断言组 MB(Scripts/check/menubar.sh,5 条):覆盖面/可追溯性、三态如实反映(判据在纯逻辑套件
+#     MenuModelConformanceTests,shell 只 grep 结论行)、快照产物有效性、golden 比对、dangerous 菜单路径 deny。
 
 # 接口契约(11 票换引擎前后**逐字不变**,这正是 11 票要守的那条):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。

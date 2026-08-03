@@ -27,5 +27,9 @@ source "$CHECK_DIR/architecture-and-cli.sh"
 #   又必须排在 mihomo-real-e2e.sh **之前** —— 两者都会起真 mihomo 内核并争同一个 UDS socket,
 #   而 mihomo-real-e2e 开头就 teardown_hosts,天然替本组兜一层底。
 source "$CHECK_DIR/app-bundle.sh"
+# 14 票:菜单栏轻壳 + 手搓快照。排在 app-bundle.sh 之后、mihomo-real-e2e.sh 之前 ——
+#   它也要起一次宿主(验「dangerous 从菜单路径发起仍走确认」),而 mihomo-real-e2e 开头就 teardown_hosts,
+#   天然替本组兜一层底(与 app-bundle 同一条排位理由)。本组不起任何内核,绝不与真核 E2E 争端口。
+source "$CHECK_DIR/menubar.sh"
 source "$CHECK_DIR/mihomo-real-e2e.sh"
 source "$CHECK_DIR/finalize.sh"

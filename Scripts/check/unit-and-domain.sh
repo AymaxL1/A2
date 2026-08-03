@@ -1,6 +1,11 @@
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
 echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
 OUT="$(AA_SPIKE_DIR="$ROOT/.scratch/agent-delegation/research" "$TESTRUNNER" 2>&1)"; RC=$?
+# 14 票:给 runner 输出留一个**不会被后续断言组覆盖**的别名。
+#   $OUT 是全脚本共用的临时变量(后面每个 E2E 组都会拿它装自己的命令输出),
+#   而断言组 MB(菜单栏,排在 app-bundle 之后)还要读这份纯逻辑输出里的结论行。
+#   与其为它再跑一遍 runner(那是十几秒 + 一次真进程套件),不如在这里存一份别名。
+UNIT_OUT="$OUT"
 printf '%s\n' "$OUT" | sed 's/^/    /'
 assert_exit 0 $RC "registry-tests 全绿退出码"
 assert_contains "$OUT" "demo.echo" "纯逻辑测试覆盖 demo.echo"

@@ -34,6 +34,16 @@ public struct TestReport: Sendable {
             lines.append("FAIL: \(description)")
         }
     }
+
+    /// 追加一行**非断言**输出(结论行 / 诊断信息),不计入 passed/failed。
+    ///
+    /// 14 票引入:门禁要求「每条断言恰好记 1 次 PASS/FAIL」,而一条门禁断言背后往往是几十条纯逻辑
+    ///   check —— shell 侧不可能逐条 grep(那会把 1 条变成几十条)。解法是让套件把那几十条的结论
+    ///   **汇成一行**机读结论行(`MENUBAR_ASSERT1: ok=1 …`),shell 只 grep 这一行。
+    ///   逐条 check 仍然照常输出并计入 failed(runner 退出码据此),人读诊断一点没少。
+    public mutating func note(_ line: String) {
+        lines.append(line)
+    }
 }
 
 /// `Registry` 的纯逻辑一致性测试(list + describe + invoke 全路径 + 契约往返 + 退出码映射)。

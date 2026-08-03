@@ -1,0 +1,30 @@
+[header disabled] AA · 代理
+[separator]
+[info disabled] 内核:运行中 v1.19.28  → proxy.status  @basicStatus
+[info disabled] 模式:规则 · 节点:HK-01 · 端口:7890  → proxy.status  @basicStatus
+[separator]
+[action enabled] 开启系统代理  → proxy.system.enable  @systemProxyToggle
+[action enabled] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
+[separator]
+[action enabled checked] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch
+[action enabled] 模式:全局  → proxy.mode.set {mode=global}  @modeSwitch
+[action enabled] 模式:直连  → proxy.mode.set {mode=direct}  @modeSwitch
+[separator]
+[group enabled] PROXY:HK-01
+  [action enabled checked] HK-01  → proxy.node.select {group=PROXY,node=HK-01}  @nodeSelect
+  [action enabled] JP-02  → proxy.node.select {group=PROXY,node=JP-02}  @nodeSelect
+  [action enabled] DIRECT  → proxy.node.select {group=PROXY,node=DIRECT}  @nodeSelect
+  [separator]
+  [action enabled] 测速本组  → proxy.latency.test {group=PROXY}  @latencyTest
+[group enabled] GLOBAL:PROXY
+  [action enabled checked] PROXY  → proxy.node.select {group=GLOBAL,node=PROXY}  @nodeSelect
+  [action enabled] DIRECT  → proxy.node.select {group=GLOBAL,node=DIRECT}  @nodeSelect
+  [separator]
+  [action enabled] 测速本组  → proxy.latency.test {group=GLOBAL}  @latencyTest
+[separator]
+[info disabled] 订阅:无  → proxy.subscription.list  @subscriptionManage
+[group disabled] 更新订阅  (尚无订阅)
+[action enabled] 添加 / 替换订阅源…  → proxy.subscription.add prompts[name,source]  @subscriptionManage
+[separator]
+[about enabled] 关于 AA
+[quit enabled] 退出

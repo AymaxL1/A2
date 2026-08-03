@@ -66,9 +66,13 @@ let package = Package(
         //   因此这里保持 .target(库),**不要**改成 .executableTarget。
         // 06 票:宿主 V1 内封栈——AAHostMacOS 装配 PluginProxy(注入真 Port),故新增 AAPluginSDK + PluginProxy 依赖。
         //   注意方向:宿主依赖插件(合法);铁律只禁「插件依赖 Host*」,不禁「Host 依赖插件」。
-        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
+        // 14 票:菜单栏轻壳落地 —— AAHostMacOS 新增 AAUISystem 依赖(菜单模型 `AAMenuModel` 住在那里,
+        //   两个渲染器 MenuBarController.swift / MenuSnapshotRenderer.swift 都 import 它)。
+        //   此前它是靠 PluginProxy 传递引入的,按本文件「依赖边须与源码实际 import 一一对应」的口径,显式声明。
+        .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy", "AAUISystem"]),
         // 06 票:AAHostTestKit 加 Port 假件 + 插件域逻辑纯逻辑测试,故新增 AAPluginSDK + PluginProxy 依赖(同样是「测试基建依赖插件」,合法)。
-        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
+        // 14 票:加菜单模型的纯逻辑测试与固定装置(MenuFixtures / MenuModelConformanceTests),故显式补 AAUISystem。
+        .target(name: "AAHostTestKit", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy", "AAUISystem"]),
         // 铁律:PluginProxy 只依赖 SDK / Contracts / UISystem,绝不依赖任何 Host* target。
         //   06 票新增的 ProcessPort/HTTPPort **协议**定在 AAPluginSDK(插件只依赖 SDK),真实现/假件在 Host* 侧——边界不破。
         .target(
@@ -98,6 +102,13 @@ let package = Package(
         //   **刻意不加 product**:它是门禁内部工具,不是对外交付物,`swift build` 会因为是 executableTarget
         //   自动把它造出来,无需在 products 里露面。
         .executableTarget(name: "registry-tests", dependencies: ["AAHostTestKit", "AAAgentTestKit"]),
+        // 14 票:菜单快照工具(渲染器 B 的驱动)。与 registry-tests 同性质 —— **门禁内部工具,不是交付物**,
+        //   故同样刻意不进 products。依赖边与 Sources/menu-snapshot/main.swift 的实际 import 一一对应:
+        //   AAHostMacOS(渲染器 B)+ AAHostTestKit(三种状态的固定装置与真能力清单)+ AAUISystem(模型)+ AAContracts。
+        //   为什么必须是独立可执行、不能并进 registry-tests:渲染要 AppKit,而 registry-tests 是纯逻辑 runner,
+        //   把 AppKit 拖进去会让「纯逻辑套件不依赖 GUI」这条金字塔底座失守。
+        .executableTarget(name: "menu-snapshot",
+                          dependencies: ["AAHostMacOS", "AAHostTestKit", "AAUISystem", "AAContracts"]),
         .testTarget(name: "AAContractsTests", dependencies: ["AAContracts"]),
     ],
     swiftLanguageModes: [.v5]

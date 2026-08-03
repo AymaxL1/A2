@@ -12,6 +12,8 @@ echo "==== 阶段 A:swift build 全包构建(两次)===="
 # 关于 `-Xswiftc -DAA_TESTING` 施于**整包**:11 票之前只有 AAHostMacOS 带这个旗标(直编时逐 target 给)。
 #   现在整包都带,行为等价 —— 全仓只有 Sources/AAHostMacOS/HostApp.swift 用了 `#if AA_TESTING` / `#if AA_E2E`
 #   这两个条件编译符号(其余 target 一处都没有),故给别的 target 带上是空操作。
+#   (14 票的两个新 seam —— `AA_MENU_PROMPT_AUTO` / `AA_MENU_CLICK_PROBE` —— 也**刻意**收在 HostApp.swift 里,
+#    好让这条等价性继续成立。MenuBarController.swift 里出现的 `#if AA_TESTING` 字样只在**注释**中,不是指令。)
 #   (若将来别处新增 `#if AA_TESTING`,这条等价性就不再成立 —— 到时要么收窄旗标,要么明确接受。)
 
 SPM_TESTING_SCRATCH="$BUILD/spm-testing"
