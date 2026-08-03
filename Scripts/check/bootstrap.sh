@@ -162,6 +162,22 @@ if ! command -v "$SWIFTC_BIN" >/dev/null 2>&1 && [ ! -x "$SWIFTC_BIN" ]; then
   exit 1
 fi
 
+# SDK 显式化。CLT 自带的 /usr/bin/swiftc 住在 CLT 树里,能自己找到 SDK;但**装在家目录的
+# 独立工具链找不到**(实测:`no such module 'Foundation'` + "did you forget to set an SDK"),
+# 因为它不在任何 developer dir 下。故这里统一把 SDKROOT 显式定死:
+#   * 已由调用方设好 → 尊重之,不覆盖(留给交叉编译/多 SDK 场景)
+#   * 未设 → 用 xcrun 问当前 developer dir 要 macOS SDK 路径
+# 对 CLT swiftc 而言这是恒等操作(定死的正是它本来就会选的那个);对独立工具链则是必需品。
+if [ -z "${SDKROOT:-}" ]; then
+  SDKROOT="$(xcrun --show-sdk-path 2>/dev/null)"
+  if [ -z "$SDKROOT" ] || [ ! -d "$SDKROOT" ]; then
+    echo "FAIL: 定位不到 macOS SDK(xcrun --show-sdk-path 无输出或路径不存在)"
+    echo "  可显式设 SDKROOT=<path> 后重跑。"
+    exit 1
+  fi
+  export SDKROOT
+fi
+
 if "$SWIFTC_BIN" -swift-version 5 -module-cache-path "$PROBE/mcache-clean" \
      -parse-as-library -c -o "$PROBE/probe-clean.o" "$PROBE/probe.swift" \
      >"$PROBE/clean.log" 2>&1; then
@@ -189,6 +205,7 @@ fi
 
 echo " 工具链   = $("$SWIFTC_BIN" --version 2>/dev/null | head -1)"
 echo " swiftc   = $(command -v "$SWIFTC_BIN" 2>/dev/null || echo "$SWIFTC_BIN")"
+echo " SDKROOT  = $SDKROOT"
 if [ "$TOOLCHAIN_MODE" = "clean" ]; then
   echo " 编译模式 = clean(裸 swiftc,无绕过旗标)"
 else

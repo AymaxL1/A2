@@ -35,7 +35,8 @@ AA_SWIFTC="$TC/usr/bin/swiftc" bash Scripts/check.sh
 
 - **`swift build` 全 target 通过**:全新 scratch 目录冷构建,112 步 `Build complete!`(约 17s),**0 error、0 warning**,含 AppKit 的 `AAHostMacOS` 与 `aa` / `aa-agent` 两个可执行。清单解析无误(`swift package describe` 输出正常,零第三方依赖)。
 - **唯一已知警告在清单层**:`Package.swift:85` 的 `swiftLanguageVersions: [.v5]` 已弃用,建议改 `swiftLanguageModes:`。该警告出现在 `swift package describe` 阶段,`swift build` 的编译输出里不显示。**本票的「零警告」验收需要把它一并收掉**(未代劳,留给实施)。
-- **现状对照**:`Scripts/check.sh` 走 CLT 的 `/usr/bin/swiftc`(bug 1 修好后为 clean 模式),最近一次全量门禁 **PASS=403 FAIL=0 rc=0**。换引擎后须逐条复现这 403 条。
+- **现状对照**:`Scripts/check.sh` 走 CLT 的 `/usr/bin/swiftc`(bug 1 修好后为 clean 模式),全量门禁 **PASS=403 FAIL=0 rc=0**。换引擎后须逐条复现这 403 条。
+- **`AA_SWIFTC` seam 已端到端验通**:`AA_SWIFTC=$TC/usr/bin/swiftc bash Scripts/check.sh` → 工具链栏显示 `swift-6.1.2-RELEASE`、clean 模式、**PASS=403 FAIL=0 rc=0**。注意此路需要 `SDKROOT`:装在家目录的独立工具链**不会自动定位 SDK**(裸跑报 `no such module 'Foundation'`),bootstrap.sh 已统一用 `xcrun --show-sdk-path` 显式定死并打印在横幅上;调用方预设了 `SDKROOT` 则尊重不覆盖。同一改动对 CLT swiftc 是恒等操作(已跑回归确认 PASS=403 不变)。
 - **仓库当前无 `Tests/` 目录、无 swift-testing 用例**;既有测试是手写 `TestReport` 断言框架放在库 target 的 `Sources/` 下,由 check.sh 动态生成 runner 跑二进制、断言 stdout。迁移到 `#expect` 时须保持行为不变(见 `.scratch/agent-delegation/spec.md`「测试引擎的现实落差」段)。
 
 ## 范围提示
