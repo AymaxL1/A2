@@ -34,7 +34,7 @@ for _ in $(seq 1 100); do
 done
 if [ "$REAL_READY" -eq 1 ]; then
   echo "PASS: 锁版真 mihomo 已启动且 REST /version 可达"; PASS=$((PASS+1))
-  assert_contains "$VERSION_JSON" "1.19.28" "真内核报告锁定版本 1.19.28"
+  assert_contains "$VERSION_JSON" "$MIHOMO_VERSION" "真内核报告锁定版本 $MIHOMO_VERSION"
   CONFIG_JSON="$(curl --silent --max-time 1 "http://127.0.0.1:$REAL_CONTROL_PORT/configs" 2>/dev/null)"
   assert_contains "$CONFIG_JSON" "$REAL_MIXED_PORT" "真内核 /configs 报告预期 mixed-port"
 else
@@ -75,14 +75,17 @@ if wait_host_ready "$HOST_PID"; then
   #   而同一脚本上一段(锁版真内核 E2E)刚跑过它 —— 页缓存与首次执行校验都是热的,REST 几乎瞬时可达。
   #   现在跑的是 SPM 打进 PROJECT_AA_PluginProxy.bundle 的**新拷贝**(43MB,每轮门禁重建),冷启动实测约 0.4s,
   #   刚好落在旧判据的窗口外。窗口给到 30s(冷盘/高负载留余量),仍只是等待,不新增断言。
+  # 判据用 herestring 而不是 `printf … | grep -q`:本脚本开头是 `set -o pipefail`,而 `grep -q` 命中即退出,
+  #   会让上游 printf 吃 SIGPIPE —— 管道退出码变成 141,`&& break` 永远不触发,循环退化成静默空转满 30 秒。
+  #   今天它靠「状态 JSON 短、printf 先写完」侥幸成立;输出一变长就会翻车。herestring 没有管道,不受影响。
   PROD_STATUS=""
   for _ in $(seq 1 300); do
     PROD_STATUS="$("$BIN/aa" proxy status --json 2>/dev/null)"
-    printf '%s' "$PROD_STATUS" | grep -q '"apiReachable":true' && break
+    if grep -q '"apiReachable":true' <<< "$PROD_STATUS"; then break; fi
     sleep 0.1
   done
   assert_contains "$PROD_STATUS" '"running":true' "生产宿主经 ProcessPort 拉起锁版真内核"
-  assert_contains "$PROD_STATUS" '1.19.28' "aa proxy status 经 UDS/Registry 报告真内核版本"
+  assert_contains "$PROD_STATUS" "$MIHOMO_VERSION" "aa proxy status 经 UDS/Registry 报告真内核版本"
   assert_contains "$PROD_STATUS" '"mixedPort":7890' "aa proxy status 报告真内核 mixed-port"
   assert_contains "$(cat "$HOSTLOG")" '生产构建不读取 AA_CONFIRM_AUTO' "生产宿主忽略 AA_CONFIRM_AUTO=approve"
   if cmp -s "$PROD_NET" "$PROD_NET_BEFORE"; then

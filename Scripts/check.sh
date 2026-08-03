@@ -23,5 +23,9 @@ source "$CHECK_DIR/capabilities-e2e.sh"
 source "$CHECK_DIR/proxy-e2e.sh"
 source "$CHECK_DIR/subscriptions-e2e.sh"
 source "$CHECK_DIR/architecture-and-cli.sh"
+# app-bundle.sh 排在这里有讲究:它要用 architecture-and-cli.sh 之前建立的一切(assert 助手、$BIN、宿主生命周期助手),
+#   又必须排在 mihomo-real-e2e.sh **之前** —— 两者都会起真 mihomo 内核并争同一个 UDS socket,
+#   而 mihomo-real-e2e 开头就 teardown_hosts,天然替本组兜一层底。
+source "$CHECK_DIR/app-bundle.sh"
 source "$CHECK_DIR/mihomo-real-e2e.sh"
 source "$CHECK_DIR/finalize.sh"

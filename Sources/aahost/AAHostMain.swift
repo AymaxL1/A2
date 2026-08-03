@@ -6,8 +6,10 @@
 //   搬到这里 —— 库保持是库,壳只负责「建 NSApplication、挂 AppDelegate、跑起来」这三行。
 //   (原计划归 12 票,因 11 票换引擎需要真 executable target 而提前;见 HostApp.swift 同口径注释。)
 //
-// 12 票会把本可执行打进 XcodeGen 的 `.app` bundle(LSUIElement);到那时本文件不需要再动 ——
-//   壳里已经没有任何业务逻辑,全部在 `AAHostMacOS` 库里。
+// 12 票已把本可执行打进 `.app` bundle(LSUIElement,`Contents/MacOS/aahost` = CFBundleExecutable),
+//   本文件一个字都不用改 —— 壳里没有任何业务逻辑,全部在 `AAHostMacOS` 库里。
+//   ⚠️ 打包**不走 XcodeGen/xcodebuild**:本机无 Xcode,`.xcodeproj` 没有消费者。改为 `Scripts/build-app.sh`
+//   手工组 bundle + `codesign` ad-hoc 签名(范围变更的完整理由与实测证据写在该脚本顶部)。
 //
 // 文件名**刻意不叫 main.swift**:main.swift 的顶层代码不是 `@MainActor` 上下文,不能在那里构造
 //   `@MainActor` 的 `AppDelegate`(S1/S2 已验证)。改用 `@main @MainActor struct` + 非 main.swift 文件名,

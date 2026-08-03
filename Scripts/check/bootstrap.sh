@@ -17,7 +17,9 @@
 #
 # 02 票增量:
 #   * AAHostMacOS 落地为 AppKit accessory 宿主(菜单栏 + UDS server)。注意其终态是「库」(Host Port 的 macOS 实现);
-#     11 票起 @main 住在独立的 `aahost` executable target,GUI 宿主终态是 XcodeGen app 壳(LSUIElement),归 12 票。
+#     11 票起 @main 住在独立的 `aahost` executable target;GUI 宿主终态是 LSUIElement 菜单栏 `.app`,由 12 票落地。
+#     (12 票起该 `.app` 不再走 XcodeGen/xcodebuild —— 本机无 Xcode,改为 `Scripts/build-app.sh` 手工组 bundle + ad-hoc 签名;
+#      范围变更的完整理由写在该脚本顶部与 `.scratch/v1-core-proxy/issues/12-xcodegen-app-shell.md`。)
 #   * AAContracts 加线协议 Codable(WireRequest/WireResponse/CapabilityDescriptor/…)与 UDS 路径常量。
 #   * AAHostRuntime 加 Registry(纯逻辑,注册 + list)。
 #   * AAHostTestKit 加 Registry 纯逻辑测试(假件 seam),由 `registry-tests` target 执行(11 票起是真源文件,不再动态生成)。
@@ -56,6 +58,18 @@
 #   * 阶段 B 增:1e 纯逻辑(REST 写读构造/解析 + 四能力风险级/别名/allowedValues + 取值域校验);
 #     CP E2E(改后读回 mode/now 生效 + 逐节点测速含超时 + normal 零 GUI + number 强转 inf/nan→1)。
 #
+# 12 票增量(`.app` 壳:shell 组 bundle + ad-hoc 签名;**范围已从 XcodeGen 改写**):
+#   * 新增 `Scripts/build-app.sh` —— 一条命令出 `.app`(`--variant production|e2e`、`--output`、
+#     签名身份 env seam `AA_CODESIGN_IDENTITY` 缺省 `-`/ad-hoc)。不再有 XcodeGen / `xcodebuild`:
+#     本机没有 Xcode,`.xcodeproj` 无消费者;理由与实测证据写在该脚本顶部。
+#   * `Sources/PluginProxy/MihomoKernelResource.swift` 在 `Bundle.module` 之前先查
+#     `Bundle.main.resourceURL/PROJECT_AA_PluginProxy.bundle/Resources/<name>` ——
+#     实测「`Bundle.module` 能找到的落点」与「`codesign` 接受的落点」在 `.app` 形态下没有交集,详见 build-app.sh。
+#   * 新增断言组 APP(`Scripts/check/app-bundle.sh`,6 条):production 档只做静态断言(结构 / plist / 签名),
+#     **绝不启动**(AA_MIHOMO_DATA_DIR 是 `#if AA_E2E` 门控的,起 production 宿主会往真实 AppSupport 写);
+#     e2e 档直接 exec `.app` 内的 aahost 跑全链(UDS / capabilities / 真内核 / install-cli)。
+#   * 断言组 3f:反孤儿信号钩子「无可执行同时装两套」的依赖闭包守卫(此前只在文档里声称存在,门禁里其实没有)。
+
 # 接口契约(11 票换引擎前后**逐字不变**,这正是 11 票要守的那条):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
@@ -85,6 +99,17 @@ SOCK="$HOME/Library/Application Support/AA/aa.sock"
 STUB="$ROOT/Scripts/fake-mihomo.py"
 KILLPAT_STUB="$STUB"
 
+# 锁版内核版本号 —— 门禁侧的**单一来源**:从随包的 MIHOMO-VERSION.txt 解析,不在断言里散写字面量。
+#   (此前 "1.19.28" 硬编码在 mihomo-real-e2e.sh 两处 + app-bundle.sh 两处;换内核版本时漏改一处,
+#    断言就会拿旧版本号去比,红得莫名其妙 —— 或者更糟:比中了旧号却跑着新核。)
+#   Swift 侧的对应单一来源是 MihomoKernelResource.version;两者同源于这个文件(15 票的「版本号单一来源」验收即此)。
+MIHOMO_VERSION_FILE="$ROOT/Sources/PluginProxy/Resources/MIHOMO-VERSION.txt"
+MIHOMO_VERSION="$(sed -n '1s/.*Meta v\([0-9][0-9.]*\).*/\1/p' "$MIHOMO_VERSION_FILE" 2>/dev/null)"
+if [ -z "$MIHOMO_VERSION" ]; then
+  echo "FAIL: 解析不出锁版内核版本号($MIHOMO_VERSION_FILE 首行格式应为 'Mihomo Meta vX.Y.Z …')"
+  exit 1
+fi
+
 # 08 票:接管态持久化默认落点 —— **全局导出**到 $BUILD 临时区,确保**所有**测试宿主(06/07/08)绝不污染真实 AppSupport。
 #   宿主读 env seam AA_TAKEOVER_STATE_PATH(生产缺省为真实 AppSupport)。08 各 kill -9 剧本按需以 per-launch env 覆盖到独立文件。
 export AA_TAKEOVER_STATE_PATH="$BUILD/takeover-default.json"
@@ -102,6 +127,29 @@ REAL_TAKEOVER_CLEARED_BEFORE="$( [ -e "$REAL_TAKEOVER_CLEARED" ] && md5 -q "$REA
 REAL_SUBS_DIR="$HOME/Library/Application Support/AA/subscriptions"
 REAL_SUBS_BEFORE="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/null | md5 2>/dev/null || echo ABSENT )"
 
+# 12 票:**用户自己的 mihomo 绝不能被门禁碰到**(它很可能就是这台机器当下的上网通道 ——
+#   动它 = 把用户的网络掐了)。本仓库自带一份**同名但不同文件**的锁版内核
+#   (Sources/PluginProxy/Resources/mihomo-darwin-arm64),门禁起停的只有它。
+#
+# 靠「代码里没写 pkill mihomo」来保证这件事是不够的 —— 那是靠人读代码,读漏一次就出事。
+#   这里按本仓库既有的「跑前快照 / 跑后比对」口径把它钉死:记下所有**不在本仓库树内**的
+#   mihomo 进程 pid,跑完比对。少了一个就说明门禁误伤了用户的进程 → 当场红。
+#
+# 判据用「可执行路径不以 $ROOT 开头」:仓库自带内核与 Scripts/fake-mihomo.py 都在 $ROOT 下,
+#   会被排除;用户装在 /usr/local/bin 或别处的那份则被纳入看护。
+# 已知误报场景(如实写明):**若你自己在门禁运行期间重启了 mihomo,这条会红** —— 那是预期行为,
+#   不是缺陷:这条断言分不清「被门禁杀了」和「你自己重启了」,它宁可误报也不漏报。
+# 返回「不在本仓库树内的 mihomo pid」列表;**pgrep 自身出错时返回哨兵串**,而不是装作「一个都没有」——
+#   否则守卫坏掉的表现会是「跑前跑后都是空 → 一致 → PASS」,又是一次白送(见 finalize.sh 同款口径)。
+#   pgrep 退出码:0=有匹配,1=无匹配(正常),>1=自身出错。
+foreign_mihomo_pids() {
+  local out rc
+  out="$(pgrep -fl mihomo 2>/dev/null)"; rc=$?
+  if [ "$rc" -gt 1 ]; then printf 'PGREP_ERROR(rc=%s)' "$rc"; return 0; fi
+  printf '%s' "$out" | grep -v "$ROOT" | awk '{print $1}' | sort -n | tr '\n' ' '
+}
+FOREIGN_MIHOMO_BEFORE="$(foreign_mihomo_pids)"
+
 # $SWIFT_BIN 由下方「工具链探测(SPM 可用性)」段现场决定(须在 $BUILD 建好之后 —— 探测要往里写 scratch)。
 # env seam:AA_SWIFT 可显式指定 swift(例如独立工具链里的绝对路径);缺省按候选顺序自动挑。
 # (11 票前的 AA_SWIFTC / SWIFTC_BIN / SWIFTC_COMMON / build_lib 已全部删除:不再有 swiftc 直编这条路。
@@ -114,6 +162,18 @@ TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
 # agent-delegation 06 的真进程测试使用唯一时长，便于精确清场且不误杀用户的普通 sleep。
 AGENT_SLEEP_SUITE="sleep 87137"
 AGENT_SLEEP_PROBE="sleep 87139"
+
+# 12 票:`.app` 壳的产物落点与其中的可执行/内核绝对路径(断言组 APP 用;清场也要盯它们)。
+#   这几个是**静态常量**——全由 $BUILD 派生,在 trap 装上之前就已赋值,不可能为空。
+#   与 $KILLPAT / $PROD_HOST_BIN 那种「要等 build.sh 的 --show-bin-path 才知道」的动态路径**不是一类**,
+#   故下面 cleanup() 里直接用、不加非空守卫(照本文件既有口径:多余的守卫会让读的人误以为它们也会空)。
+#   落在 $BUILD 下 = 每轮门禁开头随 `rm -rf "$BUILD"` 一起清掉,不留旧产物。
+#   (build-app.sh 自己的 SPM scratch 在 $ROOT/.build/app-build-<档>,**刻意**不在 $BUILD 里 —— 那是增量构建缓存,要跨轮保留。)
+APP_OUT_PROD="$BUILD/app-production"
+APP_OUT_E2E="$BUILD/app-e2e"
+APP_PROD_HOST_BIN="$APP_OUT_PROD/AA.app/Contents/MacOS/aahost"   # 只做静态断言,**绝不启动**(理由见 app-bundle.sh 顶部)
+APP_E2E_HOST_BIN="$APP_OUT_E2E/AA.app/Contents/MacOS/aahost"
+APP_E2E_KERNEL="$APP_OUT_E2E/AA.app/Contents/Resources/PROJECT_AA_PluginProxy.bundle/Resources/mihomo-darwin-arm64"
 
 # 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
 #
@@ -131,6 +191,12 @@ cleanup() {
   [ -n "${KILLPAT:-}" ] && pkill -f "$KILLPAT" 2>/dev/null
   [ -n "${PROD_HOST_BIN:-}" ] && pkill -f "$PROD_HOST_BIN" 2>/dev/null
   # ↓ 以下是本文件里的静态常量/字面量,恒非空。
+  # 12 票:`.app` 里那个 aahost 与它拉起的内核。**是与 $KILLPAT / $PROD_HOST_BIN 完全不同的绝对路径**
+  #   (在 $BUILD/app-*/AA.app/Contents/… 下),不盯就会漏掉 —— 三者互相没有子串关系,一条 pkill 覆盖不了。
+  #   内核**只**按 `.app` 内绝对路径杀:绝不 pkill 裸 "mihomo",用户机上可能正跑着自己的那一份。
+  pkill -f "$APP_E2E_HOST_BIN" 2>/dev/null
+  pkill -f "$APP_PROD_HOST_BIN" 2>/dev/null
+  pkill -f "$APP_E2E_KERNEL" 2>/dev/null
   pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null

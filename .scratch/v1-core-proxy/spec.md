@@ -120,3 +120,19 @@ Status: ready-for-agent
 - 先例代码:S1(NSPanel 悬浮窗)、S2(注册表纵切 + UDS + aa + dangerous 确认)、S3(沙箱结论)是**证据不是地基**——正式代码全新起在 SPM 骨架上,可抄思路与坑位(`@main @MainActor` 入口、`fflush(stdout)`),不搬运文件。
 - 旗舰场景验收辞:「Codex 经 `aa` 开代理/切节点全程零 GUI 打断;换订阅源必触发宿主确认」——此场景通过即 Phase 1 出口。
 - 签名仪式与 TCC 授权需用户在场点头,拆票时标 `ready-for-human` 协作段。
+
+## 勘误(Errata)
+
+本节只**追加**,不改写上文任何一条已裁决内容 —— 上文保留决策当时的原文,勘误在此说明后来发生了什么、为什么。
+
+### 2026-08-04 · app 壳的产出方式:XcodeGen → shell 组 bundle
+
+**涉及条目:** 「Implementation Decisions · 工程形态」第 2 条(原文:`app 壳用 XcodeGen:LSUIElement 菜单栏应用,依赖本地 SPM 包;XCUITest target 在 Xcode 工程侧;构建链全脚本化(generate → build/test → 统一重签内嵌二进制)`)、「Solution · 骨架(Phase 0 基建收尾)」里的 `XcodeGen app 壳(菜单栏应用)`,以及「User Stories · 基建 · 维护者侧」第 24 条(`project.yml` 入库、`.xcodeproj` 不入库)。
+
+**发生了什么:** 12 票落地时,XcodeGen 路线被 `Scripts/build-app.sh`(手工组 bundle + `codesign` ad-hoc 签名)取代。
+
+**为什么:** XcodeGen 的产物 `.xcodeproj` 只有 `xcodebuild` 能消费,而 `xcodebuild` 只随 Xcode.app 分发(CLT 里没有,Apple 官方文档明列)。本机没有 Xcode,也没有装它的计划 —— 于是 `project.yml` 入库等于入库一份**谁都跑不动的死重**,还要额外维护一套与 `Package.swift` 重复的依赖描述(两处真值,必然漂移)。而「手工组 bundle + ad-hoc 签名能产出可双击、可常驻菜单栏的 `.app`」已在本机实测跑通(`docs/research/electron-recon/toolchain.md` §1.3 与 12 票实测记录)。
+
+**验收意图不变:** LSUIElement 菜单栏应用、`.app` 内打包宿主 + `aa` + mihomo 内核资源、一条命令出 `.app`、双击即得完整宿主、内核随 `.app` 内资源被拉起、`aa` 经 install-cli 全链可用 —— 一条不减,全部由门禁断言组 APP(`Scripts/check/app-bundle.sh`,6 条)把关。「构建链全脚本化」与「统一重签内嵌二进制」两条同样保留(签名顺序先内后外,身份走 `AA_CODESIGN_IDENTITY` seam)。
+
+**代价(如实记录):** XCUITest **随 Xcode 一并推迟**。XCUITest 只能挂在 Xcode 工程下、由 `xcodebuild test` 驱动,没有 Xcode 就没有这个 target;12 票**不立** XCUITest 骨架(立一个跑不了的空壳只会制造「已有 UI 自动化」的错觉)。UI 层自动验证的缺口按 07 票架构映射的既定口径靠架构补偿(逻辑下沉 + 手搓快照),归 14 票。「User Story 24」(工程文件可审、可再生、无合并噪声)的意图由 `Package.swift` + `Scripts/build-app.sh` 承接:两者都是可审的纯文本、可再生、无生成物入库。

@@ -44,7 +44,9 @@ fi
 #   PluginProxy 的资源被 SPM 打成 `PROJECT_AA_PluginProxy.bundle`,产在 bin 目录里、与可执行文件**并排**;
 #   Sources/PluginProxy/MihomoKernelResource.swift 在 `#if SWIFT_PACKAGE` 下用 `Bundle.module...!` **强解包**取它。
 #   一旦可执行离开 bin 目录,Bundle.module 找不到 bundle,强解包直接 crash。
-#   (将来 12 票打 .app 时,bundle 必须跟着一起进 Contents/ —— 那是 12 票的事,这里只管别搬。)
+#   (12 票打 .app 时确实把这个 bundle 一起搬进了 `Contents/Resources/` —— 但那条路**不是**光靠 `Bundle.module`
+#    就能走通的:SwiftPM 生成的访问器只认 `Bundle.main.bundleURL/<资源bundle>`,而那个落点 codesign 拒签。
+#    结论与三个候选落点的实测记录见 `Scripts/build-app.sh` 顶部。本文件这里仍然只有一条规矩:**别搬**。)
 HOST_BIN="$BIN/aahost"                 # AppKit accessory 宿主可执行(AA_TESTING 档)
 TESTRUNNER="$BIN/registry-tests"       # TestKit runner(AAHostTestKit + AAAgentTestKit 的统一入口)
 PROD_HOST_BIN="$E2E_BIN/aahost"        # 不含 AA_TESTING,真核全链 E2E 宿主

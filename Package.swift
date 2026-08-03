@@ -19,7 +19,8 @@ let package = Package(
         // agent-delegation 07:委托试驾 CLI(与 `aa` 各自独立,互不影响 —— 守并行红线)。
         .executable(name: "aa-agent", targets: ["aa-agent"]),
         // 11 票:GUI 宿主的薄可执行壳(@main 从 AAHostMacOS 库里搬出来的落点)。
-        //   是产品(不是门禁内部工具):12 票要把它打进 XcodeGen 的 .app bundle(LSUIElement)。
+        //   是产品(不是门禁内部工具):12 票已把它打进 .app bundle(LSUIElement),
+        //   由 Scripts/build-app.sh 手工组 bundle + ad-hoc 签名产出(不走 XcodeGen —— 本机无 Xcode)。
         .executable(name: "aahost", targets: ["aahost"]),
         .library(name: "AAContracts", targets: ["AAContracts"]),
         .library(name: "AAPluginSDK", targets: ["AAPluginSDK"]),
@@ -56,10 +57,12 @@ let package = Package(
         // 依赖边须与源码实际 import 一一对应(两个 target 都同时 import AAHostRuntime 与 AAContracts)。
         //
         // @main 债务口径(11 票已结清):AAHostMacOS 的终态是「库」——07 票架构映射定它为 Host Port 的 macOS 实现,
-        //   spec 定 GUI 宿主是 XcodeGen app 壳(LSUIElement;SPM 可执行产不出 .app bundle)。
+        //   spec 定 GUI 宿主是 LSUIElement 菜单栏 app 壳(SPM 可执行本身产不出 .app bundle)。
+        //   壳的产出方式在 12 票被改写:spec 原文写 XcodeGen,但本机无 Xcode → 无 `xcodebuild` → `.xcodeproj` 无消费者,
+        //   故改为 `Scripts/build-app.sh` 手工组 bundle + ad-hoc 签名(spec 已就此追加勘误,验收意图不变)。
         //   曾塞在 Sources/AAHostMacOS/HostApp.swift 里的 @main 已移到独立的 `aahost` executable target
         //   (Sources/aahost/AAHostMain.swift),AppDelegate 随之转 public。原计划归 12 票,因 11 票换引擎后
-        //   SPM 必须有真 executable target 才产得出可执行而提前。12 票只剩「把 aahost 打进 .app bundle」。
+        //   SPM 必须有真 executable target 才产得出可执行而提前。12 票只剩「把 aahost 打进 .app bundle」——已落地。
         //   因此这里保持 .target(库),**不要**改成 .executableTarget。
         // 06 票:宿主 V1 内封栈——AAHostMacOS 装配 PluginProxy(注入真 Port),故新增 AAPluginSDK + PluginProxy 依赖。
         //   注意方向:宿主依赖插件(合法);铁律只禁「插件依赖 Host*」,不禁「Host 依赖插件」。

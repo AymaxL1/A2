@@ -159,6 +159,77 @@ for agent_area in AAAgentCore AAAgentSystem aa-agent; do
   fi
 done
 
+# (3f) 12 票补的守卫:**没有任何可执行同时装上两套反孤儿信号钩子**。
+#
+# 为什么非补不可:`.scratch/agent-delegation/impl/07-aa-agent-cli-e2e.md` 声称「目前靠一条 grep 断言
+#   守着『全仓无可执行同时装两套』」—— **门禁里从来没有那条断言**。声称有、实际没有的缓解措施
+#   比干脆没有更危险:读的人会以为这个雷已经被守住,于是放心地往里加依赖边。
+#
+# 守的是什么(现状已核实,别推翻):
+#   * `AAHostMacOS.SystemProcessPort` 用**裸 `signal()`** 装 SIGTERM/SIGINT/SIGHUP 钩子,**不保存前手、不链式调用**;
+#   * `AAAgentSystem.SystemAgentPort` 装的是 save + chain 版本(保存前手并在杀完后调用它)。
+#   两套若进同一个可执行:谁后初始化谁赢 —— 若 SystemProcessPort 后装,它会**静默顶掉** SystemAgentPort 的钩子,
+#   而信号死亡路径不跑 atexit,于是 agent 进程树整棵成孤儿。
+#   **今天这个雷不存在**:`AAHostTestKit` 不依赖 `AAHostMacOS`(故 `registry-tests` 只拿到 AAAgentSystem),
+#   `aahost` 只拿到 AAHostMacOS,`aa` / `aa-agent` 各自也只沾一边。**债尚未到期。**
+#
+# 所以本条守的是**「债未到期」这个前提本身**,不是信号处理本身。12 票刻意**不**去改 `SystemProcessPort`
+#   的信号链:没有失败用例却动进程级信号处理,风险大于收益。
+#   **一旦这条红了**,就说明有可执行同时可达两套钩子 —— 那时必须**先**给 `SystemProcessPort` 补对称的
+#   save + chain(与 `SystemAgentPort` 同款),才能继续往下走。红了不许靠加白名单绕过。
+#
+# 判据:从清单拿依赖图,对**每个 executableTarget** 做依赖传递闭包,断言没有任何一个同时可达
+#   `AAHostMacOS` 与 `AAAgentSystem`。用闭包而不是直接依赖边:钩子是**传递**沾上的(`aahost` → AAHostMacOS,
+#   `registry-tests` → AAHostTestKit → …),只看一层依赖边根本看不见。
+#   解析失败 / 拿不到 executable target 一律判 FAIL —— 照 3a 口径:守卫自身出错时无法核验,绝不算过。
+ORPHAN_OUT="$("$SWIFT_BIN" package dump-package --scratch-path "$BUILD/spm-arch-probe" 2>/dev/null | python3 -c '
+import json, sys
+HOOK_A, HOOK_B = "AAHostMacOS", "AAAgentSystem"
+try:
+    pkg = json.load(sys.stdin)
+except Exception as e:
+    print("PROBE_ERROR 清单 JSON 解析失败: %s" % e); sys.exit(0)
+targets = pkg.get("targets", [])
+if not targets:
+    print("PROBE_ERROR 清单里没有任何 target(形状可能变了,无法核验)"); sys.exit(0)
+edges = {}
+for t in targets:
+    deps = []
+    for d in t.get("dependencies", []):
+        for kind, payload in d.items():
+            if isinstance(payload, list) and payload and isinstance(payload[0], str):
+                deps.append(payload[0])
+            else:
+                print("PROBE_ERROR 无法识别的依赖项形状: %r" % d); sys.exit(0)
+    edges[t.get("name")] = deps
+execs = [t.get("name") for t in targets if t.get("type") == "executable"]
+if not execs:
+    print("PROBE_ERROR 清单里拿不到任何 executableTarget(type 字段形状可能变了,无法核验)"); sys.exit(0)
+if HOOK_A not in edges or HOOK_B not in edges:
+    print("PROBE_ERROR 清单里找不到 %s / %s —— 守卫盯的 target 已改名,必须同步改守卫" % (HOOK_A, HOOK_B)); sys.exit(0)
+def closure(root):
+    seen, stack = set(), [root]
+    while stack:
+        n = stack.pop()
+        for d in edges.get(n, []):
+            if d not in seen:
+                seen.add(d); stack.append(d)
+    return seen
+bad = [e for e in execs if HOOK_A in closure(e) and HOOK_B in closure(e)]
+print(("BAD " + ",".join(bad)) if bad else ("OK " + ",".join(sorted(execs))))
+' 2>&1)"
+case "$ORPHAN_OUT" in
+  OK\ *)
+    echo "PASS: 无可执行同时可达 AAHostMacOS 与 AAAgentSystem(两套反孤儿信号钩子未合流;已查: ${ORPHAN_OUT#OK })"
+    PASS=$((PASS+1)) ;;
+  BAD\ *)
+    echo "FAIL: 以下可执行同时可达两套反孤儿信号钩子(裸 signal() 会顶掉 save+chain 那套,agent 进程树会成孤儿): ${ORPHAN_OUT#BAD }"
+    echo "      修法只有一条:先给 AAHostMacOS/SystemProcessPort 补对称的 save + chain(样板见 AAAgentSystem/SystemAgentPort.swift),再谈合流。"
+    FAIL=$((FAIL+1)) ;;
+  *)
+    echo "FAIL: 反孤儿钩子合流守卫自身出错,无法核验 —— 绝不算过($ORPHAN_OUT)"; FAIL=$((FAIL+1)) ;;
+esac
+
 # --- 断言组 4:退出码语义表落进 CLI 帮助(逐码断言;补足 2/denied 无行为路径的那一码)---
 echo "--- 断言组 4:aa --help 退出码语义表(逐码)---"
 HELP="$("$BIN/aa" --help 2>&1)"; RC=$?

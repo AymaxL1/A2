@@ -357,6 +357,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // 债务口径(11 票已结清):@main 曾经塞在本文件里(swiftc 直编期把本库 target 单独编成可执行冒烟)。
 // 现已移到 `Sources/aahost/AAHostMain.swift` —— 那是一个真的 executable target,`AppDelegate` 随之转 public。
-// 原计划归 12 票(XcodeGen app 壳),**提前到 11 票做**:门禁引擎换成 `swift build` 之后,
+// 原计划归 12 票(app 壳),**提前到 11 票做**:门禁引擎换成 `swift build` 之后,
 //   SPM 必须有一个真 executable target 才产得出可执行,库 target 再怎么编也只是 .swiftmodule。
-// AAHostMacOS 保持是「库」(Host Port 的 macOS 实现)不变;12 票只负责把 `aahost` 打进 .app bundle(LSUIElement)。
+// AAHostMacOS 保持是「库」(Host Port 的 macOS 实现)不变;12 票只负责把 `aahost` 打进 .app bundle(LSUIElement)
+//   —— 已由 `Scripts/build-app.sh` 落地(手工组 bundle + ad-hoc 签名,不用 XcodeGen:本机无 Xcode)。
