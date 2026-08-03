@@ -1,129 +1,67 @@
-echo "==== 阶段 A:按拓扑序编译全部 target ===="
+echo "==== 阶段 A:swift build 全包构建(两次)===="
 
-# ① 零依赖底座(含线协议 Codable + UDS 路径常量)
-build_lib AAContracts
+# 引擎:SPM。依赖图与拓扑序全在 Package.swift 里,这里只负责「按两种条件编译档各构建一次」。
+#
+# 为什么是两次:
+#   ① -DAA_TESTING —— 门禁自用的一切(aa / aa-agent / aahost / registry-tests)。宿主里的 test-only
+#      env seam(AA_CONFIRM_AUTO、AA_MIHOMO_KERNEL_PATH 之流)只在这一档存在。
+#   ② -DAA_E2E     —— **只**为拿一个不含 AA_TESTING 的生产 aahost(真锁版内核 + 生产确认路径),
+#      供 mihomo-real-e2e.sh 证明「那些 seam 在生产二进制里根本不存在」。
+#   两档必须落在**不同的 scratch 目录**:同一目录换 -Xswiftc 旗标只会触发整包重编,拿不到两个并存的产物。
+#
+# 关于 `-Xswiftc -DAA_TESTING` 施于**整包**:11 票之前只有 AAHostMacOS 带这个旗标(直编时逐 target 给)。
+#   现在整包都带,行为等价 —— 全仓只有 Sources/AAHostMacOS/HostApp.swift 用了 `#if AA_TESTING` / `#if AA_E2E`
+#   这两个条件编译符号(其余 target 一处都没有),故给别的 target 带上是空操作。
+#   (若将来别处新增 `#if AA_TESTING`,这条等价性就不再成立 —— 到时要么收窄旗标,要么明确接受。)
 
-# agent-delegation:纯逻辑核只依赖 Contracts；系统桥接层只依赖纯逻辑核。
-build_lib AAAgentCore
-build_lib AAAgentSystem
+SPM_TESTING_SCRATCH="$BUILD/spm-testing"
+SPM_E2E_SCRATCH="$BUILD/spm-e2e"
 
-# ② 只依赖 Contracts(06 票:AAPluginSDK 现含 ProcessPort/HTTPPort 两个宿主 Port 协议 + PluginCapability)
-build_lib AAPluginSDK
-build_lib AAHostRuntime   # 含 Registry(纯逻辑)
-build_lib AAUISystem
+echo "-- swift build(AA_TESTING 档:aa / aa-agent / aahost / registry-tests)"
+"$SWIFT_BIN" build --scratch-path "$SPM_TESTING_SCRATCH" -Xswiftc -DAA_TESTING 2>&1 | tee "$BUILD/build-testing.log"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+  echo "FAIL: swift build(AA_TESTING 档)失败,日志: $BUILD/build-testing.log"
+  exit 1
+fi
 
-# ③ PluginProxy —— 受限搜索路径:只放 SDK/Contracts/UISystem,故意不放任何 Host* 模块。
-#    若它能在这条受限 -I 下编过,即从编译期证明「PluginProxy 不需要 Host*」(01 票铁律,06 票继续把关:
-#    新增的 ProcessPort/HTTPPort 协议在 SDK,故插件仍只靠 SDK 即可编过)。
-#    06 票起 PluginProxy 需被 AAHostTestKit(测试)与 AAHostMacOS(宿主装配)链接,故这里除 .swiftmodule 外也产 .o。
-#    先于 AAHostTestKit / AAHostMacOS 编译(二者都 import PluginProxy)。
-echo "-- 编译库 target: PluginProxy(受限 -I:仅 SDK/Contracts/UISystem,无 Host*;产 .o + module)"
-cp "$MODULES/AAContracts.swiftmodule" "$MODULES/AAPluginSDK.swiftmodule" "$MODULES/AAUISystem.swiftmodule" "$PPMODS/" \
-  || { echo "FAIL: 准备 PluginProxy 受限模块目录失败"; exit 1; }
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" -wmo \
-  -parse-as-library \
-  -module-name PluginProxy \
-  -c -o "$OBJ/PluginProxy.o" \
-  -emit-module-path "$MODULES/PluginProxy.swiftmodule" \
-  -I "$PPMODS" \
-  Sources/PluginProxy/*.swift \
-  || { echo "FAIL: 编译 PluginProxy(受限 -I)失败 —— 它可能意外依赖了 Host* 或其它未提供模块"; exit 1; }
+echo "-- swift build(AA_E2E 档:只为拿不含 AA_TESTING 的生产 aahost)"
+"$SWIFT_BIN" build --scratch-path "$SPM_E2E_SCRATCH" -Xswiftc -DAA_E2E 2>&1 | tee "$BUILD/build-e2e.log"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+  echo "FAIL: swift build(AA_E2E 档)失败,日志: $BUILD/build-e2e.log"
+  exit 1
+fi
 
-# ④ 假件 + 06 票纯逻辑测试(AAHostTestKit 现依赖 AAPluginSDK + PluginProxy:Port 假件 + RESTClient/status 测试)
-build_lib AAHostTestKit
-build_lib AAAgentTestKit
+# ---- 下游路径变量 --------------------------------------------------------------
+# bin 目录带三元组与配置名(如 <scratch>/arm64-apple-macosx/debug),只能问 SPM 要,不能拼。
+BIN="$("$SWIFT_BIN" build --scratch-path "$SPM_TESTING_SCRATCH" --show-bin-path 2>/dev/null)"
+E2E_BIN="$("$SWIFT_BIN" build --scratch-path "$SPM_E2E_SCRATCH" --show-bin-path 2>/dev/null)"
+if [ -z "$BIN" ] || [ ! -d "$BIN" ] || [ -z "$E2E_BIN" ] || [ ! -d "$E2E_BIN" ]; then
+  echo "FAIL: 取不到 swift build 的 bin 目录(BIN='$BIN' E2E_BIN='$E2E_BIN')"
+  exit 1
+fi
 
-# ⑤ 宿主(库,但门禁单独把它编成可执行做冒烟;@main 是过桥,终态是 12 票 XcodeGen app 壳)。
-#    06 票:宿主装配 ProxyPlugin(注入真 SystemProcessPort/SocketHTTPPort),故链接补 AAPluginSDK.o / PluginProxy.o / AAUISystem.o。
-echo "-- 编译可执行 target: AAHostMacOS(库→冒烟可执行;AppKit,首次编译约 30s)"
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
-  -parse-as-library \
-  -D AA_TESTING \
-  -I "$MODULES" \
-  -o "$HOST_BIN" \
-  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
-  Sources/AAHostMacOS/*.swift \
-  || { echo "FAIL: 编译 AAHostMacOS 失败"; exit 1; }
+# ⚠️ 绝不把这些可执行拷到别处再跑 —— 这不是洁癖,是会当场崩的硬约束:
+#   PluginProxy 的资源被 SPM 打成 `PROJECT_AA_PluginProxy.bundle`,产在 bin 目录里、与可执行文件**并排**;
+#   Sources/PluginProxy/MihomoKernelResource.swift 在 `#if SWIFT_PACKAGE` 下用 `Bundle.module...!` **强解包**取它。
+#   一旦可执行离开 bin 目录,Bundle.module 找不到 bundle,强解包直接 crash。
+#   (将来 12 票打 .app 时,bundle 必须跟着一起进 Contents/ —— 那是 12 票的事,这里只管别搬。)
+HOST_BIN="$BIN/aahost"                 # AppKit accessory 宿主可执行(AA_TESTING 档)
+TESTRUNNER="$BIN/registry-tests"       # TestKit runner(AAHostTestKit + AAAgentTestKit 的统一入口)
+PROD_HOST_BIN="$E2E_BIN/aahost"        # 不含 AA_TESTING,真核全链 E2E 宿主
+# 只盯本次构建的绝对路径,避免误杀用户机上别处同名的 aahost 进程(见 bootstrap.sh cleanup() 的守卫说明)。
+KILLPAT="$HOST_BIN"
 
-echo "-- 编译生产 E2E 宿主(不含 AA_TESTING;真锁版内核 + 生产确认路径)"
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
-  -parse-as-library -D AA_E2E \
-  -I "$MODULES" \
-  -o "$PROD_HOST_BIN" \
-  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
-  Sources/AAHostMacOS/*.swift \
-  || { echo "FAIL: 生产 E2E AAHostMacOS 编译失败"; exit 1; }
+# bin 目录落盘留档,供门禁之外的手动脚本(Scripts/manual-verify-04.sh、Scripts/agent-smoke.sh)读取。
+#   它们不 source 本文件,却同样需要产物路径。此前各自用 `ls -d …/*/debug | head -1` **猜**目录 ——
+#   三处知识重复、布局一变要改三处,而且多三元组(如同时存在 arm64/x86_64 产物)时 `head -1` 会**静默选错**。
+#   这里把 `--show-bin-path` 这个唯一权威答案写下来,让它们读,不再猜。
+printf '%s\n' "$BIN" > "$BUILD/spm-bin-path.txt"
+printf '%s\n' "$E2E_BIN" > "$BUILD/spm-bin-path-e2e.txt"
 
-# ④ CLI 可执行:@main 入口需 -parse-as-library;链接其依赖 AAContracts.o;产真二进制。
-echo "-- 编译可执行 target: aa"
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
-  -parse-as-library \
-  -I "$MODULES" \
-  -o "$BIN/aa" \
-  "$OBJ/AAContracts.o" \
-  Sources/aa/*.swift \
-  || { echo "FAIL: 编译 aa 失败"; exit 1; }
+for f in "$BIN/aa" "$BIN/aa-agent" "$HOST_BIN" "$TESTRUNNER" "$PROD_HOST_BIN"; do
+  [ -x "$f" ] || { echo "FAIL: 构建产物缺失或不可执行: $f"; exit 1; }
+done
 
-echo "-- 编译可执行 target: aa-agent"
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
-  -parse-as-library \
-  -I "$MODULES" \
-  -o "$BIN/aa-agent" \
-  "$OBJ/AAContracts.o" "$OBJ/AAAgentCore.o" "$OBJ/AAAgentSystem.o" \
-  Sources/aa-agent/*.swift \
-  || { echo "FAIL: 编译 aa-agent 失败"; exit 1; }
-
-# ⑤ 门禁生成的 Registry 纯逻辑测试 runner —— 断言逻辑在 AAHostTestKit.RegistryConformanceTests,
-#    这里只是入口 shim(main.swift 顶层代码,不需 -parse-as-library)。链接 TestKit + Runtime + Contracts。
-echo "-- 编译测试 runner: registry-tests(驱动 AAHostTestKit.RegistryConformanceTests)"
-cat > "$RUNNER/main.swift" <<'SWIFT'
-// 门禁自动生成:宿主与 agent 两套测试基建的统一入口。
-import AAHostTestKit
-import AAAgentTestKit
-import Foundation
-if let probeMode = ProcessInfo.processInfo.environment["AA_ORPHAN_PROBE"] {
-    SystemAgentPortOrphanProbe.run(mode: probeMode)
-}
-let r1 = RegistryConformanceTests.run()
-for line in r1.lines { print(line) }
-let r2 = ProxyConformanceTests.run()
-for line in r2.lines { print(line) }
-let r3 = AAAgentCoreConformanceTests.run()
-for line in r3.lines { print(line) }
-let r4 = ClaudeAdapterTests.run()
-for line in r4.lines { print(line) }
-let r5 = CodexAdapterTests.run()
-for line in r5.lines { print(line) }
-let r6 = AgentTaskTests.run()
-for line in r6.lines { print(line) }
-let r7 = AgentWatchdogTests.run()
-for line in r7.lines { print(line) }
-let r8 = SystemAgentPortTests.run()
-for line in r8.lines { print(line) }
-let r9 = AgentLaunchAssemblerTests.run()
-for line in r9.lines { print(line) }
-print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
-print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
-print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
-print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
-print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
-print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
-print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
-print("SYSTEMPORT_TESTS passed=\(r8.passed) failed=\(r8.failed)")
-print("LAUNCHASM_TESTS passed=\(r9.passed) failed=\(r9.failed)")
-let passed = r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed + r9.passed
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed + r9.failed
-print("ALL_UNIT passed=\(passed) failed=\(failed)")
-fflush(stdout)
-exit(failed == 0 ? 0 : 1)
-SWIFT
-"$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" \
-  -I "$MODULES" \
-  -o "$TESTRUNNER" \
-  "$OBJ/AAContracts.o" "$OBJ/AAHostRuntime.o" "$OBJ/AAHostTestKit.o" \
-  "$OBJ/AAPluginSDK.o" "$OBJ/PluginProxy.o" "$OBJ/AAUISystem.o" \
-  "$OBJ/AAAgentCore.o" "$OBJ/AAAgentSystem.o" "$OBJ/AAAgentTestKit.o" \
-  "$RUNNER/main.swift" \
-  || { echo "FAIL: 编译 registry-tests runner 失败"; exit 1; }
-
-echo "全部 target 编译通过。"
+echo "全部 target 构建通过。"
+echo "  BIN(AA_TESTING) = $BIN"
+echo "  BIN(AA_E2E)     = $E2E_BIN"

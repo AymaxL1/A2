@@ -14,8 +14,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-HOST_BIN="$ROOT/.build/check/bin/aahost"
-AA_BIN="$ROOT/.build/check/bin/aa"
+# 11 票起产物由 SPM 产在 `--scratch-path` 的 bin 目录里(带三元组/配置名),不再是 .build/check/bin。
+# 就地用,**别拷走**:PluginProxy 的资源是与可执行并排的 PROJECT_AA_PluginProxy.bundle,
+#   MihomoKernelResource 用 `Bundle.module...!` 强解包取它,可执行一离开 bin 目录就当场崩。
+# bin 目录由门禁 build.sh 用 `swift build --show-bin-path` 落档在这里(**唯一权威来源**,不猜不拼)。
+BINPATH_FILE="$ROOT/.build/check/spm-bin-path.txt"
+SPM_BIN="$( [ -f "$BINPATH_FILE" ] && head -1 "$BINPATH_FILE" )"
+HOST_BIN="$SPM_BIN/aahost"
+AA_BIN="$SPM_BIN/aa"
 
 if [ ! -x "$HOST_BIN" ] || [ ! -x "$AA_BIN" ]; then
   echo "缺少已编译二进制($HOST_BIN / $AA_BIN)。"

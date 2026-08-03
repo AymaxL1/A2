@@ -69,10 +69,16 @@ AA_CONFIRM_AUTO=approve \
 "$PROD_HOST_BIN" >"$HOSTLOG" 2>&1 &
 HOST_PID=$!
 if wait_host_ready "$HOST_PID"; then
+  # 就绪判据必须是 **apiReachable**,不能是 running —— 后者只说明「进程还活着」,内核拉起的那一刻就为真,
+  #   于是下面三条断言会在内核 REST 起来之前就读到 {"apiReachable":false,"running":true} 而误判。
+  # 11 票换 SPM 后这条竞态才暴露出来:此前生产宿主经 `#filePath` 直接跑 Sources/PluginProxy/Resources/ 里那份内核,
+  #   而同一脚本上一段(锁版真内核 E2E)刚跑过它 —— 页缓存与首次执行校验都是热的,REST 几乎瞬时可达。
+  #   现在跑的是 SPM 打进 PROJECT_AA_PluginProxy.bundle 的**新拷贝**(43MB,每轮门禁重建),冷启动实测约 0.4s,
+  #   刚好落在旧判据的窗口外。窗口给到 30s(冷盘/高负载留余量),仍只是等待,不新增断言。
   PROD_STATUS=""
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 300); do
     PROD_STATUS="$("$BIN/aa" proxy status --json 2>/dev/null)"
-    printf '%s' "$PROD_STATUS" | grep -q '"running":true' && break
+    printf '%s' "$PROD_STATUS" | grep -q '"apiReachable":true' && break
     sleep 0.1
   done
   assert_contains "$PROD_STATUS" '"running":true' "生产宿主经 ProcessPort 拉起锁版真内核"

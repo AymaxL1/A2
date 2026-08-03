@@ -3,10 +3,11 @@
 // PROJECT_AA V1 core-proxy 正式工程骨架(单 SPM 包多 target,AA 前缀)。
 // target 清单与依赖图来自 v1-mac-recharter 07 票「Swift 架构映射」裁决。
 //
-// 注意:本机 CLT 已损坏(module.modulemap 与 bridging.modulemap 重复定义 SwiftBridging),
-// `swift build` 连本清单都解析不了 —— 本文件此刻「写而不验」,其真值化验证归 11 票(接完整 Xcode 后)。
-// 骨架期的编译门禁改由 Scripts/check.sh(vfsoverlay 直编 + assert 测试)承担;11 票把引擎换成
-// `swift build + swift test` 时,check.sh 的命令接口(一条命令、非零退出即失败)保持不变。
+// 状态(11 票已真值化,2026-08-04):本清单不再是「写而不验」——`Scripts/check.sh` 的编译引擎就是
+// `swift build` + `swift test`,本文件每次跑门禁都被真实解析与构建。**不需要 Xcode.app**;
+// 需要的是一份 SPM 可用的工具链(CLT 自带的 libPackageDescription 与其接口错配,用不了):
+//   ~/Library/Developer/Toolchains/swift-latest.xctoolchain —— bootstrap.sh 会现场探测并挑出可用的那个。
+// check.sh 的命令接口(一条命令、非零退出即失败)在换引擎前后保持不变。
 
 import PackageDescription
 
@@ -17,6 +18,9 @@ let package = Package(
         .executable(name: "aa", targets: ["aa"]),
         // agent-delegation 07:委托试驾 CLI(与 `aa` 各自独立,互不影响 —— 守并行红线)。
         .executable(name: "aa-agent", targets: ["aa-agent"]),
+        // 11 票:GUI 宿主的薄可执行壳(@main 从 AAHostMacOS 库里搬出来的落点)。
+        //   是产品(不是门禁内部工具):12 票要把它打进 XcodeGen 的 .app bundle(LSUIElement)。
+        .executable(name: "aahost", targets: ["aahost"]),
         .library(name: "AAContracts", targets: ["AAContracts"]),
         .library(name: "AAPluginSDK", targets: ["AAPluginSDK"]),
         .library(name: "AAHostRuntime", targets: ["AAHostRuntime"]),
@@ -51,11 +55,12 @@ let package = Package(
         // ③ 依赖 HostRuntime 的宿主具体层 / 假件;以及插件域逻辑
         // 依赖边须与源码实际 import 一一对应(两个 target 都同时 import AAHostRuntime 与 AAContracts)。
         //
-        // @main 债务口径(重要):AAHostMacOS 的终态是「库」——07 票架构映射定它为 Host Port 的 macOS 实现,
+        // @main 债务口径(11 票已结清):AAHostMacOS 的终态是「库」——07 票架构映射定它为 Host Port 的 macOS 实现,
         //   spec 定 GUI 宿主是 XcodeGen app 壳(LSUIElement;SPM 可执行产不出 .app bundle)。
-        //   现阶段 Sources/AAHostMacOS/HostApp.swift 里塞的 @main 只是 vfsoverlay 过桥用(check.sh 单独把它编成可执行冒烟);
-        //   正确终态归 12 票:把 @main 移进 XcodeGen app 壳、AppDelegate 转 public,本 target 保持库不变。
-        //   因此这里保持 .target(库),不要改成 .executableTarget。
+        //   曾塞在 Sources/AAHostMacOS/HostApp.swift 里的 @main 已移到独立的 `aahost` executable target
+        //   (Sources/aahost/AAHostMain.swift),AppDelegate 随之转 public。原计划归 12 票,因 11 票换引擎后
+        //   SPM 必须有真 executable target 才产得出可执行而提前。12 票只剩「把 aahost 打进 .app bundle」。
+        //   因此这里保持 .target(库),**不要**改成 .executableTarget。
         // 06 票:宿主 V1 内封栈——AAHostMacOS 装配 PluginProxy(注入真 Port),故新增 AAPluginSDK + PluginProxy 依赖。
         //   注意方向:宿主依赖插件(合法);铁律只禁「插件依赖 Host*」,不禁「Host 依赖插件」。
         .target(name: "AAHostMacOS", dependencies: ["AAHostRuntime", "AAContracts", "AAPluginSDK", "PluginProxy"]),
@@ -81,6 +86,16 @@ let package = Package(
         //   **绝不依赖 AAHostMacOS / AAHostRuntime / PluginProxy**:它是 agent-delegation 模块自己的入口,
         //   与 v1-core-proxy 的 16 票并行落地、互不踩施工面(现有 `aa` 一个字节都不动)。
         .executableTarget(name: "aa-agent", dependencies: ["AAContracts", "AAAgentCore", "AAAgentSystem"]),
+        // 11 票:GUI 宿主的薄可执行壳。依赖边与源码实际 import 一一对应:只有 AppKit(系统)+ AAHostMacOS。
+        //   壳里只有「建 NSApplication、挂 AppDelegate、run」三行,全部业务逻辑仍在 AAHostMacOS 库里。
+        .executableTarget(name: "aahost", dependencies: ["AAHostMacOS"]),
+        // 11 票:门禁的 TestKit runner。此前由 Scripts/check/build.sh 用 heredoc 动态生成再 swiftc 直编,
+        //   换 `swift build` 后 SPM 只认真源文件,故固化成 target。依赖边与 Sources/registry-tests/main.swift
+        //   的实际 import 一一对应:AAHostTestKit + AAAgentTestKit(其余模块由这二者传递引入,不挂空头依赖)。
+        //   **刻意不加 product**:它是门禁内部工具,不是对外交付物,`swift build` 会因为是 executableTarget
+        //   自动把它造出来,无需在 products 里露面。
+        .executableTarget(name: "registry-tests", dependencies: ["AAHostTestKit", "AAAgentTestKit"]),
+        .testTarget(name: "AAContractsTests", dependencies: ["AAContracts"]),
     ],
-    swiftLanguageVersions: [.v5]
+    swiftLanguageModes: [.v5]
 )

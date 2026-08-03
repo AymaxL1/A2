@@ -49,7 +49,11 @@ func hostFatal(_ msg: String) -> Never {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    // public 是 11 票的产物:@main 搬进了独立的 `aahost` executable target(Sources/aahost/AAHostMain.swift),
+    //   那边要 `AppDelegate()`,故类与其无参构造须跨模块可见。其余成员一律保持 internal(壳只认这两个符号)。
+    public override init() { super.init() }
+
     // registry 在 applicationDidFinishLaunching 里构造(需注入引用 self 的确认回调,故不能在属性初始化时建)。
     var registry: Registry!
     var server: UDSServer!
@@ -78,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }()
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    // public 是编译器的硬要求(不是设计选择):AppDelegate 转 public 后,`NSApplicationDelegate` 这个
+    //   public 协议的实现方法必须同级可见,否则「must be declared public because it matches a requirement」。
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         // 0a) V1 内封栈:构造真 Host Port(ProcessPort/HTTPPort)→ 装配 ProxyPlugin(注入)→ 经 ProcessPort 拉起内核。
         //     内核可执行路径从 env 读:E2E 指向 fake stub;真实指向将来入库的 mihomo(锁版入库是用户决策,留用户)。
         //     未配置 AA_MIHOMO_KERNEL_PATH → 不拉起任何进程(绝不下载/启动真 mihomo),proxy.status 会如实报未运行。
@@ -234,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 被 kill/pkill 的强制退出由 SystemProcessPort 的 atexit/信号钩子兜底回收内核(零孤儿);但系统代理还原需运行
     /// networksetup(非 async-signal-safe),不能在信号处理器里做——那条硬杀路径下的代理复原归 08 票崩溃自愈
     /// (重启后检测上一世代快照 + 内核指向死端口并清理)。本方法覆盖优雅退出路径。
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {   // 同上:NSApplicationDelegate 要求同级可见
         proxyPlugin?.restoreSystemProxyOnExit()   // ① 先还原系统代理(若曾接管)
         proxyPlugin?.reclaimKernel()              // ② 再停内核
     }
@@ -349,17 +355,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// 债务口径:此 @main 只是 vfsoverlay 过桥用(check.sh 单独把本库 target 编成可执行冒烟)。
-// AAHostMacOS 终态是「库」(Host Port 的 macOS 实现);GUI 宿主终态是 XcodeGen app 壳(LSUIElement)。
-// 归 12 票:@main 移进 app 壳、AppDelegate 转 public,本 target 保持库(见 Package.swift 同口径注释)。
-@main
-@MainActor
-struct AAHostMain {
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.setActivationPolicy(.accessory)
-        app.run()
-    }
-}
+// 债务口径(11 票已结清):@main 曾经塞在本文件里(swiftc 直编期把本库 target 单独编成可执行冒烟)。
+// 现已移到 `Sources/aahost/AAHostMain.swift` —— 那是一个真的 executable target,`AppDelegate` 随之转 public。
+// 原计划归 12 票(XcodeGen app 壳),**提前到 11 票做**:门禁引擎换成 `swift build` 之后,
+//   SPM 必须有一个真 executable target 才产得出可执行,库 target 再怎么编也只是 .swiftmodule。
+// AAHostMacOS 保持是「库」(Host Port 的 macOS 实现)不变;12 票只负责把 `aahost` 打进 .app bundle(LSUIElement)。

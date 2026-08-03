@@ -1,21 +1,26 @@
 #!/bin/bash
-# PROJECT_AA V1 骨架期编译门禁 —— 一条命令的红绿循环入口。
+# PROJECT_AA V1 编译门禁 —— 一条命令的红绿循环入口。
 #
-# 姿态:本机 SPM 不可用(libPackageDescription 与其接口错配),故不走 swift build,改用 swiftc 直编:
-#   swiftc + -module-cache-path <独立缓存>,按 07 票拓扑序逐 target 编译
-#   (库 target 产 .swiftmodule,后续 target 用 -I 指向前序模块目录;aa 产真可执行;
-#    AAHostMacOS 是库,但门禁单独把它编成可执行做冒烟),再跑 assert 测试。
+# 引擎(11 票起):**`swift build` + `swift test`**。Package.swift 是依赖图的唯一真值来源,
+#   编译编排、拓扑序、模块搜索路径全交给 SPM,门禁不再手写 target 顺序与 -I。
+#   build.sh 构建两次:一次 -DAA_TESTING(出 aa / aa-agent / aahost / registry-tests),
+#   一次 -DAA_E2E(只为拿不含 AA_TESTING 的生产 aahost);swift-test.sh 跑 swift-testing 用例;
+#   其余仍是 shell 断言阶段(进程级 / UDS 级 / E2E,那些搬不进 swift test)。
 #
-# 工具链状态**不写死假设**:见下方「工具链探测」段。历史上本机 CLT 还坏了第二处
-# (module.modulemap 与 bridging.modulemap 重复定义 SwiftBridging → 裸 swiftc 必挂),
-# 靠 -vfsoverlay 遮掉;该绕过法现已降级为**回落分支**,CLT 修好即自动退役。
+# 取舍(11 票的结账时刻,必须如实写明):**门禁自此只能在 SPM 可用的机器上跑。**
+#   此前是 swiftc 直编 + vfsoverlay 回落 —— 靠遮蔽 CLT 里重复定义 SwiftBridging 的僵尸 modulemap,
+#   让「坏 CLT 的机器」也能跑门禁。换成 swift build 之后这条回落已无意义:坏 CLT 的 SPM
+#   (libPackageDescription.dylib 与其 .swiftmodule 接口错配)本来就构建不了任何东西,
+#   「坏 CLT 也能跑门禁」这条路径不复存在。故 vfsoverlay 回落分支彻底删除。
+#   overlay 本体保留在 Spikes/S1PetOverlay/toolchain-workaround/ 做历史留档(不删,但门禁不再引用)。
+#   代价是环境门槛(需要一份 SPM 可用的工具链),买到的是真依赖图 + swift test + 将来可引第三方包。
 #
 # 02 票增量:
 #   * AAHostMacOS 落地为 AppKit accessory 宿主(菜单栏 + UDS server)。注意其终态是「库」(Host Port 的 macOS 实现);
-#     @main 只是过桥,GUI 宿主终态是 XcodeGen app 壳(LSUIElement),归 12 票——门禁这里照 S2 run.sh 单独把它编成可执行冒烟。
+#     11 票起 @main 住在独立的 `aahost` executable target,GUI 宿主终态是 XcodeGen app 壳(LSUIElement),归 12 票。
 #   * AAContracts 加线协议 Codable(WireRequest/WireResponse/CapabilityDescriptor/…)与 UDS 路径常量。
 #   * AAHostRuntime 加 Registry(纯逻辑,注册 + list)。
-#   * AAHostTestKit 加 Registry 纯逻辑测试(假件 seam),由门禁生成的 runner 执行。
+#   * AAHostTestKit 加 Registry 纯逻辑测试(假件 seam),由 `registry-tests` target 执行(11 票起是真源文件,不再动态生成)。
 #   * 断言从 01 的 aa 占位(RiskLevel.parse)替换为 02 真断言:注册表纯逻辑 + list E2E(起真宿主)。
 #
 # 03 票增量:
@@ -51,7 +56,7 @@
 #   * 阶段 B 增:1e 纯逻辑(REST 写读构造/解析 + 四能力风险级/别名/allowedValues + 取值域校验);
 #     CP E2E(改后读回 mode/now 生效 + 逐节点测速含超时 + normal 零 GUI + number 强转 inf/nan→1)。
 #
-# 接口契约(11 票换成 swift build + swift test 引擎时保持不变):
+# 接口契约(11 票换引擎前后**逐字不变**,这正是 11 票要守的那条):
 #   一条命令跑完、任一步失败即非零退出;终端有清楚的 PASS/FAIL 输出。
 #
 # 不用 set -e:编译步骤各自显式判错退出,断言阶段要逐条收集结果不能一失败就退(对标 S2 test.sh)。
@@ -60,28 +65,18 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# vfsoverlay 只读复用 S1 spike 里那份(遮掉 CLT 重复的 SwiftBridging modulemap)。
-# 现为**回落用**:仅当裸 swiftc 编不过时才启用,见下方「工具链探测」。
-OVERLAY="$ROOT/Spikes/S1PetOverlay/toolchain-workaround/overlay.yaml"
-
 # 全部中间产物落在 .build/(已被 .gitignore 忽略),不污染仓库。
 BUILD="$ROOT/.build/check"
-MCACHE="$BUILD/mcache"     # 独立 module-cache
-MODULES="$BUILD/modules"   # 所有库 target 的 .swiftmodule 汇总目录
-OBJ="$BUILD/obj"           # 库 target 的目标文件(.o),供可执行 target 链接
-PPMODS="$BUILD/pp-modules" # 只含 SDK/Contracts/UISystem 的受限搜索路径,用于证明 PluginProxy 不需要 Host*
-BIN="$BUILD/bin"           # 可执行产物
-RUNNER="$BUILD/registry-runner" # 门禁生成的 TestKit runner 入口 shim
-
-HOST_BIN="$BIN/aahost"           # AppKit accessory 宿主可执行
-PROD_HOST_BIN="$BIN/aahost-production-e2e" # 不含 AA_TESTING，真核全链 E2E 宿主
-TESTRUNNER="$BIN/registry-tests" # Registry 纯逻辑测试 runner
 HOSTLOG="$BUILD/aahost.log"      # E2E 里宿主 stdout/stderr
+
+# 可执行产物路径($BIN / $HOST_BIN / $PROD_HOST_BIN / $TESTRUNNER / $KILLPAT)由 build.sh 现场赋值:
+#   它们是 `swift build --show-bin-path` 的输出,构建完成前无从得知(SPM 的 bin 目录带三元组与配置名)。
+#   这带来一个真雷 —— 见下面 cleanup() 上方的说明。
 
 # E2E 运行时资源(落在 Application Support 运行时目录,不进仓库);清场靠 KILLPAT + trap 兜底。
 SOCK="$HOME/Library/Application Support/AA/aa.sock"
 # 只盯本次构建的绝对路径,避免误杀用户机上别处同名的 aahost 进程。
-KILLPAT="$HOST_BIN"
+# KILLPAT="$HOST_BIN" 现在在 build.sh 里赋值(HOST_BIN 要等 --show-bin-path 才知道)。
 
 # 06 票:fake mihomo stub(测试替身,非真 mihomo)——供 proxy.status E2E 由宿主 ProcessPort 拉起/回收。
 # 反孤儿断言与清场都按此模式兜底(杀宿主 + 杀 stub)。
@@ -107,9 +102,11 @@ REAL_TAKEOVER_CLEARED_BEFORE="$( [ -e "$REAL_TAKEOVER_CLEARED" ] && md5 -q "$REA
 REAL_SUBS_DIR="$HOME/Library/Application Support/AA/subscriptions"
 REAL_SUBS_BEFORE="$( [ -e "$REAL_SUBS_DIR" ] && ls -laR "$REAL_SUBS_DIR" 2>/dev/null | md5 2>/dev/null || echo ABSENT )"
 
-# SWIFTC_BIN / SWIFTC_COMMON 由下方「工具链探测」段现场决定(须在 $BUILD 建好之后)。
-# env seam:AA_SWIFTC 可显式指定 swiftc(例如独立工具链里的绝对路径),缺省用 PATH 上的。
-SWIFTC_BIN="${AA_SWIFTC:-swiftc}"
+# $SWIFT_BIN 由下方「工具链探测(SPM 可用性)」段现场决定(须在 $BUILD 建好之后 —— 探测要往里写 scratch)。
+# env seam:AA_SWIFT 可显式指定 swift(例如独立工具链里的绝对路径);缺省按候选顺序自动挑。
+# (11 票前的 AA_SWIFTC / SWIFTC_BIN / SWIFTC_COMMON / build_lib 已全部删除:不再有 swiftc 直编这条路。
+#  SDKROOT 那段也随之删掉 —— 它是为「装在家目录的独立工具链直编时找不到 SDK」加的,
+#  `swift build` 自己会做 SDK 解析,那段已无调用方。)
 
 # 超时 E2E 用的「只 accept 不回应」假监听器脚本(python3,绑定同一 socket 路径);清场按此模式兜底。
 TIMEOUT_LISTENER="$BUILD/timeout_listener.py"
@@ -119,9 +116,21 @@ AGENT_SLEEP_SUITE="sleep 87137"
 AGENT_SLEEP_PROBE="sleep 87139"
 
 # 失败/成功任一路径都清场,杜绝僵尸宿主 / 残 socket / 残假监听器。
+#
+# **每一个变量型 pkill 都必须有非空守卫** —— 这是 11 票引入的真雷,不是洁癖:
+#   `$KILLPAT` / `$PROD_HOST_BIN` 等路径变量此前是静态的(bootstrap.sh 里就定死),现在改由 build.sh
+#   在 `swift build` 成功后才赋值。于是**只要门禁在 build.sh 之前就失败退出**(工具链探测失败、
+#   构建失败……),trap 触发时这些变量还是空串,而 `pkill -f ""` 的空模式会匹配**一切进程**并杀掉
+#   —— 一次工具链探测失败就能把用户的整个会话清空。故**凡是 build.sh 之后才赋值的路径变量**
+#   都写成 `[ -n "${VAR:-}" ] && pkill -f "$VAR"`(下面注明了哪几个)。
+#   本文件里在 trap 装上之前就已赋值的静态常量(KILLPAT_STUB / AGENT_SLEEP_*)与字面量模式
+#   (timeout_listener.py 等)不可能为空,直接用,不加多余守卫 —— 免得读的人以为它们也会空。
+#   finalize.sh 的 pgrep 同理,但那边还多一层:守卫**不可用**时必须显式判 FAIL,不能静默算过。
 cleanup() {
-  pkill -f "$KILLPAT" 2>/dev/null
-  pkill -f "$PROD_HOST_BIN" 2>/dev/null
+  # ↓ 这三个由 build.sh 现场赋值(见 build.sh「下游路径变量」段),故必须守卫。
+  [ -n "${KILLPAT:-}" ] && pkill -f "$KILLPAT" 2>/dev/null
+  [ -n "${PROD_HOST_BIN:-}" ] && pkill -f "$PROD_HOST_BIN" 2>/dev/null
+  # ↓ 以下是本文件里的静态常量/字面量,恒非空。
   pkill -f "$KILLPAT_STUB" 2>/dev/null
   pkill -f "timeout_listener.py" 2>/dev/null
   pkill -f "raw_uds_client.py" 2>/dev/null
@@ -137,97 +146,67 @@ cleanup() {
 trap cleanup EXIT
 
 echo "========================================"
-echo " PROJECT_AA check.sh —— swiftc 直编门禁"
+echo " PROJECT_AA check.sh —— swift build + swift test 门禁"
 echo " ROOT   = $ROOT"
 echo "========================================"
 
 rm -rf "$BUILD"
-mkdir -p "$MCACHE" "$MODULES" "$OBJ" "$PPMODS" "$BIN" "$RUNNER"
+mkdir -p "$BUILD"
 
-# ---- 工具链探测 ---------------------------------------------------------------
-# 不写死「一定要 vfsoverlay」——拿一个最小样例现场探:
-#   ① 裸 swiftc 能编过     → clean 模式,不带任何绕过旗标(CLT 已修好 / 用的是干净工具链)
-#   ② 裸编挂、带 overlay 过 → overlay 模式,沿用历史绕过法(CLT 仍有重复 modulemap)
-#   ③ 两者都挂             → 工具链真的不可用,如实报错退出,不假装能跑
-# 11 票要求的「vfsoverlay 退役」由此自动完成:CLT 一修好,下一次跑门禁就自动进 clean 模式。
+# ---- 工具链探测(SPM 可用性)-----------------------------------------------------
+# 判据只有一条:**`swift package dump-package` 能 rc=0**。
+#   它要求真正加载 libPackageDescription 并解析清单 —— 坏 CLT 的那份 dylib 与其 .swiftmodule
+#   接口错配(880 个符号但零个 `Package.__allocating_init`),这一步必 rc=1。好工具链 rc=0。
+#   比「swiftc 能不能编个 hello world」严格得多,而后者根本不覆盖 SPM 这条路。
+# 候选顺序(第一个 rc=0 的胜出):
+#   ① $AA_SWIFT              —— env seam,显式指定(CI / 多工具链机器)
+#   ② ~/Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swift —— 官方独立工具链的约定落点
+#   ③ PATH 上的 swift        —— CLT 或已 xcode-select 到的那个
+# 一个都不行 → 如实报错退出,**不假装能跑**。
 PROBE="$BUILD/toolchain-probe"
 mkdir -p "$PROBE"
-cat > "$PROBE/probe.swift" <<'PROBE_EOF'
-import Foundation
-public func aaToolchainProbe() -> Int { NSString(string: "ok").length }
-PROBE_EOF
 
-if ! command -v "$SWIFTC_BIN" >/dev/null 2>&1 && [ ! -x "$SWIFTC_BIN" ]; then
-  echo "FAIL: 找不到 swiftc:$SWIFTC_BIN(可用 AA_SWIFTC 指定绝对路径)"
+SWIFT_CANDIDATES=()
+[ -n "${AA_SWIFT:-}" ] && SWIFT_CANDIDATES+=("$AA_SWIFT")
+SWIFT_CANDIDATES+=("$HOME/Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swift")
+SWIFT_CANDIDATES+=("swift")
+
+SWIFT_BIN=""
+PROBE_REPORT=""
+PROBE_I=0
+for cand in "${SWIFT_CANDIDATES[@]}"; do
+  PROBE_I=$((PROBE_I+1))
+  # 先确认这个候选真存在(PATH 上的名字或可执行的绝对路径),否则 dump-package 的 rc 没有诊断价值。
+  if ! command -v "$cand" >/dev/null 2>&1 && [ ! -x "$cand" ]; then
+    PROBE_REPORT="$PROBE_REPORT
+  [$PROBE_I] $cand —— 不存在 / 不可执行"
+    continue
+  fi
+  if "$cand" package dump-package --scratch-path "$PROBE/spm-probe-$PROBE_I" \
+       >"$PROBE/dump-$PROBE_I.log" 2>&1; then
+    SWIFT_BIN="$cand"
+    break
+  fi
+  PROBE_REPORT="$PROBE_REPORT
+  [$PROBE_I] $cand —— \`swift package dump-package\` rc≠0(SPM 不可用),日志: $PROBE/dump-$PROBE_I.log"
+done
+
+if [ -z "$SWIFT_BIN" ]; then
+  echo "FAIL: 找不到 SPM 可用的 swift —— 门禁的编译引擎是 swift build,没有它就跑不了。"
+  echo "  已试候选:$PROBE_REPORT"
+  echo
+  echo "  最常见原因:CLT 自带的 SPM 是坏的(libPackageDescription.dylib 与其 .swiftmodule 接口错配)。"
+  echo "  解法是装一份官方独立工具链到家目录(**不需要 Xcode,也不需要 sudo**):"
+  echo "    curl -O https://download.swift.org/swift-6.1.2-release/xcode/swift-6.1.2-RELEASE/swift-6.1.2-RELEASE-osx.pkg"
+  echo "    installer -pkg ~/Downloads/swift-6.1.2-RELEASE-osx.pkg -target CurrentUserHomeDirectory"
+  echo "  (详见 .scratch/v1-core-proxy/issues/11-skeleton-truth-up-xcode.md)"
+  echo "  装好后本脚本会自动认到 ~/Library/Developer/Toolchains/swift-latest.xctoolchain;"
+  echo "  也可用 AA_SWIFT=<swift 绝对路径> 显式指定。"
   exit 1
 fi
 
-# SDK 显式化。CLT 自带的 /usr/bin/swiftc 住在 CLT 树里,能自己找到 SDK;但**装在家目录的
-# 独立工具链找不到**(实测:`no such module 'Foundation'` + "did you forget to set an SDK"),
-# 因为它不在任何 developer dir 下。故这里统一把 SDKROOT 显式定死:
-#   * 已由调用方设好 → 尊重之,不覆盖(留给交叉编译/多 SDK 场景)
-#   * 未设 → 用 xcrun 问当前 developer dir 要 macOS SDK 路径
-# 对 CLT swiftc 而言这是恒等操作(定死的正是它本来就会选的那个);对独立工具链则是必需品。
-if [ -z "${SDKROOT:-}" ]; then
-  SDKROOT="$(xcrun --show-sdk-path 2>/dev/null)"
-  if [ -z "$SDKROOT" ] || [ ! -d "$SDKROOT" ]; then
-    echo "FAIL: 定位不到 macOS SDK(xcrun --show-sdk-path 无输出或路径不存在)"
-    echo "  可显式设 SDKROOT=<path> 后重跑。"
-    exit 1
-  fi
-  export SDKROOT
-fi
-
-if "$SWIFTC_BIN" -swift-version 5 -module-cache-path "$PROBE/mcache-clean" \
-     -parse-as-library -c -o "$PROBE/probe-clean.o" "$PROBE/probe.swift" \
-     >"$PROBE/clean.log" 2>&1; then
-  TOOLCHAIN_MODE="clean"
-  SWIFTC_COMMON=(-swift-version 5 -module-cache-path "$MCACHE")
-elif [ -f "$OVERLAY" ] && "$SWIFTC_BIN" -swift-version 5 -vfsoverlay "$OVERLAY" \
-     -module-cache-path "$PROBE/mcache-ovl" \
-     -parse-as-library -c -o "$PROBE/probe-ovl.o" "$PROBE/probe.swift" \
-     >"$PROBE/overlay.log" 2>&1; then
-  TOOLCHAIN_MODE="overlay"
-  SWIFTC_COMMON=(-swift-version 5 -vfsoverlay "$OVERLAY" -module-cache-path "$MCACHE")
-else
-  echo "FAIL: swiftc 不可用 —— 裸编与 vfsoverlay 回落均失败。"
-  echo "  swiftc      = $SWIFTC_BIN"
-  echo "  裸编日志    = $PROBE/clean.log"
-  if [ -f "$OVERLAY" ]; then
-    echo "  overlay 日志 = $PROBE/overlay.log"
-  else
-    echo "  (overlay 文件缺失,回落分支未能尝试:$OVERLAY)"
-  fi
-  echo "---- 裸编错误前 20 行 ----"
-  sed -n '1,20p' "$PROBE/clean.log"
-  exit 1
-fi
-
-echo " 工具链   = $("$SWIFTC_BIN" --version 2>/dev/null | head -1)"
-echo " swiftc   = $(command -v "$SWIFTC_BIN" 2>/dev/null || echo "$SWIFTC_BIN")"
-echo " SDKROOT  = $SDKROOT"
-if [ "$TOOLCHAIN_MODE" = "clean" ]; then
-  echo " 编译模式 = clean(裸 swiftc,无绕过旗标)"
-else
-  echo " 编译模式 = overlay(回落:CLT 重复 modulemap 仍在,靠 vfsoverlay 遮蔽)"
-  echo "            OVERLAY = $OVERLAY"
-fi
+echo " swift    = $SWIFT_BIN"
+echo " 版本     = $("$SWIFT_BIN" --version 2>/dev/null | head -1)"
+echo " 引擎     = swift build + swift test(Package.swift 是依赖图唯一真值来源)"
 echo "========================================"
-
-# ---- 编 1 个库 target:同时产 .swiftmodule(到 $MODULES,供下游 import)与 .o(到 $OBJ,供可执行链接)----
-#      -c 为主动作(产目标文件),-emit-module-path 为附带产物;-wmo 让多源文件汇成单一 .o。
-#      -I 指向 $MODULES,可见全部前序模块。
-build_lib() {  # $1 = target 名
-  local name="$1"
-  echo "-- 编译库 target: $name"
-  "$SWIFTC_BIN" "${SWIFTC_COMMON[@]}" -wmo \
-    -parse-as-library \
-    -module-name "$name" \
-    -c -o "$OBJ/$name.o" \
-    -emit-module-path "$MODULES/$name.swiftmodule" \
-    -I "$MODULES" \
-    "Sources/$name"/*.swift \
-    || { echo "FAIL: 编译 $name 失败"; exit 1; }
-}
-
 echo

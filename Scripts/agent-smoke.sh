@@ -27,7 +27,8 @@
 #      bash Scripts/agent-smoke.sh claude       # 只跑 Claude
 #      bash Scripts/agent-smoke.sh codex        # 只跑 Codex
 #
-#  前置:先跑一次 `bash Scripts/check.sh` 把 aa-agent 编出来(产物在 .build/check/bin/aa-agent)。
+#  前置:先跑一次 `bash Scripts/check.sh` 把 aa-agent 编出来
+#        (11 票起产物在 SPM 的 bin 目录:.build/check/spm-testing/<三元组>/debug/aa-agent)。
 #
 #  ---------------------------------------------------------------------------
 #  第 0 步(**本脚本会自动做,但结论要你亲自看**):核对两个**未经本机二进制验证**的 Claude 旗标。
@@ -40,7 +41,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$ROOT/.build/check/bin/aa-agent"
+# bin 目录由门禁 build.sh 用 `swift build --show-bin-path` 落档在这里(**唯一权威来源**,不猜不拼)。
+BINPATH_FILE="$ROOT/.build/check/spm-bin-path.txt"
+CLI="$( [ -f "$BINPATH_FILE" ] && head -1 "$BINPATH_FILE" )/aa-agent"
 SMOKE="$ROOT/.build/agent-smoke"          # 沙箱工作目录 + 任务工作区都落在这里(不进仓库)
 TASKS_ROOT="$SMOKE/agent-tasks"
 SANDBOX="$SMOKE/sandbox"

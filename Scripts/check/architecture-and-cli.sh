@@ -12,9 +12,89 @@ elif [ "$GREP_RC" -eq 0 ]; then
 else
   echo "FAIL: grep 守卫自身出错(rc=$GREP_RC),无法核验 PluginProxy 边界 —— 绝不算过"; FAIL=$((FAIL+1))
 fi
-# (3b) 编译期守卫:上面阶段 A 已用「仅 SDK/Contracts/UISystem 的 -I」编过 PluginProxy,能到这里即已证明。
-echo "PASS: PluginProxy 已在受限 -I(无 Host* 模块)下编译成功 —— 编译期证明不需要 Host*"
-PASS=$((PASS+1))
+# (3b) 编译期守卫:PluginProxy 在**只有 SDK/Contracts/UISystem 的受限模块搜索路径**下能编过。
+#
+# 这是 01 票铁律「插件 target 不依赖任何 Host*」的**真·编译期证明**,不是声明面的自觉。
+# 11 票换 `swift build` 后一度想用「清单依赖边 + swift build 成功」替代它,那个想法是**错的**:
+#   同一个包里所有 target 的 .swiftmodule 都落在同一个构建目录,SwiftPM 默认(非 explicit-module-build)
+#   把该目录整个塞进 -I。于是 import 一个**未在 dependencies 里声明**的同包 target,只要它恰好先构建完,
+#   照样能编过 —— SwiftPM 这个缺口是长期已知的。故「清单没写 Host*」远弱于「没有 Host* 也能编过」。
+#   (3b2 保留清单面检查,但它守的是另一件事:见下。)
+#
+# 做法:从 SPM 的 Modules 目录里**只挑** AAContracts / AAPluginSDK / AAUISystem 三个 .swiftmodule 复制到
+#   一个干净目录,以它为唯一 -I 对 PluginProxy 源码做 `-typecheck`。能过 = 它确实不需要任何 Host*。
+#   已做反证:往 PluginProxy 源码里加一行 `import AAHostRuntime`,该 typecheck 立刻
+#   `error: no such module 'AAHostRuntime'` —— 这条守卫真能抓到,不是摆设。
+#
+# 守卫自身跑不起来(找不到 swiftc / 缺 SDK / 缺前序模块)一律判 FAIL —— 照 3a 的口径,绝不算过。
+PP_SWIFTC="$(dirname "$SWIFT_BIN")/swiftc"
+PP_SDK="$(xcrun --show-sdk-path 2>/dev/null)"
+PP_PROBE="$BUILD/pp-restricted"
+rm -rf "$PP_PROBE"; mkdir -p "$PP_PROBE/mods"
+PP_SETUP_ERR=""
+if [ ! -x "$PP_SWIFTC" ]; then
+  PP_SETUP_ERR="找不到与 \$SWIFT_BIN 同目录的 swiftc: $PP_SWIFTC"
+elif [ -z "$PP_SDK" ] || [ ! -d "$PP_SDK" ]; then
+  PP_SETUP_ERR="定位不到 macOS SDK(xcrun --show-sdk-path)"
+else
+  for m in AAContracts AAPluginSDK AAUISystem; do
+    if [ -f "$BIN/Modules/$m.swiftmodule" ]; then
+      cp "$BIN/Modules/$m.swiftmodule" "$PP_PROBE/mods/" || PP_SETUP_ERR="复制 $m.swiftmodule 失败"
+    else
+      PP_SETUP_ERR="前序模块缺失: $BIN/Modules/$m.swiftmodule"
+    fi
+  done
+fi
+if [ -n "$PP_SETUP_ERR" ]; then
+  echo "FAIL: PluginProxy 受限编译守卫自身无法运行($PP_SETUP_ERR)—— 绝不算过"; FAIL=$((FAIL+1))
+elif "$PP_SWIFTC" -swift-version 5 -typecheck -module-name PluginProxy \
+       -sdk "$PP_SDK" -I "$PP_PROBE/mods" -module-cache-path "$PP_PROBE/mcache" \
+       Sources/PluginProxy/*.swift >"$PP_PROBE/typecheck.log" 2>&1; then
+  echo "PASS: PluginProxy 在受限 -I(仅 SDK/Contracts/UISystem,无任何 Host* 模块)下编译通过 —— 编译期证明不需要 Host*"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: PluginProxy 在受限 -I 下编译失败 —— 它可能意外依赖了 Host* 或其它未提供模块:"
+  sed -n '1,10p' "$PP_PROBE/typecheck.log"
+  FAIL=$((FAIL+1))
+fi
+
+# (3b2) 声明面守卫:清单里 PluginProxy 的依赖边不含任何 AAHost*。
+#
+# 与 3b 守的**不是同一件事**:3b 证明「今天的源码不需要 Host*」,3b2 挡的是「有人在 Package.swift 里
+#   给 PluginProxy 开了依赖 Host* 的口子」—— 声明即许可,即使暂时还没人 import。两条都要。
+#
+# 解析出错 / 拿不到 target 一律判 FAIL —— 照 3a 的口径:守卫自身出错时无法核验,绝不算过。
+PP_DEP_OUT="$("$SWIFT_BIN" package dump-package --scratch-path "$BUILD/spm-arch-probe" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    pkg = json.load(sys.stdin)
+except Exception as e:
+    print("PROBE_ERROR 清单 JSON 解析失败: %s" % e); sys.exit(0)
+targets = [t for t in pkg.get("targets", []) if t.get("name") == "PluginProxy"]
+if len(targets) != 1:
+    print("PROBE_ERROR 清单里 PluginProxy target 数量异常: %d" % len(targets)); sys.exit(0)
+deps = []
+for d in targets[0].get("dependencies", []):
+    # SPM 的依赖项形如 {"byName": ["AAPluginSDK", null]} / {"target": [...]} / {"product": [...]}
+    for kind, payload in d.items():
+        if isinstance(payload, list) and payload and isinstance(payload[0], str):
+            deps.append(payload[0])
+        else:
+            print("PROBE_ERROR 无法识别的依赖项形状: %r" % d); sys.exit(0)
+if not deps:
+    print("PROBE_ERROR PluginProxy 依赖为空(清单形状可能变了,无法核验)"); sys.exit(0)
+bad = [x for x in deps if x.startswith("AAHost")]
+print(("BAD " + ",".join(bad)) if bad else ("OK " + ",".join(deps)))
+' 2>&1)"
+case "$PP_DEP_OUT" in
+  OK\ *)
+    echo "PASS: 清单中 PluginProxy 的依赖边不含任何 AAHost*(依赖: ${PP_DEP_OUT#OK })—— 声明面未开口子"
+    PASS=$((PASS+1)) ;;
+  BAD\ *)
+    echo "FAIL: 清单中 PluginProxy 依赖了 Host*(命中: ${PP_DEP_OUT#BAD })"; FAIL=$((FAIL+1)) ;;
+  *)
+    echo "FAIL: PluginProxy 依赖边守卫自身出错,无法核验 —— 绝不算过($PP_DEP_OUT)"; FAIL=$((FAIL+1)) ;;
+esac
 
 # (3c) 06 票 Port 落点核验:ProcessPort/HTTPPort **协议**必须声明在 AAPluginSDK(插件只依赖 SDK),Host* 侧只能是实现/假件。
 PORT_DECL_SDK="$(grep -REn 'protocol[[:space:]]+(ProcessPort|HTTPPort)' Sources/AAPluginSDK/)"
@@ -132,9 +212,11 @@ assert_exit 0 $RC "--force 覆盖后符号链接指向真 aa(卸载/覆盖行为
 assert_exit 1 $RC "install-cli 目标目录不存在 → 退出码=1(明确错误)"
 
 # (hard bug2 修复)canonical 化比较:相对符号链接指向同一 aa → 判 already-installed(不逼 --force)。
-#   $BIN=$BUILD/bin;从 $IPCANON 用相对路径 ../bin/aa 指向同一真 aa,字面≠已 canonical 的 source,但解析后应相等。
+#   从 $IPCANON 用**相对路径**指向同一个真 aa:字面 ≠ 已 canonical 化的 source,但解析后应相等。
+#   11 票起 $BIN 是 SPM 的 bin 目录(带三元组/配置名,不再是 $BUILD/bin),故相对路径必须现算,不能写死 ../bin/aa。
 IPCANON="$BUILD/install-canon"; mkdir -p "$IPCANON"
-( cd "$IPCANON" && ln -s "../bin/aa" "aa" )
+RELAA="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BIN/aa" "$IPCANON")"
+( cd "$IPCANON" && ln -s "$RELAA" "aa" )
 CANOUT="$("$BIN/aa" install-cli --prefix "$IPCANON" --json 2>/dev/null)"; RC=$?
 echo "    相对链接 install 输出: $CANOUT"
 assert_exit 0 $RC "install-cli 相对链接指向同一 aa → 退出码=0(canonical 化)"
