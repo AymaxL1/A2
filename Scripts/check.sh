@@ -31,5 +31,10 @@ source "$CHECK_DIR/app-bundle.sh"
 #   它也要起一次宿主(验「dangerous 从菜单路径发起仍走确认」),而 mihomo-real-e2e 开头就 teardown_hosts,
 #   天然替本组兜一层底(与 app-bundle 同一条排位理由)。本组不起任何内核,绝不与真核 E2E 争端口。
 source "$CHECK_DIR/menubar.sh"
+# 16 票:旗舰场景全链验收(开代理→切模式→选节点→更新已有订阅,一个宿主、全程只经 aa、零 GUI 打断 + 换源反向对照)。
+#   排在 menubar.sh 之后、mihomo-real-e2e.sh 之前 —— 与 app-bundle / menubar 同一条排位理由:
+#   本组只起 fake stub、不起真内核,不与真核 E2E 争 socket / 控制端口,而 mihomo-real-e2e 开头就 teardown_hosts,
+#   天然替本组兜一层底。
+source "$CHECK_DIR/flagship-e2e.sh"
 source "$CHECK_DIR/mihomo-real-e2e.sh"
 source "$CHECK_DIR/finalize.sh"
