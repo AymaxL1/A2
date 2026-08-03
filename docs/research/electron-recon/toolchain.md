@@ -16,7 +16,7 @@
 >
 > **另两处需要更新的事实**：
 > 1. 「vfsoverlay workaround 只解锁裸 swiftc 单文件直编」——低估了。它支撑的门禁已实跑到 **PASS=403 FAIL=0**，覆盖 9 个 target 的拓扑序编译 + 全套 E2E。且 2026-08-04 起本机 CLT 的重复 modulemap 已由 `sudo mv` 根治，overlay 退役，门禁改为自动探测工具链。
-> 2. SPM 坏的成因当年记作「`libPackageDescription.dylib` 空导出符号」——复测为 **880 个符号但零个 `Package.__allocating_init`**，是 dylib 与 `.swiftmodule` 接口错配，不是空库。修它同样**不需要 Xcode**：可装官方独立工具链到家目录（`installer -pkg ... -target CurrentUserHomeDirectory`，无需 sudo）。
+> 2. SPM 坏的成因当年记作「`libPackageDescription.dylib` 空导出符号」——复测为 **880 个符号但零个 `Package.__allocating_init`**，是 dylib 与 `.swiftmodule` 接口错配，不是空库。**当天稍晚已修好，同样没用 Xcode、也没用 sudo**：装官方独立工具链到家目录（`installer -pkg swift-6.1.2-RELEASE-osx.pkg -target CurrentUserHomeDirectory`）。用它跑本仓库真实 `Package.swift`：112 步 `Build complete!`，0 error 0 warning，含 AppKit 的 `AAHostMacOS`。**至此「Swift 路线必须装 Xcode.app」这一判断的最后一条支柱（SPM 清单解析）也已倒掉** —— 三项里只剩 `xcodebuild` 与 XCUITest 仍需 Xcode，而这两项本项目都不必用。
 >
 > 本勘误**不动**已终裁的 Electron/Swift 路线选择（裁决见 `.scratch/electron-recon/issues/09-final-ruling.md`，不翻案）；只修正「Xcode 是 Swift 路线硬前置」这一条事实判断，因为它此后一直被当作票 11–16 的阻塞理由。
 
