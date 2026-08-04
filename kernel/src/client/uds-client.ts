@@ -3,6 +3,7 @@
 // 连不上**不是**一种响应,而是一类客户端侧事实(daemon 未装/未起/socket 陈旧),
 // 由调用方翻译成「拒绝即指引」报文 —— 客户端**永不隐式拉起** daemon(ADR 0008 第 6 条)。
 
+import { LineBuffer } from "../contract/ndjson.ts";
 import {
   ResponseEnvelopeSchema,
   encodeFrame,
@@ -39,16 +40,16 @@ export async function requestOnce(
     rejectLine = reject;
   });
 
-  let buffer = "";
+  const lines = new LineBuffer();
   let socket: Awaited<ReturnType<typeof Bun.connect>>;
   try {
     socket = await Bun.connect({
       unix: socketPath,
       socket: {
         data(_socket, chunk) {
-          buffer += chunk.toString();
-          const newline = buffer.indexOf("\n");
-          if (newline >= 0) resolveLine(buffer.slice(0, newline));
+          // 一问一答:只认第一行,余料留给 08 票的长连接形态。
+          const [first] = lines.push(chunk.toString());
+          if (first !== undefined) resolveLine(first);
         },
         error(_socket, error) {
           rejectLine(new DaemonUnreachableError(String(error)));
@@ -56,9 +57,9 @@ export async function requestOnce(
         close() {
           rejectLine(
             new DaemonUnreachableError(
-              buffer.length === 0
+              lines.pending.length === 0
                 ? "连接被关闭,未收到响应"
-                : `连接被关闭,响应不完整:${JSON.stringify(buffer)}`,
+                : `连接被关闭,响应不完整:${JSON.stringify(lines.pending)}`,
             ),
           );
         },

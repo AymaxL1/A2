@@ -4,7 +4,12 @@
 // 纪律(ADR 0005/0008):永不交互阻塞、无 `--yes` 旁路、`--json` 时 stdout 只有一条 JSON 包封。
 
 import { ExitCode } from "../contract/exit-codes.ts";
-import { ErrorCode, failureResponse } from "../contract/wire.ts";
+import {
+  ErrorCode,
+  PROTOCOL_VERSION,
+  failureResponse,
+  successResponse,
+} from "../contract/wire.ts";
 import { resolvePaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { daemonRunCommand } from "./daemon.ts";
@@ -49,16 +54,36 @@ function usageOutcome(message: string): CommandOutcome {
   };
 }
 
+/**
+ * 帮助与版本这两条**不走 daemon**,但机读面一视同仁:`--json` 下照样是一条包封
+ * (result 形状见 wire.ts 的 `HelpResult` / `VersionResult`)。人类面仍是老样子 ——
+ * `a2 version` 打裸版本号,脚本里 `$(a2 version)` 不会突然变成一坨 JSON。
+ */
+function helpOutcome(): CommandOutcome {
+  return {
+    envelope: successResponse(crypto.randomUUID(), { usage: USAGE }),
+    human: USAGE,
+    exitCode: ExitCode.success,
+  };
+}
+
 /** argv(不含 argv0/argv1)→ 结果。**不**碰进程状态,好让下面那三行决定怎么输出、怎么退出。 */
 async function dispatch(argv: string[]): Promise<CommandOutcome> {
   const [command, ...args] = argv.filter((arg) => arg !== "--json");
 
-  if (command === undefined) return { human: USAGE, exitCode: ExitCode.usage };
-  if (command === "help" || command === "-h" || command === "--help") {
-    return { human: USAGE, exitCode: ExitCode.success };
-  }
+  // 光敲 `a2` 不是"帮我打印帮助",是"我没说要干什么" —— 照用法错处理(ok=false + 退出码 1),
+  // 免得 agent 读到 ok=true 却拿到非零退出码。
+  if (command === undefined) return usageOutcome("缺少子命令。");
+  if (command === "help" || command === "-h" || command === "--help") return helpOutcome();
   if (command === "version" || command === "-V" || command === "--version") {
-    return { human: KERNEL_VERSION, exitCode: ExitCode.success };
+    return {
+      envelope: successResponse(crypto.randomUUID(), {
+        version: KERNEL_VERSION,
+        protocol: PROTOCOL_VERSION,
+      }),
+      human: KERNEL_VERSION,
+      exitCode: ExitCode.success,
+    };
   }
   if (command === "status") {
     if (args.length > 0) return usageOutcome(`status 不接受多余参数:${args.join(" ")}`);

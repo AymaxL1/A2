@@ -4,6 +4,7 @@
 // 否则测试只是把代码重算一遍、永远不会跟代码吵架。09 票的 Swift 侧读同一批样本做手写 Codable 对照。
 
 import { expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import {
   CONTRACT_SCHEMAS,
@@ -31,6 +32,19 @@ test("金标样本清单非空,且每个样本的 schema 名都是已登记契�
   for (const sample of index.samples) {
     expect(Object.keys(CONTRACT_SCHEMAS)).toContain(sample.schema);
   }
+});
+
+// 目录 ↔ index.json 双向核对:清单漏登记的样本文件永远不会被上面那两组测试跑到(孤儿样本 = 白写),
+// 清单里指向不存在文件的条目则会让 09 票的 Swift 侧对照直接读空。08/09 票要量产样本,这道门先立着。
+test("金标目录与 index.json 双向对齐:无孤儿文件,也无空头条目", () => {
+  const onDisk = readdirSync(GOLDEN_DIR)
+    .filter((name) => name.endsWith(".json") && name !== "index.json")
+    .sort();
+  const listed = index.samples.map((sample) => sample.file).sort();
+
+  expect(listed).toEqual(onDisk);
+  // 同一个文件登记两次 = 同一批断言跑两遍,清单也就不再是清单了。
+  expect(new Set(listed).size).toBe(listed.length);
 });
 
 for (const sample of index.samples.filter((s) => s.kind === "valid")) {

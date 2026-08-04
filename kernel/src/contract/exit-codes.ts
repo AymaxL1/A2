@@ -3,7 +3,11 @@
 // 数值沿用旧 `aa` 已锁定的表(`Sources/AAContracts/ExitCodes.swift`,行为规范参考),
 // 好让既有 agent 接入文档与脚本的判据不因改名而漂移:
 //   0 成功 / 1 用法错 / 2 denied / 3 超时 / 4 daemon 不可达 / 5 能力业务失败 / 6 协议·校验错
-// 03 票只用到 0、1、4;2/3/5/6 的使用面由 04(控制面)、08(仲裁)票接上,数值在此一次登记、后续不改。
+// 数值在此一次登记、后续不改。各值的产出面:
+//   0/1/4 —— 03 票(status、用法错、daemon 不可达);
+//   6     —— 03 票起即可达(坏包封/未知 op,以及自家 daemon 应答不符契约那条分支),04 票补上能力校验四码;
+//   2/5   —— 04 票(dangerous 默拒 = 2、能力业务失败 = 5);
+//   3     —— 尚无产出面(客户端超时目前按 daemon 不可达归 4;确认超时归 08 票)。
 
 import { ErrorCode } from "./wire.ts";
 
@@ -34,6 +38,8 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.daemonUnreachable:
       return ExitCode.daemonUnreachable;
     case ErrorCode.usage:
+    // 「已经在跑」不是能力失败也不是协议错,而是"你这条命令这会儿不该发" —— 与用法错同一档。
+    case ErrorCode.daemonAlreadyRunning:
       return ExitCode.usage;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:

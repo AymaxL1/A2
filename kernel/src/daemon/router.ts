@@ -15,9 +15,12 @@ import {
 } from "../contract/wire.ts";
 import { statusSnapshot, type KernelRuntime } from "./runtime.ts";
 
-type OpHandler = (request: RequestEnvelope, runtime: KernelRuntime) => JsonValue;
+type OpHandler = (
+  request: RequestEnvelope,
+  runtime: KernelRuntime,
+) => JsonValue | Promise<JsonValue>;
 
-/** op → handler。04 票的控制面命令、08 票的角色注册都往这张表上挂。 */
+/** op → handler。08 票的角色注册也往这张表上挂。 */
 const HANDLERS: Record<string, OpHandler> = {
   [Op.statusGet]: (_request, runtime) => statusSnapshot(runtime),
 };
@@ -26,11 +29,11 @@ const HANDLERS: Record<string, OpHandler> = {
 const KNOWN_OPS = Object.keys(HANDLERS).sort();
 
 /** 处理一行请求,返回一帧响应(含换行)。 */
-export function handleLine(line: string, runtime: KernelRuntime): string {
-  return encodeFrame(handleRequestLine(line, runtime));
+export async function handleLine(line: string, runtime: KernelRuntime): Promise<string> {
+  return encodeFrame(await handleRequestLine(line, runtime));
 }
 
-function handleRequestLine(line: string, runtime: KernelRuntime) {
+async function handleRequestLine(line: string, runtime: KernelRuntime) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -61,7 +64,7 @@ function handleRequestLine(line: string, runtime: KernelRuntime) {
   }
 
   try {
-    return successResponse(envelope.data.id, handler(envelope.data, runtime));
+    return successResponse(envelope.data.id, await handler(envelope.data, runtime));
   } catch (error) {
     return failureResponse(envelope.data.id, {
       code: ErrorCode.internalError,

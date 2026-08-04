@@ -6,6 +6,7 @@
 // 对端 UID 校验(getpeereid via bun:ffi)属仲裁面,08 票补 —— 本票先把文件权限这道门关死。
 
 import { chmod, mkdir, stat, unlink } from "node:fs/promises";
+import { LineBuffer } from "../contract/ndjson.ts";
 import { RUN_DIR_MODE, SOCKET_MODE, type KernelPaths } from "../runtime/paths.ts";
 import { handleLine } from "./router.ts";
 import type { KernelRuntime } from "./runtime.ts";
@@ -25,7 +26,9 @@ export interface KernelServer {
 }
 
 interface ConnectionState {
-  buffer: string;
+  lines: LineBuffer;
+  /** 同一连接上的应答串行化:handler 可以是异步的,但**响应顺序必须等于请求顺序**。 */
+  queue: Promise<void>;
 }
 
 export async function startKernelServer(runtime: KernelRuntime): Promise<KernelServer> {
@@ -37,18 +40,15 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
     unix: paths.socketPath,
     socket: {
       open(socket) {
-        socket.data = { buffer: "" };
+        socket.data = { lines: new LineBuffer(), queue: Promise.resolve() };
       },
       data(socket, chunk) {
         const state = socket.data;
-        state.buffer += chunk.toString();
-        // NDJSON:一次 data 可能带来半行、一行或多行,逐行吃干净,余料留在 buffer 里等下一片。
-        let newline = state.buffer.indexOf("\n");
-        while (newline >= 0) {
-          const line = state.buffer.slice(0, newline);
-          state.buffer = state.buffer.slice(newline + 1);
-          if (line.trim().length > 0) socket.write(handleLine(line, runtime));
-          newline = state.buffer.indexOf("\n");
+        for (const line of state.lines.push(chunk.toString())) {
+          // 串成一条链:上一条应答写完才处理下一条,请求-响应顺序天然对齐(handler 可异步)。
+          state.queue = state.queue.then(async () => {
+            socket.write(await handleLine(line, runtime));
+          });
         }
       },
     },
@@ -79,6 +79,9 @@ async function prepareRunDirectory(paths: KernelPaths): Promise<void> {
 /**
  * socket 文件存在时先探活:连得上 = 真有 daemon 在跑(拒绝启动);连不上 = 上次没收摊干净的残骸(删掉)。
  * 不这么做的话,bind 会直接 EADDRINUSE,而人看到的错误分不清"已经在跑"和"上次崩了"。
+ *
+ * 注:这里**只探连得上连不上**,不写请求也不读响应 —— 所以它不碰 NDJSON 拆行(`LineBuffer`),
+ * 空的 `data(){}` 只是 `Bun.connect` 的必填回调,不是又一份"读一行"实现。
  */
 async function clearStaleSocket(socketPath: string): Promise<void> {
   const exists = await stat(socketPath).then(

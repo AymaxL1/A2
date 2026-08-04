@@ -132,7 +132,13 @@ export async function waitForSocket(socketPath: string, timeoutMs = 5000): Promi
   throw new Error(`等 socket 超时(${timeoutMs}ms):${lastError}`);
 }
 
-/** 直连 UDS 发一行 JSON、读一行响应 —— 用于 UDS 协议面(绕开 CLI)的断言。 */
+/**
+ * 直连 UDS 发一行 JSON、读一行响应 —— 用于 UDS 协议面(绕开 CLI)的断言。
+ *
+ * **有意不复用 `src/contract/ndjson.ts` 与 `src/client/uds-client.ts`**:这是测试对线协议的**独立实现**。
+ * 若拆行或帧格式在实现侧写歪了,用被测代码去读被测代码的输出只会一起歪、测试照绿;这里手写一遍,
+ * 才能让"实现改了行为"与"契约变了"吵起来。08 票把 UDS 改成长连接时,这份夹具应当**独立地**跟着改。
+ */
 export async function sendRawLine(socketPath: string, line: string, timeoutMs = 5000): Promise<string> {
   let resolveResponse: (value: string) => void;
   let rejectResponse: (reason: Error) => void;

@@ -48,7 +48,7 @@ function startFailureOutcome(error: unknown, paths: KernelPaths): CommandOutcome
   const wireError =
     error instanceof AlreadyRunningError
       ? {
-          code: ErrorCode.usage,
+          code: ErrorCode.daemonAlreadyRunning,
           message: "该 A2_HOME 下已经有一个 daemon 在运行,不重复启动。",
           detail: error.message,
           guidance: {

@@ -1,0 +1,20 @@
+{
+  "title": "VersionResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocol": {
+      "type": "number",
+      "const": 1
+    }
+  },
+  "required": [
+    "version",
+    "protocol"
+  ],
+  "additionalProperties": false
+}

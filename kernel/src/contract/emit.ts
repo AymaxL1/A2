@@ -14,9 +14,11 @@ import path from "node:path";
 import { z } from "zod";
 import {
   GuidanceSchema,
+  HelpResultSchema,
   RequestEnvelopeSchema,
   ResponseEnvelopeSchema,
   StatusResultSchema,
+  VersionResultSchema,
   WireErrorSchema,
 } from "./wire.ts";
 
@@ -27,6 +29,8 @@ export const CONTRACT_SCHEMAS = {
   WireError: WireErrorSchema,
   Guidance: GuidanceSchema,
   StatusResult: StatusResultSchema,
+  VersionResult: VersionResultSchema,
+  HelpResult: HelpResultSchema,
 } as const;
 
 export type ContractName = keyof typeof CONTRACT_SCHEMAS;

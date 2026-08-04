@@ -1,0 +1,15 @@
+{
+  "title": "HelpResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "usage": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "usage"
+  ],
+  "additionalProperties": false
+}

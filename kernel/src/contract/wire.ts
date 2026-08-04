@@ -81,6 +81,8 @@ export const ErrorCode = {
   daemonUnreachable: "daemon_unreachable",
   /** CLI 用法错(未知子命令、缺参数),未触达 daemon 语义。 */
   usage: "usage",
+  /** 该 A2_HOME 下已经有一个 daemon 在监听 —— 不抢别人的 socket,报错退出。 */
+  daemonAlreadyRunning: "daemon_already_running",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -148,6 +150,24 @@ export const StatusResultSchema = z.object({
   socketPath: z.string().min(1),
 });
 export type StatusResult = z.infer<typeof StatusResultSchema>;
+
+/**
+ * `a2 version --json` 的 result。**没有对应的 op** —— 版本是 bin 自报的本地事实,不必往返 daemon;
+ * 但它照样是机读输出,所以照样是登记契约(`--json` 时 stdout 只有一条 JSON 包封,无一例外)。
+ */
+export const VersionResultSchema = z.object({
+  /** 内核版本(bin 与 daemon 天然同版本)。 */
+  version: z.string().min(1),
+  /** 本 bin 说的线协议版本。 */
+  protocol: z.literal(PROTOCOL_VERSION),
+});
+export type VersionResult = z.infer<typeof VersionResultSchema>;
+
+/** `a2 help --json`(以及缺子命令时)的 result:帮助文本本身。同样无 op、同样是登记契约。 */
+export const HelpResultSchema = z.object({
+  usage: z.string().min(1),
+});
+export type HelpResult = z.infer<typeof HelpResultSchema>;
 
 // MARK: - 构造器(包封只在这里拼,禁止各处手搓字面量)
 

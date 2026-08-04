@@ -45,6 +45,18 @@
       "why": "指引载荷本体:步骤可以只有说明、没有命令"
     },
     {
+      "file": "version-result.json",
+      "schema": "VersionResult",
+      "kind": "valid",
+      "why": "a2 version --json 的 result:版本号 + 本 bin 说的线协议版本"
+    },
+    {
+      "file": "help-result.json",
+      "schema": "HelpResult",
+      "kind": "valid",
+      "why": "a2 help --json 的 result:帮助文本本身(机读面也不留散文空洞)"
+    },
+    {
       "file": "invalid-request-missing-op.json",
       "schema": "RequestEnvelope",
       "kind": "invalid",
@@ -73,6 +85,12 @@
       "schema": "Guidance",
       "kind": "invalid",
       "why": "指引必须至少给出一步 —— 空指引等于没指引"
+    },
+    {
+      "file": "invalid-version-result-protocol-drift.json",
+      "schema": "VersionResult",
+      "kind": "invalid",
+      "why": "protocol 不是本版协议号:版本报文自己就得对得上号"
     }
   ]
 }
