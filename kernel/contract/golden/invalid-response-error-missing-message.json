@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "id": "req-0006",
+  "ok": false,
+  "error": {
+    "code": "bad_request"
+  }
+}

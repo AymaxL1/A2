@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "req-0002",
+  "ok": false,
+  "error": {
+    "code": "unknown_op",
+    "message": "未知 op:no.such.op",
+    "detail": "本版内核已登记的 op:status.get"
+  }
+}

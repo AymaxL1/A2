@@ -1,0 +1,78 @@
+{
+  "note": "金标报文样本(手写,非生成)。TS 侧 bun test 与 Swift 侧手写 Codable(09 票)对同一批样本编解码,契约漂移即门禁报警。valid 样本必须解析通过且往返后逐字段不变;invalid 样本必须被拒。",
+  "protocol": 1,
+  "samples": [
+    {
+      "file": "request-status-get.json",
+      "schema": "RequestEnvelope",
+      "kind": "valid",
+      "why": "最小请求:只有 v/id/op 三个必填字段"
+    },
+    {
+      "file": "request-with-params.json",
+      "schema": "RequestEnvelope",
+      "kind": "valid",
+      "why": "带 params 的请求:params 是任意 JSON 对象"
+    },
+    {
+      "file": "response-status-ok.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "成功包封:ok=true 带 result,不带 error"
+    },
+    {
+      "file": "status-result.json",
+      "schema": "StatusResult",
+      "kind": "valid",
+      "why": "status.get 的 result 载荷本体"
+    },
+    {
+      "file": "response-daemon-unreachable.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "拒绝即指引:失败包封带 guidance(summary + 精确命令步骤 + context 事实)"
+    },
+    {
+      "file": "response-unknown-op.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "失败包封的最小形态:只有 code/message/detail,没有 guidance"
+    },
+    {
+      "file": "guidance.json",
+      "schema": "Guidance",
+      "kind": "valid",
+      "why": "指引载荷本体:步骤可以只有说明、没有命令"
+    },
+    {
+      "file": "invalid-request-missing-op.json",
+      "schema": "RequestEnvelope",
+      "kind": "invalid",
+      "why": "缺必填 op"
+    },
+    {
+      "file": "invalid-request-wrong-protocol.json",
+      "schema": "RequestEnvelope",
+      "kind": "invalid",
+      "why": "协议版本不是 1"
+    },
+    {
+      "file": "invalid-response-ok-without-result.json",
+      "schema": "ResponseEnvelope",
+      "kind": "invalid",
+      "why": "ok=true 却没有 result"
+    },
+    {
+      "file": "invalid-response-error-missing-message.json",
+      "schema": "ResponseEnvelope",
+      "kind": "invalid",
+      "why": "error 缺 message(机器读 code、人读 message,两者都必填)"
+    },
+    {
+      "file": "invalid-guidance-empty-steps.json",
+      "schema": "Guidance",
+      "kind": "invalid",
+      "why": "指引必须至少给出一步 —— 空指引等于没指引"
+    }
+  ]
+}

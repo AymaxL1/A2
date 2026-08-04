@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "id": "018f3b1c-0a5a-7c3e-9f2b-1d4e5f6a7b8c",
+  "ok": false,
+  "error": {
+    "code": "daemon_unreachable",
+    "message": "a2 daemon 未在运行,或 socket 不可连接。",
+    "detail": "ENOENT: no such file or directory, connect '/Users/alice/.a2/run/kernel.sock'",
+    "guidance": {
+      "summary": "CLI 永不隐式拉起 daemon,请由人类显式安装或启动内核后重试。",
+      "steps": [
+        {
+          "description": "推荐:装成系统托管的常驻服务(开机自启与崩溃自愈都归系统 supervisor)",
+          "command": "a2 service install"
+        },
+        {
+          "description": "或:在一个终端里前台起常驻进程(调试用,Ctrl-C 结束)",
+          "command": "a2 daemon run"
+        }
+      ],
+      "context": {
+        "socketPath": "/Users/alice/.a2/run/kernel.sock",
+        "home": "/Users/alice/.a2"
+      }
+    }
+  }
+}

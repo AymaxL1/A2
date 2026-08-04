@@ -1,0 +1,12 @@
+{
+  "summary": "dangerous 能力需要确认器在场,当前没有任何确认器连接。",
+  "steps": [
+    {
+      "description": "在 Mac 上启动菜单栏壳并保持它运行,它会注册为确认器",
+      "command": "open -a \"A2 Panel\""
+    },
+    {
+      "description": "回到菜单栏图标,在弹出的确认框里亲自点「允许」"
+    }
+  ]
+}

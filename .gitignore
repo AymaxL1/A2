@@ -1,3 +1,8 @@
 .DS_Store
 .build/
 .claude/worktrees/
+
+# kernel/（TS 内核）：依赖与编译产物不入库
+# dist/a2 是 bun build --compile 的单文件产物，约 60MiB
+kernel/node_modules/
+kernel/dist/

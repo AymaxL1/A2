@@ -1,0 +1,10 @@
+{
+  "state": "running",
+  "version": "0.1.0",
+  "protocol": 1,
+  "pid": 4242,
+  "startedAt": "2026-08-05T02:15:30.000Z",
+  "uptimeMs": 125000,
+  "home": "/Users/alice/.a2",
+  "socketPath": "/Users/alice/.a2/run/kernel.sock"
+}
