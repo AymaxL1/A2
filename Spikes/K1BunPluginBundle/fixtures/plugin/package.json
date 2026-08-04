@@ -1,0 +1,15 @@
+{
+  "name": "k1-dep-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preinstall": "echo ran > ROOT_PREINSTALL_RAN",
+    "postinstall": "echo ran > ROOT_POSTINSTALL_RAN",
+    "prepare": "echo ran > ROOT_PREPARE_RAN"
+  },
+  "dependencies": {
+    "picocolors": "1.1.1",
+    "a2-lifecycle-probe": "file:./a2-lifecycle-probe-1.0.0.tgz"
+  }
+}

@@ -1,0 +1,1 @@
+NOT-A-REAL-NATIVE-ADDON — K1 spike 占位文件，只为触发 bun bundler 对 .node 扩展名的处理路径。

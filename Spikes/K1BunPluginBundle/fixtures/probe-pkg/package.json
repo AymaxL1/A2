@@ -1,0 +1,9 @@
+{
+  "name": "a2-lifecycle-probe",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "preinstall": "echo ran > DEP_PREINSTALL_RAN",
+    "postinstall": "echo ran > DEP_POSTINSTALL_RAN"
+  }
+}
