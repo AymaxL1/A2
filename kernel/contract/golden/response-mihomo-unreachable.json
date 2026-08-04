@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "id": "018f7b31-2c55-7a02-93bd-5e0f7a1c94d2",
+  "ok": false,
+  "error": {
+    "code": "mihomo_unreachable",
+    "message": "配置里写着的 mihomo external-controller 连不上,收编不成立。",
+    "detail": "GET http://127.0.0.1:9090/version 失败:TypeError: Unable to connect. Is the computer able to access the url?",
+    "guidance": {
+      "summary": "被收编的实例其生命周期归原托管方 —— 内核只报警和指路,绝不替你重启它。",
+      "steps": [
+        {
+          "description": "按你原本的方式把它拉起来(下面是等价的前台命令,拿去改成你自己的托管方式)",
+          "command": "/usr/local/bin/mihomo -d /Users/alice/.config/mihomo -f /Users/alice/.config/mihomo/config.yaml"
+        },
+        {
+          "description": "拉起来之后重新检测",
+          "command": "a2 mihomo status --json"
+        },
+        {
+          "description": "或者让 a2 装一份自管实例(与你那份并存,入站端口需你自行避开冲突)",
+          "command": "a2 mihomo install --isolated"
+        }
+      ],
+      "context": {
+        "controller": "127.0.0.1:9090",
+        "configFile": "/Users/alice/.config/mihomo/config.yaml",
+        "home": "/Users/alice/.a2"
+      }
+    }
+  }
+}

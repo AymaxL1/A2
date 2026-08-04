@@ -141,6 +141,66 @@
       "why": "服务面拒绝之二:supervisor 命令失败(退出码 5),指引里带着那条能原样重跑的命令"
     },
     {
+      "file": "mihomo-status-absent.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "现状三态之一(全无):档位=脚本安装,未就位时也要给出 unit/二进制/配置将落到哪儿"
+    },
+    {
+      "file": "mihomo-status-adopted.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "收编档:instance.owner=foreign(生命周期归原托管方),能力位三条都是探出来的,a2 自己那份仍未安装"
+    },
+    {
+      "file": "mihomo-status-reused.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "只读复用档:binaryKind=reused + binaryTarget 指向真身(内核从不写它),自管实例在跑"
+    },
+    {
+      "file": "mihomo-status-fallback.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "复用对象不达地板 → 回退隔离安装(fallback 说明原因);另含被跳过的非回环控制端点"
+    },
+    {
+      "file": "mihomo-change-adopted.json",
+      "schema": "MihomoChangeResult",
+      "kind": "valid",
+      "why": "收编档 install 的 result:唯一动作是记下收编对象,不装二进制、不写 unit"
+    },
+    {
+      "file": "mihomo-change-install.json",
+      "schema": "MihomoChangeResult",
+      "kind": "valid",
+      "why": "脚本安装档 install 的 result:数据目录 + 配置 + 下载校验落位 + unit + 装载"
+    },
+    {
+      "file": "response-mihomo-unreachable.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "被收编的实例死了:报警 + 指引里带**人类可执行的重启命令**,内核不越权重拉(退出码 5)"
+    },
+    {
+      "file": "response-mihomo-below-floor.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "收编对象不达兼容地板:结构化降级报告 + 两条明路,内核不擅自升级别人的东西(退出码 5)"
+    },
+    {
+      "file": "invalid-mihomo-status-fourth-rung.json",
+      "schema": "MihomoStatusResult",
+      "kind": "invalid",
+      "why": "阶梯档位不在三档内 —— 档位是 agent 的分支依据,不许有第四档"
+    },
+    {
+      "file": "invalid-mihomo-change-unknown-action.json",
+      "schema": "MihomoChangeResult",
+      "kind": "invalid",
+      "why": "动作不在已登记词表内(这里故意写成 foreign_instance_restarted —— 内核永远不会做的那件事)"
+    },
+    {
       "file": "invalid-request-missing-op.json",
       "schema": "RequestEnvelope",
       "kind": "invalid",

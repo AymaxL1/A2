@@ -113,6 +113,23 @@ export const ErrorCode = {
    * 与「参数不对」分开(那是 6),这一档是"路走通了、事没办成",退出码 5。
    */
   serviceOperationFailed: "service_operation_failed",
+
+  // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
+
+  /**
+   * 该走的那个 mihomo external-controller 连不上(或鉴权不过)。
+   * **收编档的核心分支**:被收编的实例是别人托管的,它没了只能报警 + 指引,内核绝不越权重拉。
+   */
+  mihomoUnreachable: "mihomo_unreachable",
+  /** 要用的 mihomo 版本/能力位不达兼容地板。内核**不擅自升级别人的东西**,只给结构化降级报告与指引。 */
+  mihomoBelowFloor: "mihomo_below_floor",
+  /**
+   * 这件事只能对 **a2 自管的** mihomo 做,而当前那份不归 a2 管(被收编的实例 / 只读复用的二进制)。
+   * 这是「生命周期归原托管方」这条红线在报文上的投影。
+   */
+  mihomoNotManaged: "mihomo_not_managed",
+  /** mihomo 操作执行了但没成:下载失败、摘要对不上、落位失败、unit 装了却没跑起来。 */
+  mihomoOperationFailed: "mihomo_operation_failed",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -342,6 +359,194 @@ export const ServiceChangeResultSchema = z.object({
   actions: z.array(ServiceActionSchema),
 });
 export type ServiceChangeResult = z.infer<typeof ServiceChangeResultSchema>;
+
+// MARK: - mihomo 共存面 result(06 票)
+//
+// 与服务面同一种口径:**没有对应的 op**。「本机 mihomo 是个什么现状」问的是文件系统、supervisor 与
+// external-controller,不是 daemon 自己;daemon 没跑的时候这几条命令更要能答话。
+//
+// 一条贯穿本节的语义红线:**被收编的实例其生命周期归原托管方**。内核对它只做只读探测与配置面接管,
+// 绝不 stop/restart/kill;凡是"只能对 a2 自管那份做"的动作,对它一律返回 `mihomo_not_managed`。
+
+/**
+ * 本机 mihomo 现状三态(取值即契约):
+ *   * `running_instance` —— 有跑着的实例,且它的 external-controller 可达;
+ *   * `binary_only` —— 盘上有 mihomo 二进制,但没有可达的实例;
+ *   * `absent` —— 两样都没有。
+ */
+export const MihomoPresenceSchema = z.enum(["running_instance", "binary_only", "absent"]);
+export type MihomoPresence = z.infer<typeof MihomoPresenceSchema>;
+
+/**
+ * 共存阶梯三档(spec「共存 = 检测并优先复用,复用到实例级」):
+ *   * `adopt_instance` —— 收编跑着的实例:经 API 接管配置与存活监督,**进程生死归原托管方**;
+ *   * `reuse_binary` —— 只读复用既有二进制:配置/数据目录与 `com.a2.mihomo` unit 全套自建;
+ *   * `managed_install` —— 全无(或显式隔离):按锁定版下载校验落位,再挂 `com.a2.mihomo` unit。
+ */
+export const MihomoRungSchema = z.enum(["adopt_instance", "reuse_binary", "managed_install"]);
+export type MihomoRung = z.infer<typeof MihomoRungSchema>;
+
+/** 实例归属:`a2` = `com.a2.mihomo` 托管的那份;`foreign` = 别人的(内核只读不碰生死)。 */
+export const MihomoOwnerSchema = z.enum(["a2", "foreign"]);
+export type MihomoOwner = z.infer<typeof MihomoOwnerSchema>;
+
+/**
+ * 能力位 —— **观察到的事实,不是推断**:每一位都对应一次真实探测。
+ *   * `rest_api` —— `GET /version` 应答了;
+ *   * `meta_core` —— `/version` 的 `meta` 为真(mihomo 系内核,不是原版 clash);
+ *   * `configs_read` —— `GET /configs` 读得到(07 票的配置面要靠它)。
+ */
+export const MihomoCapabilitySchema = z.enum(["rest_api", "meta_core", "configs_read"]);
+export type MihomoCapability = z.infer<typeof MihomoCapabilitySchema>;
+
+/** 兼容地板的不达标项(机读词表,不是自由文本 —— 它是 agent 分支与审计的素材)。 */
+export const MihomoShortfallSchema = z.enum([
+  /** 问不出版本(`-v` 不认、`/version` 不给)。 */
+  "version_unknown",
+  /** 版本低于兼容地板。 */
+  "version_below_floor",
+  /** external-controller 不可达(或鉴权不过)。 */
+  "rest_api_unreachable",
+  /** 不是 mihomo 系内核(`/version` 的 meta 不为真)。 */
+  "not_meta_core",
+  /** `GET /configs` 读不到。 */
+  "configs_unreadable",
+]);
+export type MihomoShortfall = z.infer<typeof MihomoShortfallSchema>;
+
+/** 兼容地板判定。`meets=false` 时 `shortfalls` 非空,且拒绝报文必带指引(内核不擅自升级)。 */
+export const MihomoCompatibilitySchema = z.object({
+  /** 地板版本(内核编译期常量)。 */
+  floor: z.string().min(1),
+  meets: z.boolean(),
+  /** 被判定的那份东西的版本(问不出时缺省)。 */
+  version: z.string().optional(),
+  shortfalls: z.array(MihomoShortfallSchema),
+});
+export type MihomoCompatibility = z.infer<typeof MihomoCompatibilitySchema>;
+
+/** 一个可达实例的事实。 */
+export const MihomoInstanceSchema = z.object({
+  owner: MihomoOwnerSchema,
+  /** external-controller 地址(恒为回环:非回环端点内核不探测)。 */
+  controller: z.string().min(1),
+  /** 该端点是否需要 secret(有配置到 secret 即真)。 */
+  secretConfigured: z.boolean(),
+  version: z.string().optional(),
+  capabilities: z.array(MihomoCapabilitySchema),
+  /** controller 地址是从哪份配置里读到的(显式指定时缺省)。 */
+  configFile: z.string().optional(),
+});
+export type MihomoInstance = z.infer<typeof MihomoInstanceSchema>;
+
+/** 盘上一份 mihomo 二进制的事实。 */
+export const MihomoBinarySchema = z.object({
+  path: z.string().min(1),
+  version: z.string().optional(),
+});
+export type MihomoBinary = z.infer<typeof MihomoBinarySchema>;
+
+/**
+ * a2 自管二进制的形态:
+ *   * `absent` —— 还没就位;
+ *   * `downloaded` —— 按锁定版下载校验落位的真文件;
+ *   * `reused` —— 指向既有二进制的**符号链接**(只读复用:内核从不写那个真身)。
+ */
+export const MihomoBinaryKindSchema = z.enum(["absent", "downloaded", "reused"]);
+export type MihomoBinaryKind = z.infer<typeof MihomoBinaryKindSchema>;
+
+/** a2 自管那一份(`com.a2.mihomo`)的落点与状态。未就位时路径照样给出:那是就位会写的位置。 */
+export const MihomoManagedSchema = z.object({
+  /** unit 名(恒为 `com.a2.mihomo`;它与 `com.a2.kernel` 各自独立 —— 数据面不随控制面起落)。 */
+  label: z.string().min(1),
+  supervisor: SupervisorKindSchema,
+  unitPath: z.string().min(1),
+  unitInstalled: z.boolean(),
+  /** 与 `a2 service status` 同一套三态,取 supervisor 视角。 */
+  state: ServiceStateSchema,
+  pid: z.number().int().positive().optional(),
+  binaryKind: MihomoBinaryKindSchema,
+  binaryPath: z.string().min(1),
+  /** `reused` 时符号链接指向的真身路径。 */
+  binaryTarget: z.string().optional(),
+  version: z.string().optional(),
+  configPath: z.string().min(1),
+  dataDir: z.string().min(1),
+  controller: z.string().min(1),
+});
+export type MihomoManaged = z.infer<typeof MihomoManagedSchema>;
+
+/** `a2 mihomo status` 的 result:现状 + 将采用的阶梯档位 + 兼容地板 + 双方各自的事实。 */
+export const MihomoStatusResultSchema = z.object({
+  presence: MihomoPresenceSchema,
+  rung: MihomoRungSchema,
+  /** a2 这边是否已就位(判据 = `com.a2.mihomo` 的 unit 文件在不在)。 */
+  provisioned: z.boolean(),
+  /** 脚本安装档会装的锁定版;`a2 mihomo upgrade` 也只升到它。 */
+  lockedVersion: z.string().min(1),
+  /** 当前可达的实例(a2 自管优先;都没有则缺省)。 */
+  instance: MihomoInstanceSchema.optional(),
+  /** 盘上找到的**别人的**二进制(复用档的复用对象)。 */
+  foreignBinary: MihomoBinarySchema.optional(),
+  managed: MihomoManagedSchema,
+  compatibility: MihomoCompatibilitySchema,
+  /**
+   * 档位是**回退**来的时候的原委(spec「兼容性不达标回退隔离安装」)。
+   * 只在"本来要复用、但那份不达地板"时出现 —— 收编档不回退(见 `reason` 里写明的理由)。
+   */
+  fallback: z
+    .object({
+      from: MihomoRungSchema,
+      shortfalls: z.array(MihomoShortfallSchema),
+      reason: z.string().min(1),
+    })
+    .optional(),
+  /** 配置里写着、但不是回环地址因而**内核有意没去探**的 external-controller(如实报告,不静默丢弃)。 */
+  skippedController: z.string().optional(),
+  home: z.string().min(1),
+});
+export type MihomoStatusResult = z.infer<typeof MihomoStatusResultSchema>;
+
+/**
+ * mihomo 面的收敛动作(审计素材,词表封闭)。unit 那几个与服务面同名同义;
+ * 二进制/配置那几个是本面独有。**没有任何一个动作作用在被收编的实例上** —— 那是设计,不是遗漏。
+ */
+export const MihomoActionSchema = z.enum([
+  /**
+   * 记下了「我收编的是这个实例」。**这是收编档唯一会落盘的东西**(a2 自己 home 里的一个小记录),
+   * 不装二进制、不写 unit、不碰对方一根汗毛 —— 但有了它,"我收编的那个实例死了"才是一句有主语的话。
+   */
+  "adoption_recorded",
+  /** 解除收编(卸载,或显式改走隔离安装)。同样只动 a2 自己的记录。 */
+  "adoption_released",
+  /** 建了 a2 自管的数据目录。 */
+  "data_dir_created",
+  /** 写(或收敛)了 a2 自管的配置文件。 */
+  "config_written",
+  /** 按锁定版下载 + 校验 + 落位了二进制。 */
+  "binary_downloaded",
+  /** 建了指向既有二进制的符号链接(只读复用)。 */
+  "binary_linked",
+  /** 显式升级把自管二进制换成了锁定版。 */
+  "binary_upgraded",
+  "unit_written",
+  "unit_removed",
+  "supervisor_loaded",
+  "supervisor_unloaded",
+  "supervisor_reloaded",
+  /** 拉起了 a2 自管的 mihomo 进程。 */
+  "mihomo_started",
+  /** 重启了 a2 自管的 mihomo 进程(unit 漂移收敛 / 升级换版之后)。 */
+  "mihomo_restarted",
+]);
+export type MihomoAction = z.infer<typeof MihomoActionSchema>;
+
+/** `a2 mihomo install|uninstall|upgrade` 的 result:收敛后的状态 + 本次真改了什么(空数组 = 本来就这样)。 */
+export const MihomoChangeResultSchema = z.object({
+  status: MihomoStatusResultSchema,
+  actions: z.array(MihomoActionSchema),
+});
+export type MihomoChangeResult = z.infer<typeof MihomoChangeResultSchema>;
 
 /** `capabilities.describe` 的 params。 */
 export const CapabilityDescribeParamsSchema = z.object({

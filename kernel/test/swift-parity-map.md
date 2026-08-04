@@ -119,6 +119,54 @@
 
 ---
 
+## 06 票登记:mihomo 共存阶梯(检测 + 三档 + 兼容地板 + 显式升级)
+
+### A. `Scripts/check/mihomo-real-e2e.sh`(锁版真内核 E2E,两组)
+
+| # | 旧断言 | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| 1 | 锁版内核 SHA-256 与清单一致(比对随包二进制) | **映射(形态改判)** | 新架构**不随包分发** mihomo,所以"比对随包物"变成"**下载物必须对得上锁定版摘要,否则一个字节都不落盘**":`cli-mihomo.test.ts` ▸ 摘要对不上就 fail-closed;摘要与版本的单一来源同源核对见 ▸ 锁版元数据与旧仓那份实测记录同源 |
+| 2 | 锁版真 mihomo 接受最小配置(`-t` 校验)/ 已启动且 REST `/version` 可达 | 映射 | ▸ 脚本安装档(下载→落位→unit→起来)与 ▸ 复用档末段:install 返回后 `status` 必须报 `running_instance` 且 `owner=a2`(**判据落在"控制面真的答话"上**,不是 pid) |
+| 3 | 真内核报告锁定版本 / `/configs` 报告预期 mixed-port | 部分映射 + 顺延 07 | 版本读回在 ▸ 脚本安装档(`managed.version` = 锁定版);`/configs` 的**内容**面(mode/端口/节点)归 07 票 —— 本票只用它做能力位 `configs_read` 的探针 |
+| 4 | E2E 结束不留孤儿 / 宿主退出后真内核已回收 | **改判(反向)** | 旧架构里"宿主退出必须回收内核"是对的(内核是宿主的子进程);新架构**恰恰相反** —— 数据面不随控制面起落。对应断言是 ▸ 数据面不随控制面起落:卸掉内核后 mihomo 的 pid **必须没变**。孤儿回收的责任移交系统 supervisor(`com.a2.mihomo`) |
+| 5 | 真核状态 E2E 未修改系统代理后端 | 顺延 07 | 系统代理接管整体归 07 票 |
+
+### B. `Tests/AAHostTestKitTests/ProxyConformanceTests.swift`(与"内核在不在"相关的 5 条)
+
+| 旧断言(@Test 名节选) | 处置 | 新 TS 测试 |
+|---|---|---|
+| 假 ProcessPort:拉起后探活为真 / 终止后探活为假 / 外部死亡后探活为假 | **合并 + 改判** | 存活探测不再是"宿主探自己的子进程",而是 **supervisor 视角 + external-controller 探针**两条独立事实:▸ 复用档(`managed.state=running` + pid 真活着)/ ▸ 被收编的实例死了(能力位归零、`rest_api_unreachable`) |
+| 假 ProcessPort:回收调用被记录(反孤儿可核验) | 淘汰 | 新架构里内核不再是任何 mihomo 的父进程,没有"回收"这件事可记 |
+| status 域逻辑:内核存活 → running=true(反映 mode/端口/节点/apiReachable) | 拆分映射 | "在不在 + 控制面通不通"映射为 `presence` + `capabilities`(▸ 跑着别人的实例:三条能力位都是探出来的);mode/端口/节点归 **07 票** |
+| status 域逻辑:内核死亡 / 无句柄 → running=false(**如实未运行,不报错**) | 映射 | ▸ 本机全无 → `presence=absent`、**退出码 0**(「没有」是合法答案,不是查询失败;与 `a2 service status` 同一口径) |
+| status 域逻辑:进程活但 REST 不可达 → running 仍 true、apiReachable=false | 映射(词换了) | 同一件事的新说法:进程面(`managed.state`/`pid`)与控制面(`capabilities` 含不含 `rest_api`)是两条独立事实,▸ 被收编的实例死了 断言的正是"档位还在、能力位空了" |
+| 插件能力 12 条的暴露与风险档 / mode.set / node.select / latency / groups.list | 顺延 07 | 代理行为对等整体归 07 票(04 票 D 组已列账) |
+
+### C. 06 票自己的新账(供 07/10 票对照)
+
+| # | 行为 | 断言落点 |
+|---|---|---|
+| 1 | 检测机读三态(`running_instance` / `binary_only` / `absent`)+ 将采用的档位,三态都退出码 0 | `cli-mihomo.test.ts` ▸ 全无 / ▸ 只有二进制 / ▸ 跑着别人的实例 |
+| 2 | **扫描面全注入**:二进制目录、配置路径、控制端点、发布渠道、自管端口全部可整条替换 | 整份测试文件的沙盒(默认值另有纯计算断言:▸ 扫描面默认值) |
+| 3 | **只连回环**:非回环 external-controller 有意不探,如实报告 | ▸ 非回环 → `skippedController` + 降回二进制档;▸ 扫描面默认值(`loopbackTarget` 正反例) |
+| 4 | 收编档:只记一笔收编,不装二进制/不写 unit,那个实例的 pid 全程不变;幂等 | ▸ 收编档只记一笔收编 |
+| 5 | 收编档不达地板 → 结构化拒绝 + 两条明路,**不擅自升级、不擅自并存** | ▸ 收编对象不达兼容地板 |
+| 6 | 被收编的实例死了 → 报警 + 指引(**含人类可执行的重启命令**),内核不越权重拉 | ▸ 被收编的实例死了(指引里那条命令逐字断言) |
+| 7 | 复用档:落点是符号链接、真身零改动、配置/数据/unit 自建、控制面真通 | ▸ 复用档 |
+| 8 | 复用对象不达地板 → 回退隔离安装并在报文里说明原因 | ▸ 复用对象不达地板 |
+| 9 | 脚本安装档:锁定版下载 → SHA-256 校验 → 可执行落位 → unit → 起来 | ▸ 脚本安装档 |
+| 10 | 摘要不符 → fail-closed,**落点上一个字节都没写** | ▸ 摘要对不上就 fail-closed(去掉校验即红,已验) |
+| 11 | **升级永远显式**:install 绝不换版本,只有 upgrade 换,且换完重启到新二进制 | ▸ 升级永远显式(去掉"已有就不下载"即红,已验) |
+| 12 | 升级只对自管那份有效:收编档/复用档一律 `mihomo_not_managed` | ▸ 收编档没有可升级的对象 / ▸ 只读复用档同样拒绝 |
+| 13 | **数据面不随控制面起落**:卸内核不动 mihomo(unit 还在、pid 没变);卸 mihomo 保留数据资产 | ▸ 数据面不随控制面起落 |
+| 14 | 红线:整场只对 `com.a2.kernel` / `com.a2.mihomo` 两个 label 说过话 | ▸ 红线(逐条命令原文核对)|
+| 15 | mihomo 的自愈自启归系统 supervisor(`KeepAlive.Crashed` / `Restart=on-failure`) | ▸ 复用档(plist 键逐条断言);**真 supervisor 的自愈只有活体冒烟能验**,mihomo 侧的活体冒烟顺延(理由见下) |
+
+**一处做不到项(如实记账)**:mihomo 侧**没有**对应 `scripts/service-live-smoke.sh` 的活体冒烟。理由是本票最硬的施工红线 ——
+活体冒烟意味着对真 launchd bootstrap 一个 `com.a2.mihomo`、并让它拉起一个真 mihomo,而本机正跑着用户自己的 mihomo。
+unit 内容与编排在假件上逐条有断言,真 supervisor 的自愈语义已由 05 票的活体冒烟证过(同一套 plist 键、同一套渲染器)。
+若要补,应与 5 条人工项同批、在干净机器上做。
+
 ## 有意的契约变更(不是丢失,是改判 —— 逐条有出处)
 
 1. **`--json` 输出一律是包封**。旧 `aa` 的 list/describe/call 直接打裸 payload(`{"capabilities":[…]}`、
@@ -152,3 +200,16 @@
    **两档的区分被保留了,少的只是一个码名**。理由:`usage` 的语义就是"这条命令行不成立",再分一个码
    对 agent 的分支没有新增信息量,而每多一个码 Swift 侧(09 票)与插件侧都要多认一次。
    对应旧断言见 C 组 2M 行(那里只在映射行内提过一句,此处正式记账)。
+11. **mihomo 的"回收/反孤儿"整族淘汰,取而代之的是它的反面**。旧架构里 mihomo 是宿主的子进程,所以
+   `ProxyConformanceTests` 与 `mihomo-real-e2e.sh` 有一整族"宿主退出必须回收内核 / 不留孤儿"的断言。
+   新架构下 mihomo 挂**自己的** `com.a2.mihomo` unit,数据面不随控制面起落(spec/ADR 0007 修订版)——
+   于是那族断言的正确形态是**反过来的**:卸掉内核之后 mihomo 的 pid 必须**没变**(06 票 C 组 13)。
+   这不是丢失,是同一个位置换了一条相反的承诺。
+12. **锁版校验从"比对随包物"改判为"比对下载物"**。旧门禁 MK 组比对的是仓库里那份随包二进制的 SHA-256;
+   新架构不分发 GPL 二进制(ADR 0007 修订版),锁版的技术含义变成:下载物必须对得上摘要,否则 fail-closed
+   且不落半成品。锁定版号与摘要仍**同源于**旧仓 `Sources/PluginProxy/Resources/MIHOMO-VERSION.txt`
+   (有一条测试当场核对两处,换版本必须一起改)——⑤票旧 Swift 面退场时,这个来源要跟着搬家。
+13. **`a2 mihomo` 不是能力,是 CLI 本地命令族**(与 `a2 service` 同一种安排)。04 票的提醒说"真能力往
+   `BUILTIN_CAPABILITIES` 上加",那指的是 07 票的代理能力(`proxy.mode.set` 之类,必须经 daemon)。
+   而"本机 mihomo 是个什么现状"问的是文件系统、supervisor 与 external-controller,**daemon 没跑时更要能答话**,
+   所以它与 `a2 service` 一样不进注册表、不经 UDS,只是机读面完全一致(agent 看不出区别)。

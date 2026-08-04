@@ -19,6 +19,8 @@ import {
   CapabilityListResultSchema,
   GuidanceSchema,
   HelpResultSchema,
+  MihomoChangeResultSchema,
+  MihomoStatusResultSchema,
   RequestEnvelopeSchema,
   ResponseEnvelopeSchema,
   ServiceChangeResultSchema,
@@ -43,6 +45,8 @@ export const CONTRACT_SCHEMAS = {
   CapabilityCallResult: CapabilityCallResultSchema,
   ServiceStatusResult: ServiceStatusResultSchema,
   ServiceChangeResult: ServiceChangeResultSchema,
+  MihomoStatusResult: MihomoStatusResultSchema,
+  MihomoChangeResult: MihomoChangeResultSchema,
 } as const;
 
 export type ContractName = keyof typeof CONTRACT_SCHEMAS;

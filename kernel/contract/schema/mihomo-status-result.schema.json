@@ -1,0 +1,255 @@
+{
+  "title": "MihomoStatusResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "presence": {
+      "type": "string",
+      "enum": [
+        "running_instance",
+        "binary_only",
+        "absent"
+      ]
+    },
+    "rung": {
+      "type": "string",
+      "enum": [
+        "adopt_instance",
+        "reuse_binary",
+        "managed_install"
+      ]
+    },
+    "provisioned": {
+      "type": "boolean"
+    },
+    "lockedVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instance": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secretConfigured": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "rest_api",
+              "meta_core",
+              "configs_read"
+            ]
+          }
+        },
+        "configFile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "secretConfigured",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "foreignBinary": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "managed": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supervisor": {
+          "type": "string",
+          "enum": [
+            "launchd",
+            "systemd"
+          ]
+        },
+        "unitPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unitInstalled": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "not_installed",
+            "installed_not_running",
+            "running"
+          ]
+        },
+        "pid": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "binaryKind": {
+          "type": "string",
+          "enum": [
+            "absent",
+            "downloaded",
+            "reused"
+          ]
+        },
+        "binaryPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "binaryTarget": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "configPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "label",
+        "supervisor",
+        "unitPath",
+        "unitInstalled",
+        "state",
+        "binaryKind",
+        "binaryPath",
+        "configPath",
+        "dataDir",
+        "controller"
+      ],
+      "additionalProperties": false
+    },
+    "compatibility": {
+      "type": "object",
+      "properties": {
+        "floor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "meets": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "shortfalls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "version_unknown",
+              "version_below_floor",
+              "rest_api_unreachable",
+              "not_meta_core",
+              "configs_unreadable"
+            ]
+          }
+        }
+      },
+      "required": [
+        "floor",
+        "meets",
+        "shortfalls"
+      ],
+      "additionalProperties": false
+    },
+    "fallback": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "enum": [
+            "adopt_instance",
+            "reuse_binary",
+            "managed_install"
+          ]
+        },
+        "shortfalls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "version_unknown",
+              "version_below_floor",
+              "rest_api_unreachable",
+              "not_meta_core",
+              "configs_unreadable"
+            ]
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "from",
+        "shortfalls",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "skippedController": {
+      "type": "string"
+    },
+    "home": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "presence",
+    "rung",
+    "provisioned",
+    "lockedVersion",
+    "managed",
+    "compatibility",
+    "home"
+  ],
+  "additionalProperties": false
+}

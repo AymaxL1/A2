@@ -13,10 +13,17 @@ import type { SupervisorKind } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 
 /**
- * 唯一的 unit 名。**内核只碰这一个 label** —— launchctl/systemctl 的所有目标都由它拼出来,
- * 任何命令行参数都改不了它(`a2 service` 不接受 label 参数,这是有意的边界)。
+ * 内核自己的 unit 名。**launchctl/systemctl 的所有目标都由 plan.label 拼出**,
+ * 而 plan.label 只可能是本文件这两个常量之一 —— 任何命令行参数、任何环境变量都改不了它
+ * (`a2 service` / `a2 mihomo` 都不接受 label 参数,这是有意的边界)。
  */
 export const SERVICE_LABEL = "com.a2.kernel";
+
+/**
+ * a2 自管 mihomo 的 unit 名(06 票)。**与 `com.a2.kernel` 各自独立** —— 这就是
+ * 「数据面不随控制面起落」在系统托管层的落点:卸掉内核不动它,内核崩了也不影响它被系统重拉。
+ */
+export const MIHOMO_SERVICE_LABEL = "com.a2.mihomo";
 
 /** 覆写 supervisor 选择。**仅供测试与诊断**:在 macOS 上跑一遍 Linux 代码路径(实机验收顺延)。 */
 export const SUPERVISOR_ENV = "A2_SERVICE_SUPERVISOR";
@@ -25,6 +32,9 @@ export const SUPERVISOR_ENV = "A2_SERVICE_SUPERVISOR";
 export const LOG_DIR_NAME = "log";
 export const STDOUT_LOG_NAME = "kernel.out.log";
 export const STDERR_LOG_NAME = "kernel.err.log";
+/** a2 自管 mihomo 的日志(与内核同一个 log 目录、不同文件名 —— 两条命的日志不该混在一起看)。 */
+export const MIHOMO_STDOUT_LOG_NAME = "mihomo.out.log";
+export const MIHOMO_STDERR_LOG_NAME = "mihomo.err.log";
 
 /** unit 文件权限:plist 需 0644(launchd 对宽松权限的 plist 会拒绝装载)。 */
 export const UNIT_FILE_MODE = 0o644;
@@ -138,6 +148,65 @@ export function servicePlan(
   };
 }
 
+/** a2 自管 mihomo 的落点(由 `src/mihomo/paths.ts` 算出;这里只当结构体用,不反向依赖那一层)。 */
+export interface MihomoUnitSpec {
+  /** unit 里跑的可执行(恒为 a2 自管落点:下载的真文件,或指向既有二进制的符号链接)。 */
+  binaryPath: string;
+  /** mihomo 的 `-d`(工作目录:缓存、geo 库)。 */
+  dataDir: string;
+  /** mihomo 的 `-f`(配置文件)。 */
+  configPath: string;
+}
+
+/**
+ * `com.a2.mihomo` 的 unit 计划。与内核那份**同一套渲染器、同一套自愈自启语义**
+ * (launchd `KeepAlive.Crashed` + `RunAtLoad`;systemd `Restart=on-failure` + `WantedBy=default.target`)——
+ * 「杀掉 mihomo 进程由系统按策略重拉」这条票面要求就落在这里,应用层同样不造看门狗。
+ *
+ * 有意**不**注入 `A2_HOME`:mihomo 不认识这个变量,它的一切都由 `-d`/`-f` 两个绝对路径决定。
+ */
+export function mihomoServicePlan(
+  kind: SupervisorKind,
+  paths: KernelPaths,
+  mihomo: MihomoUnitSpec,
+  env: Record<string, string | undefined> = process.env,
+): ServicePlan {
+  const programArguments = [mihomo.binaryPath, "-d", mihomo.dataDir, "-f", mihomo.configPath];
+  const logDir = path.join(paths.home, LOG_DIR_NAME);
+
+  if (kind === "launchd") {
+    return {
+      kind,
+      label: MIHOMO_SERVICE_LABEL,
+      unitPath: path.join(launchAgentsDir(env), `${MIHOMO_SERVICE_LABEL}.plist`),
+      unitContent: renderLaunchdPlist({
+        label: MIHOMO_SERVICE_LABEL,
+        programArguments,
+        environment: {},
+        stdoutPath: path.join(logDir, MIHOMO_STDOUT_LOG_NAME),
+        stderrPath: path.join(logDir, MIHOMO_STDERR_LOG_NAME),
+      }),
+      programArguments,
+      logDir,
+      paths,
+    };
+  }
+
+  return {
+    kind,
+    label: MIHOMO_SERVICE_LABEL,
+    unitPath: path.join(systemdUserDir(env), `${MIHOMO_SERVICE_LABEL}.service`),
+    unitContent: renderSystemdUnit({
+      programArguments,
+      environment: {},
+      description: "a2-managed mihomo (proxy data plane)",
+    }),
+    programArguments,
+    logDir,
+    paths,
+  };
+}
+
 export interface UnitSpec {
   label: string;
   programArguments: string[];
@@ -240,11 +309,11 @@ function systemdQuote(value: string): string {
  * 日志不重定向 —— systemd 世界里 stdout/stderr 默认进 journal(`journalctl --user -u com.a2.kernel`),
  * 这是 Linux 用户预期的地方,不必再造一份文件日志。
  */
-export function renderSystemdUnit(spec: Omit<UnitSpec, "label">): string {
+export function renderSystemdUnit(spec: Omit<UnitSpec, "label"> & { description?: string }): string {
   const environmentKeys = Object.keys(spec.environment).sort();
   return [
     "[Unit]",
-    "Description=a2 kernel (agent-first local proxy kernel)",
+    `Description=${spec.description ?? "a2 kernel (agent-first local proxy kernel)"}`,
     "After=network.target",
     "",
     "[Service]",

@@ -9,6 +9,7 @@ import { resolvePaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
+import { mihomoCommand } from "./mihomo.ts";
 import { emitOutcome, type CommandOutcome } from "./outcome.ts";
 import { serviceCommand } from "./service.ts";
 import { statusCommand } from "./status.ts";
@@ -43,6 +44,9 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   }
   if (command === "service") {
     return await serviceCommand(args, resolvePaths());
+  }
+  if (command === "mihomo") {
+    return await mihomoCommand(args, resolvePaths());
   }
   if (command === "daemon") {
     if (args[0] !== "run" || args.length > 1) {

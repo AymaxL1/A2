@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "id": "018f7b31-8d17-7f4a-b6c1-0a2e3d4f5061",
+  "ok": false,
+  "error": {
+    "code": "mihomo_below_floor",
+    "message": "跑着的那个 mihomo 不达兼容地板 1.19.0,已拒绝收编。",
+    "detail": "版本 v1.10.0;不达标项:version_below_floor。内核不会去升级不属于它的实例。",
+    "guidance": {
+      "summary": "两条明路:你自己把它升到地板之上,或者让 a2 装一份自管实例与之并存。",
+      "steps": [
+        {
+          "description": "自己升级那个 mihomo 之后重新检测",
+          "command": "a2 mihomo status --json"
+        },
+        {
+          "description": "或者让 a2 按锁定版装一份自管实例(与你那份并存,入站端口需你自行避开冲突)",
+          "command": "a2 mihomo install --isolated"
+        }
+      ],
+      "context": {
+        "floor": "1.19.0",
+        "lockedVersion": "v1.19.28",
+        "controller": "127.0.0.1:9090",
+        "shortfalls": "version_below_floor"
+      }
+    }
+  }
+}

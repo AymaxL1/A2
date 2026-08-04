@@ -1,25 +1,28 @@
 #!/bin/sh
-# 假 launchctl —— **只给测试用**。它不是打桩:除了"进程调度"这件事之外,它**真的按 unit 文件把内核起起来**
-# (读 plist 里的 ProgramArguments 与 A2_HOME,spawn 一个真进程),所以 CLI 缝上的断言是端到端的:
-# install 之后 `a2 status` 真的能连上那个 daemon。
+# 假 launchctl —— **只给测试用**。它不是打桩:除了"进程调度"这件事之外,它**真的按 unit 文件把进程起起来**
+# (读 plist 里的 ProgramArguments 与 EnvironmentVariables,spawn 一个真进程),所以 CLI 缝上的断言是端到端的:
+# install 之后 `a2 status` 真的能连上那个 daemon、`a2 mihomo status` 真的能连上那个 mihomo。
 #
 # 行为面按本机 macOS 15.7.8 实测口径写死:
 #   * `print` 未登记 → 退出码 113(实测);已登记 → 打印含 `state = running` 的块,进程活着时多一行 `pid = N`;
 #   * `bootstrap` 重复装载 → 37;plist 不存在 → 2;成功则**顺带拉起**(对应 plist 里的 RunAtLoad);
-#   * `bootout` 服务不在 → 3(ESRCH,实测文案 "Boot-out failed: 3: No such process")。
+#   * `bootout` 服务不在 → 3(ESRCH,实测文案 "Boot-out failed: 3: No such process");
+#   * `kickstart [-k]` 未登记 → 113;`-k` = 先杀再拉(内核用它做"换了文件/换了版本之后换进程")。
 # 有意**不**模拟的:KeepAlive 自愈与 ThrottleInterval —— 那两条只有真 launchd 说了算,
 # 归 scripts/service-live-smoke.sh 的活体冒烟。
 #
-# 状态就一个文件($A2_FAKE_STATE):存在 = 已登记,内容 = 被拉起进程的 pid(进程死了 = 装了但没跑)。
+# **状态按 label 分开存**($A2_FAKE_STATE_DIR/<label>.pid):06 票起同时有 com.a2.kernel 与 com.a2.mihomo
+# 两个 unit,共用一个状态文件会让"卸内核不卸 mihomo"这条断言根本无从谈起。
+# plist 落点与真 launchd 同一口径:$HOME/Library/LaunchAgents/<label>.plist(测试把 HOME 指到沙盒)。
 #
-# PATH 在下面被钉死成系统目录:被测进程那侧的 PATH 只有本目录(真 launchctl 根本找不到),
+# PATH 在下面被钉死成系统目录:被测进程那侧的 PATH 只有假件目录(真 launchctl 根本找不到),
 # 这里再自己找回 coreutils —— 双向都不可能误伤真 launchctl。
 PATH=/usr/bin:/bin
 set -u
 
 printf 'launchctl %s\n' "$*" >> "$A2_FAKE_LOG"
-STATE="$A2_FAKE_STATE"
-UNIT="$A2_FAKE_UNIT"
+STATE_DIR="$A2_FAKE_STATE_DIR"
+mkdir -p "$STATE_DIR"
 verb="${1:-}"
 
 # 故障注入:`A2_FAKE_FAIL=<子命令>` 让那一条按真实症状失败(退出码 5 是 macOS Sonoma 起
@@ -29,65 +32,95 @@ if [ "${A2_FAKE_FAIL:-}" = "$verb" ]; then
   exit 5
 fi
 
-# 按 plist 真起一个内核进程。两处刻意为之:
+label_of_target() { printf '%s\n' "${1##*/}"; }
+plist_of_label()  { printf '%s/Library/LaunchAgents/%s.plist\n' "$HOME" "$1"; }
+pidfile_of_label() { printf '%s/%s.pid\n' "$STATE_DIR" "$1"; }
+
+# 按 plist 真起一个进程。两处刻意为之:
 #   * stdin/stdout/stderr 全部断开 —— 否则子进程会一直攥着 a2 给我们的管道,a2 那边读 stdout 永远读不到 EOF;
 #   * exec 前先 sleep 一下 —— **如实模拟真 supervisor 的时序**:本机实测 launchd 一 exec 就报得出 pid,
-#     而内核还要几百毫秒才 bind socket。这个窗口是真的(活体冒烟抓到过),所以假件也得有,
-#     否则"装完就是能用的"那条断言会因为跑得快而假绿。
+#     而进程还要几百毫秒才 bind(socket / external-controller)。这个窗口是真的(活体冒烟抓到过),
+#     所以假件也得有,否则"装完就是能用的"那条断言会因为跑得快而假绿。
 spawn_from_plist() {
-  a2home=$(awk '/<key>A2_HOME<\/key>/{getline; gsub(/.*<string>|<\/string>.*/, ""); print; exit}' "$UNIT")
+  label="$1"
+  unit="$(plist_of_label "$label")"
+  args_file="$STATE_DIR/$label.args"
+  a2home=$(awk '/<key>A2_HOME<\/key>/{getline; gsub(/.*<string>|<\/string>.*/, ""); print; exit}' "$unit")
   awk '/<key>ProgramArguments<\/key>/{f=1;next} f&&/<\/array>/{exit} f&&/<string>/{gsub(/.*<string>|<\/string>.*/,"");print}' \
-    "$UNIT" > "$STATE.args"
+    "$unit" > "$args_file"
   set --
-  while IFS= read -r argument; do set -- "$@" "$argument"; done < "$STATE.args"
-  (
-    sleep "${A2_FAKE_START_DELAY:-0.3}"
-    exec env A2_HOME="$a2home" "$@"
-  ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
-  printf '%s\n' "$!" > "$STATE"
+  while IFS= read -r argument; do set -- "$@" "$argument"; done < "$args_file"
+  if [ -n "$a2home" ]; then
+    (
+      sleep "${A2_FAKE_START_DELAY:-0.3}"
+      exec env A2_HOME="$a2home" "$@"
+    ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
+  else
+    # mihomo 的 unit 有意不注入 A2_HOME(它不认识这个变量),照原样起。
+    (
+      sleep "${A2_FAKE_START_DELAY:-0.3}"
+      exec "$@"
+    ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
+  fi
+  printf '%s\n' "$!" > "$(pidfile_of_label "$label")"
 }
 
 case "$verb" in
   print)
-    if [ -f "$STATE" ]; then
-      pid=$(cat "$STATE")
+    label="$(label_of_target "${2:-}")"
+    pidfile="$(pidfile_of_label "$label")"
+    if [ -f "$pidfile" ]; then
+      pid=$(cat "$pidfile")
       printf '%s = {\n\tactive count = 1\n\tstate = running\n' "${2:-}"
       if kill -0 "$pid" 2>/dev/null; then printf '\tpid = %s\n' "$pid"; fi
       printf '}\n'
       exit 0
     fi
-    printf 'Could not find service "com.a2.kernel" in domain for user gui\n' >&2
+    printf 'Could not find service "%s" in domain for user gui\n' "$label" >&2
     exit 113
     ;;
   bootstrap)
-    if [ -f "$STATE" ]; then
+    unit="${3:-}"
+    label="$(basename "$unit" .plist)"
+    if [ -f "$(pidfile_of_label "$label")" ]; then
       printf 'Bootstrap failed: 37: Operation already in progress\n' >&2
       exit 37
     fi
-    if [ ! -f "${3:-}" ]; then
+    if [ ! -f "$unit" ]; then
       printf 'Bootstrap failed: 2: No such file or directory\n' >&2
       exit 2
     fi
-    spawn_from_plist
+    spawn_from_plist "$label"
     exit 0
     ;;
   bootout)
-    if [ -f "$STATE" ]; then
-      pid=$(cat "$STATE")
+    label="$(label_of_target "${2:-}")"
+    pidfile="$(pidfile_of_label "$label")"
+    if [ -f "$pidfile" ]; then
+      pid=$(cat "$pidfile")
       kill "$pid" 2>/dev/null
-      rm -f "$STATE" "$STATE.args"
+      rm -f "$pidfile" "$STATE_DIR/$label.args"
       exit 0
     fi
     printf 'Boot-out failed: 3: No such process\n' >&2
     exit 3
     ;;
   kickstart)
-    if [ ! -f "$STATE" ]; then
+    force=0
+    if [ "${2:-}" = "-k" ]; then force=1; target="${3:-}"; else target="${2:-}"; fi
+    label="$(label_of_target "$target")"
+    pidfile="$(pidfile_of_label "$label")"
+    if [ ! -f "$pidfile" ]; then
       printf 'Could not find service\n' >&2
       exit 113
     fi
-    pid=$(cat "$STATE")
-    kill -0 "$pid" 2>/dev/null || spawn_from_plist
+    pid=$(cat "$pidfile")
+    if [ "$force" = "1" ]; then
+      kill "$pid" 2>/dev/null
+      spawn_from_plist "$label"
+    else
+      kill -0 "$pid" 2>/dev/null || spawn_from_plist "$label"
+    fi
     exit 0
     ;;
 esac

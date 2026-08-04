@@ -16,6 +16,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   status               查询 daemon 运行态(经 UDS 往返)
   capabilities …       能力面:list / describe <id> / call <id>(见 a2 capabilities --help)
   service …            常驻服务:install / uninstall / status(见 a2 service --help)
+  mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
   help                 打印本帮助
   version              打印版本
@@ -74,6 +75,43 @@ status 的三态(机读字段 result.state):
 
 退出码:0 成功 / 1 用法错 / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 本平台无已支持的 supervisor`;
 
+export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据面不随控制面起落)
+
+用法:
+  a2 [--json] mihomo status                检测本机现状与将采用的阶梯档位(只读)
+  a2 [--json] mihomo install [--isolated]  按阶梯就位(幂等);--isolated = 不复用别人的,装 a2 自己那份
+  a2 [--json] mihomo uninstall             卸掉 a2 自管的那份(unit + 进程;二进制/配置/数据保留)
+  a2 [--json] mihomo upgrade               显式升级 a2 自管的二进制到锁定版
+
+共存阶梯(检测并优先复用,复用到实例级):
+  adopt_instance        有跑着的实例且 external-controller 可达 → 经 API 接管配置与存活监督;
+                        **进程生死归原托管方** —— 内核绝不 stop/restart/kill 它,实例没了只报警 + 指引
+  reuse_binary          只有二进制 → 只读复用它(落点上放一个符号链接,真身一个字节都不碰),
+                        配置/数据目录与 com.a2.mihomo unit 全套自建
+  managed_install       全无(或 --isolated)→ 按锁定版从官方渠道下载 + SHA-256 校验 + 落位,再挂 unit
+
+兼容地板:被收编/被复用的那份不达地板时,内核**不擅自升级别人的东西** —— 收编档结构化拒绝并给两条明路,
+复用档回退为隔离安装并在报文里说明原因(result.fallback)。
+
+版本:锁定版由内核编译期常量固定;**任何路径都不静默换版本**,换版本只有 a2 mihomo upgrade 一条命令。
+
+数据面不随控制面起落:com.a2.mihomo 与 com.a2.kernel 是两个独立 unit —— 卸内核不卸 mihomo,
+内核崩了 mihomo 照跑,mihomo 崩了由系统按 KeepAlive.Crashed / Restart=on-failure 重拉。
+
+环境变量:
+  A2_HOME                  覆写 ~/.a2(自管 mihomo 落在 <A2_HOME>/mihomo/)
+  A2_MIHOMO_CONTROLLER     直接指定要收编的 external-controller(host:port),跳过配置解析
+  A2_MIHOMO_SECRET         配套上一条的 secret
+  A2_MIHOMO_CONTROLLER_PORT 覆写 a2 自管实例的控制端口(默认 9097,有意避开 mihomo 默认的 9090)
+  A2_MIHOMO_RELEASE_BASE   覆写发布渠道根地址(镜像源)
+  A2_MIHOMO_BIN_DIRS       覆写二进制搜索目录(冒号分隔)。仅测试与诊断用
+  A2_MIHOMO_CONFIG_FILES   覆写配置搜索路径(冒号分隔)。仅测试与诊断用
+  A2_MIHOMO_EXPECT_SHA256  覆写下载物的期望摘要。仅测试与诊断用
+
+内核只对回环地址上的 external-controller 发只读请求(GET /version、GET /configs),从不做端口扫描。
+
+退出码:0 成功 / 1 用法错 / 5 事没办成(不可达、不达地板、不归 a2 管、下载校验失败)/ 6 本平台无已支持的 supervisor`;
+
 /** 帮助 = 一条成功包封(机读面无例外)+ 人类面原文。 */
 export function helpOutcome(usage: string): CommandOutcome {
   return {
@@ -125,6 +163,17 @@ export function serviceUsageOutcome(message: string): CommandOutcome {
     steps: [
       { description: "打印服务面用法", command: "a2 service --help" },
       { description: "查当前安装态与运行态", command: "a2 service status --json" },
+    ],
+  });
+}
+
+/** mihomo 面的用法错:指引指向本面帮助与"先看看本机现在是什么现状"。 */
+export function mihomoUsageOutcome(message: string): CommandOutcome {
+  return usageOutcome(message, {
+    usage: MIHOMO_USAGE,
+    steps: [
+      { description: "打印 mihomo 面用法", command: "a2 mihomo --help" },
+      { description: "查本机现状与将采用的阶梯档位", command: "a2 mihomo status --json" },
     ],
   });
 }

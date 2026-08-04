@@ -1,14 +1,28 @@
 // 与系统 supervisor 说话的那一层:launchctl / systemctl 怎么问、怎么使唤、怎么读它的回答。
 //
-// **红线**:所有目标都由 `SERVICE_LABEL`(`com.a2.kernel`)拼出,domain 恒为 `gui/<uid>` /  `--user`。
-// 本文件里没有任何一条命令的目标来自参数或环境 —— 内核只碰自己那一个 unit,别人的服务一概不动。
+// **红线**:所有目标都由 `plan.label` 拼出,domain 恒为 `gui/<uid>` / `--user`。而 `plan.label` 只可能是
+// `unit.ts` 里那两个常量之一(`com.a2.kernel` / `com.a2.mihomo`)—— 本文件里没有任何一条命令的目标
+// 来自参数或环境,内核只碰自己那两个 unit,别人的服务(尤其是用户自己装的 mihomo)一概不动。
 //
 // 两个平台的差异只在这里露头(manager 那层只认「查一下 / 装上 / 拉起 / 卸掉」四件事):
 //   * launchd:bootstrap = 装载 + 自启一体,没有独立的 enable 开关;改了 plist 必须 bootout 再 bootstrap;
 //   * systemd:unit 文件与 enable/start 是三件独立的事,改了文件要 daemon-reload。
 
-import type { ServiceAction, SupervisorKind } from "../contract/wire.ts";
-import { SERVICE_LABEL, type ServicePlan } from "./unit.ts";
+import type { SupervisorKind } from "../contract/wire.ts";
+import type { ServicePlan } from "./unit.ts";
+
+/**
+ * unit 层的收敛动作(**与具体是哪个 unit 无关**)。各面各自把它翻成自己的词表:
+ * 服务面 `process_started` → `kernel_started`,mihomo 面 → `mihomo_started`。
+ */
+export type UnitAction =
+  | "unit_written"
+  | "unit_removed"
+  | "supervisor_loaded"
+  | "supervisor_unloaded"
+  | "supervisor_reloaded"
+  | "process_started"
+  | "process_restarted";
 
 /** supervisor 眼里的 unit 状态。 */
 export interface SupervisorState {
@@ -42,9 +56,9 @@ export interface Supervisor {
   /** 查当前状态(只读)。 */
   query(): Promise<SupervisorState>;
   /** unit 文件刚被写或删之后,让 supervisor 重读(systemd daemon-reload;launchd 无此步)。 */
-  syncUnitFiles(unitChanged: boolean): Promise<ServiceAction[]>;
+  syncUnitFiles(unitChanged: boolean): Promise<UnitAction[]>;
   /** 收敛到「已装载 + 开机自启」。`unitChanged` = 本次 unit 内容有变(launchd 据此决定要不要先 bootout)。 */
-  load(state: SupervisorState, unitChanged: boolean): Promise<ServiceAction[]>;
+  load(state: SupervisorState, unitChanged: boolean): Promise<UnitAction[]>;
   /** 显式拉起进程(装载了但没在跑时用)。 */
   start(): Promise<void>;
   /**
@@ -54,7 +68,7 @@ export interface Supervisor {
    */
   restart(): Promise<void>;
   /** 停 + 取消自启 + 从 supervisor 卸下(unit 文件由 manager 删)。 */
-  unload(state: SupervisorState): Promise<ServiceAction[]>;
+  unload(state: SupervisorState): Promise<UnitAction[]>;
 }
 
 export function createSupervisor(plan: ServicePlan): Supervisor {
@@ -110,9 +124,9 @@ class LaunchdSupervisor implements Supervisor {
     return `gui/${process.getuid?.() ?? 0}`;
   }
 
-  /** `gui/<uid>/com.a2.kernel` —— 本内核唯一会碰的 service target。 */
+  /** `gui/<uid>/<label>` —— label 来自 plan(只可能是 unit.ts 的两个常量之一)。 */
   #target(): string {
-    return `${this.#domain()}/${SERVICE_LABEL}`;
+    return `${this.#domain()}/${this.plan.label}`;
   }
 
   async query(): Promise<SupervisorState> {
@@ -125,12 +139,12 @@ class LaunchdSupervisor implements Supervisor {
   }
 
   /** launchd 直接吃 plist 文件路径,没有"重读目录"这一步。 */
-  async syncUnitFiles(): Promise<ServiceAction[]> {
+  async syncUnitFiles(): Promise<UnitAction[]> {
     return [];
   }
 
-  async load(state: SupervisorState, unitChanged: boolean): Promise<ServiceAction[]> {
-    const actions: ServiceAction[] = [];
+  async load(state: SupervisorState, unitChanged: boolean): Promise<UnitAction[]> {
+    const actions: UnitAction[] = [];
     let registered = state.registered;
     // 已装载的 job 不会自己发现 plist 变了:必须先卸下再装回来,否则跑的还是旧内容。
     if (registered && unitChanged) {
@@ -154,7 +168,7 @@ class LaunchdSupervisor implements Supervisor {
     await run(["launchctl", "kickstart", "-k", this.#target()]);
   }
 
-  async unload(state: SupervisorState): Promise<ServiceAction[]> {
+  async unload(state: SupervisorState): Promise<UnitAction[]> {
     if (!state.registered) return [];
     await run(["launchctl", "bootout", this.#target()], [LAUNCHCTL_NO_SUCH_PROCESS]);
     return ["supervisor_unloaded"];
@@ -169,9 +183,9 @@ class SystemdSupervisor implements Supervisor {
 
   constructor(private readonly plan: ServicePlan) {}
 
-  /** `com.a2.kernel.service`。 */
+  /** `<label>.service` —— label 来自 plan(只可能是 unit.ts 的两个常量之一)。 */
   #unit(): string {
-    return `${SERVICE_LABEL}.service`;
+    return `${this.plan.label}.service`;
   }
 
   #systemctl(...args: string[]): string[] {
@@ -204,13 +218,13 @@ class SystemdSupervisor implements Supervisor {
       : { registered, enabled };
   }
 
-  async syncUnitFiles(unitChanged: boolean): Promise<ServiceAction[]> {
+  async syncUnitFiles(unitChanged: boolean): Promise<UnitAction[]> {
     if (!unitChanged) return [];
     await run(this.#systemctl("daemon-reload"));
     return ["supervisor_reloaded"];
   }
 
-  async load(state: SupervisorState, unitChanged: boolean): Promise<ServiceAction[]> {
+  async load(state: SupervisorState, unitChanged: boolean): Promise<UnitAction[]> {
     // daemon-reload 之后 LoadState/UnitFileState 才是新的,重查一次再决定要不要 enable。
     const current = unitChanged ? await this.query() : state;
     if (current.enabled) return [];
@@ -226,8 +240,8 @@ class SystemdSupervisor implements Supervisor {
     await run(this.#systemctl("restart", this.#unit()));
   }
 
-  async unload(state: SupervisorState): Promise<ServiceAction[]> {
-    const actions: ServiceAction[] = [];
+  async unload(state: SupervisorState): Promise<UnitAction[]> {
+    const actions: UnitAction[] = [];
     if (state.pid !== undefined) await run(this.#systemctl("stop", this.#unit()));
     if (state.enabled) await run(this.#systemctl("disable", this.#unit()));
     if (state.pid !== undefined || state.enabled) actions.push("supervisor_unloaded");

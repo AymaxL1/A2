@@ -1,0 +1,20 @@
+#!/bin/sh
+# 假 mihomo —— **只给测试用的行为假件**,不是真内核,也绝不下载真内核。
+#
+# 存在的理由是本票最硬的那条施工红线:**用户本机跑着他自己的 mihomo,测试一个字节都不许碰它**。
+# 所以门禁里出现的每一个「mihomo」都是这个文件(以及它拉起的 fake-mihomo.ts),
+# 检测面看到的二进制、被 com.a2.mihomo unit 拉起的进程、被收编的「别人的实例」,全是它。
+#
+# 文件名必须叫 `mihomo`:检测逻辑就是在被注入的目录里找这个名字。
+#
+# 为什么是 sh 壳 + TS 本体:真正要模拟的是 external-controller 的 HTTP 面,用 Bun 写十行就够;
+# 而 PATH 在测试里被钉死成假件目录(真 launchctl/systemctl 找不到),所以 bun 的位置必须由环境显式给出。
+PATH=/usr/bin:/bin
+set -u
+
+if [ -z "${A2_FAKE_BUN:-}" ] || [ -z "${A2_FAKE_MIHOMO_TS:-}" ]; then
+  echo "fake mihomo:需要 A2_FAKE_BUN 与 A2_FAKE_MIHOMO_TS(测试夹具没设好)" >&2
+  exit 127
+fi
+
+exec "$A2_FAKE_BUN" run "$A2_FAKE_MIHOMO_TS" "$@"

@@ -1,0 +1,27 @@
+{
+  "status": {
+    "presence": "absent",
+    "rung": "managed_install",
+    "provisioned": false,
+    "lockedVersion": "v1.19.28",
+    "managed": {
+      "label": "com.a2.mihomo",
+      "supervisor": "launchd",
+      "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.mihomo.plist",
+      "unitInstalled": false,
+      "state": "not_installed",
+      "binaryKind": "absent",
+      "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+      "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+      "dataDir": "/Users/alice/.a2/mihomo",
+      "controller": "127.0.0.1:9097"
+    },
+    "compatibility": {
+      "floor": "1.19.0",
+      "meets": true,
+      "shortfalls": []
+    },
+    "home": "/Users/alice/.a2"
+  },
+  "actions": ["foreign_instance_restarted"]
+}

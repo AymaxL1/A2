@@ -50,6 +50,13 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.capabilityFailed:
     // service 操作同理:unit 写了、命令发了,但事没办成(supervisor 报错 / 装完没跑起来)。
     case ErrorCode.serviceOperationFailed:
+    // mihomo 面四码同档:探测发了、命令走了,但这件事这会儿办不成 —— 报文里带的是「人类如何完成」,
+    // 不是"你参数写错了"。特别地,`mihomo_not_managed` 是**红线的报文投影**(那份不归我管,我不动它),
+    // 它也不是用法错:命令本身完全成立,只是对象不对。
+    case ErrorCode.mihomoUnreachable:
+    case ErrorCode.mihomoBelowFloor:
+    case ErrorCode.mihomoNotManaged:
+    case ErrorCode.mihomoOperationFailed:
       return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:

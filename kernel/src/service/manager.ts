@@ -10,7 +10,6 @@
 // supervisor 是合法的;`status` 只读;其余任何命令仍然只 connect、从不 spawn。
 
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { callKernel } from "../client/kernel-client.ts";
 import {
@@ -24,20 +23,21 @@ import {
   type WireError,
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
-import { createSupervisor, SupervisorCommandError, type SupervisorState } from "./supervisor.ts";
+import { convergeUnit, removeUnit, SETTLE_POLL_MS } from "./converge.ts";
 import {
-  LOG_DIR_MODE,
+  createSupervisor,
+  SupervisorCommandError,
+  type SupervisorState,
+  type UnitAction,
+} from "./supervisor.ts";
+import {
   resolveSupervisorKind,
   servicePlan,
   STDERR_LOG_NAME,
   STDOUT_LOG_NAME,
-  UNIT_FILE_MODE,
   type ServicePlan,
 } from "./unit.ts";
 
-/** 等"进程真的起来/真的没了"的上限。systemd/launchd 的动作是异步的,状态不会在命令返回的那一刻就位。 */
-const SETTLE_TIMEOUT_MS = 2000;
-const SETTLE_POLL_MS = 50;
 /**
  * 等"内核真的能答话"的上限。supervisor 报了 pid 只说明进程 exec 了 —— 本机实测那一刻 socket 还没 bind
  * (连 `<home>/run` 目录都还没建),紧接着的一条 `a2 status` 会撞上几百毫秒的空窗、拿到 daemon_unreachable。
@@ -55,45 +55,8 @@ export async function serviceStatus(paths: KernelPaths): Promise<OpOutcome> {
 export async function serviceInstall(paths: KernelPaths): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
     const supervisor = createSupervisor(plan);
-    const actions: ServiceAction[] = [];
+    const { actions, state } = await convergeUnit(plan, supervisor);
 
-    // 日志目录必须先于 job 存在:launchd 不会替你创建 StandardOutPath 的父目录,目录不在则 job 起不来。
-    await mkdir(plan.logDir, { recursive: true, mode: LOG_DIR_MODE });
-    await chmod(plan.logDir, LOG_DIR_MODE);
-
-    const unitChanged = (await readIfExists(plan.unitPath)) !== plan.unitContent;
-    if (unitChanged) {
-      await mkdir(path.dirname(plan.unitPath), { recursive: true });
-      await writeFile(plan.unitPath, plan.unitContent, { mode: UNIT_FILE_MODE });
-      await chmod(plan.unitPath, UNIT_FILE_MODE);
-      actions.push("unit_written");
-    }
-
-    const before = await supervisor.query();
-    actions.push(...(await supervisor.syncUnitFiles(unitChanged)));
-    actions.push(...(await supervisor.load(before, unitChanged)));
-
-    // **漂移要收敛到进程,不只是收敛到文件**:unit 内容变了而服务正跑着时,重写文件 + daemon-reload
-    // 只让"磁盘上写的"变了,那个已经在跑的进程仍在用旧的 ExecStart 与旧的 A2_HOME。
-    // 只有 `loadStartsProcess` 为假的 supervisor(systemd)需要这一步 —— launchd 的 bootout + bootstrap
-    // 本身就把进程换掉了(它那条路的 actions 是 supervisor_unloaded + supervisor_loaded)。
-    if (unitChanged && before.pid !== undefined && !supervisor.loadStartsProcess) {
-      await supervisor.restart();
-      actions.push("kernel_restarted");
-    }
-
-    // 装载了不等于跑起来了(unit 内容没变时 launchd 根本不会重启它)。显式拉一把,再验。
-    // 只有"刚 bootstrap 过 + 该 supervisor 的装载含拉起"这一种情形值得等 —— 其余情形直接问一次就够,
-    // 空等只会让"装了但起不来"的排障多花几秒。
-    let state = await supervisor.query();
-    if (state.pid === undefined && supervisor.loadStartsProcess && actions.includes("supervisor_loaded")) {
-      state = await settle(supervisor, (current) => current.pid !== undefined);
-    }
-    if (state.pid === undefined) {
-      await supervisor.start();
-      actions.push("kernel_started");
-      state = await settle(supervisor, (current) => current.pid !== undefined);
-    }
     if (state.pid === undefined) {
       return opFailure(notRunningError(plan));
     }
@@ -102,34 +65,32 @@ export async function serviceInstall(paths: KernelPaths): Promise<OpOutcome> {
       return opFailure(notAnsweringError(plan));
     }
 
-    return opSuccess({ status: statusResult(plan, state), actions });
+    return opSuccess({ status: statusResult(plan, state), actions: kernelActions(actions) });
   });
 }
 
 export async function serviceUninstall(paths: KernelPaths): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
     const supervisor = createSupervisor(plan);
-    const actions: ServiceAction[] = [];
-
-    actions.push(...(await supervisor.unload(await supervisor.query())));
-
-    // 名字说的是**赋值那一刻**的事实(unit 文件还在),而不是"已经删掉了"——
-    // 它同时是"要不要删"与"删完要不要让 supervisor 重读目录"两处判据。
-    const unitPresent = existsSync(plan.unitPath);
-    if (unitPresent) {
-      await unlink(plan.unitPath);
-      actions.push("unit_removed");
-    }
-    actions.push(...(await supervisor.syncUnitFiles(unitPresent)));
-
     // 卸载的承诺是"干净移除",所以要真的确认进程没了 —— 否则下一次 install 会撞上一个野生实例。
-    const state = await settle(supervisor, (current) => current.pid === undefined);
+    const { actions, state } = await removeUnit(plan, supervisor);
     if (state.pid !== undefined) {
       return opFailure(stillRunningError(plan, state.pid));
     }
 
-    return opSuccess({ status: statusResult(plan, state), actions });
+    return opSuccess({ status: statusResult(plan, state), actions: kernelActions(actions) });
   });
+}
+
+/** unit 层的通用动作词 → 服务面的词表(内核这一份的进程就叫「内核」)。 */
+function kernelActions(actions: UnitAction[]): ServiceAction[] {
+  return actions.map((action) =>
+    action === "process_started"
+      ? "kernel_started"
+      : action === "process_restarted"
+        ? "kernel_restarted"
+        : action,
+  );
 }
 
 /** 三条命令共用的前置:选 supervisor → 算 plan → 把两类失败(平台不支持 / 命令失败)翻成 WireError。 */
@@ -159,28 +120,6 @@ async function withPlan(
       },
     });
   }
-}
-
-async function readIfExists(file: string): Promise<string | undefined> {
-  try {
-    return await readFile(file, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-/** 轮询到条件成立(或超时)。返回最后一次看到的状态 —— 超时与否由调用方按 pid 自己判断。 */
-async function settle(
-  supervisor: { query(): Promise<SupervisorState> },
-  done: (state: SupervisorState) => boolean,
-): Promise<SupervisorState> {
-  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
-  let state = await supervisor.query();
-  while (!done(state) && Date.now() < deadline) {
-    await Bun.sleep(SETTLE_POLL_MS);
-    state = await supervisor.query();
-  }
-  return state;
 }
 
 /**

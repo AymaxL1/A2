@@ -1,0 +1,37 @@
+{
+  "presence": "running_instance",
+  "rung": "adopt_instance",
+  "provisioned": true,
+  "lockedVersion": "v1.19.28",
+  "instance": {
+    "owner": "foreign",
+    "controller": "127.0.0.1:9090",
+    "secretConfigured": true,
+    "version": "v1.19.29",
+    "capabilities": ["rest_api", "meta_core", "configs_read"],
+    "configFile": "/Users/alice/.config/mihomo/config.yaml"
+  },
+  "foreignBinary": {
+    "path": "/usr/local/bin/mihomo",
+    "version": "v1.19.29"
+  },
+  "managed": {
+    "label": "com.a2.mihomo",
+    "supervisor": "launchd",
+    "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.mihomo.plist",
+    "unitInstalled": false,
+    "state": "not_installed",
+    "binaryKind": "absent",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097"
+  },
+  "compatibility": {
+    "floor": "1.19.0",
+    "meets": true,
+    "version": "v1.19.29",
+    "shortfalls": []
+  },
+  "home": "/Users/alice/.a2"
+}

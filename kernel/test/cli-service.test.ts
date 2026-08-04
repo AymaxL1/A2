@@ -13,7 +13,7 @@
 // 命令编排与幂等全有断言;**实机验收顺延**(spec「Linux 口径」)。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -35,7 +35,7 @@ interface Sandbox {
   /** unit 文件**应该**落的位置(测试独立算出来的,不是问被测代码要的)。 */
   unitPath: string;
   logPath: string;
-  statePath: string;
+  stateDir: string;
   env: Record<string, string>;
 }
 
@@ -51,7 +51,7 @@ async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
     kind === "launchd"
       ? path.join(root, "Library", "LaunchAgents", `${LABEL}.plist`)
       : path.join(xdgConfigHome, "systemd", "user", `${LABEL}.service`);
-  const statePath = path.join(root, "supervisor-state");
+  const stateDir = path.join(root, "supervisor-state");
   const logPath = path.join(root, "supervisor-calls.log");
   await writeFile(logPath, "");
 
@@ -59,7 +59,7 @@ async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
     home,
     root,
     unitPath,
-    statePath,
+    stateDir,
     logPath,
     env: {
       // 被测进程的 PATH 只有假件目录 —— 真 launchctl 在它眼里不存在(红线:本票之外不碰任何 unit)。
@@ -67,9 +67,8 @@ async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
       HOME: root,
       XDG_CONFIG_HOME: xdgConfigHome,
       A2_SERVICE_SUPERVISOR: kind,
-      A2_FAKE_STATE: statePath,
+      A2_FAKE_STATE_DIR: stateDir,
       A2_FAKE_LOG: logPath,
-      A2_FAKE_UNIT: unitPath,
     },
   };
 }
@@ -109,15 +108,22 @@ beforeEach(() => {
 // 假件起的是**真进程**,所以收尸纪律照 harness 那套:先杀干净,再删沙盒,绝不留孤儿。
 afterEach(async () => {
   if (!sandbox) return;
-  const raw = await readFile(sandbox.statePath, "utf8").catch(() => "");
-  const pid = Number.parseInt(raw.trim().split(" ").pop() ?? "", 10);
-  if (Number.isFinite(pid) && pid > 0 && isAlive(pid)) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* 已经没了就算了 */
+  // 状态按 label 分开存,收尸也逐个来(06 票起同一个沙盒里可能有两个 unit)。
+  const stateFiles = existsSync(sandbox.stateDir) ? readdirSync(sandbox.stateDir) : [];
+  for (const name of stateFiles) {
+    const raw = await readFile(path.join(sandbox.stateDir, name), "utf8").catch(() => "");
+    const pid = Number.parseInt(raw.trim().split(" ").pop() ?? "", 10);
+    if (Number.isFinite(pid) && pid > 0 && isAlive(pid)) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* 已经没了就算了 */
+      }
     }
   }
+  // 兜底:假件起的是真进程,而测试中途失败时状态文件未必是最新的。
+  // 沙盒根是本次独有的临时路径,按它精确回收 —— 不可能误伤任何别的进程(尤其是用户自己的 mihomo)。
+  Bun.spawnSync({ cmd: ["/usr/bin/pkill", "-9", "-f", sandbox.root], stdout: "ignore", stderr: "ignore" });
   await rm(sandbox.root, { recursive: true, force: true });
   sandbox = undefined;
 });
