@@ -1,39 +1,30 @@
-// AAHostTestKit —— 14 票菜单模型的**纯逻辑一致性测试**(不起 GUI、不碰 AppKit、不发 UDS)。
+// 17 票:从 `AAHostTestKit.MenuModelConformanceTests` 迁到 swift-testing(迁移口径见 RegistryConformanceTests.swift 头注)。
 //
-// 门禁的第 1、2 条断言在这里成立,shell 侧只负责断言 runner 输出里出现对应的结论行。
-// **为什么放纯逻辑而不是放 shell**:
-//   ① 「菜单覆盖 04 票 in 清单的全部用户操作」要拿**注册表的实际清单**交叉核对 ——
-//      那是 Swift 侧才拿得到的对象;shell 只能去 grep 字符串,那等于自己抄一份名单跟自己比,毫无价值。
-//   ② 「状态变化在菜单里如实反映」要喂三种状态、比三份模型 —— 纯函数天然可做,起 GUI 反而什么都验不了。
-// shell 侧因此只留一条 grep(每条断言恰好一次 PASS/FAIL),真正的判据在本文件。
+// 14 票菜单模型的**纯逻辑一致性测试**(不起 GUI、不碰 AppKit、不发 UDS)。
 //
-// 依赖边:AAHostTestKit → AAUISystem / AAHostRuntime / AAContracts(+ MenuFixtures 用到的 PluginProxy)。
+// 本文件有一处与其它套件不同、**必须保住**的形状:`Scripts/check/menubar.sh` 的两条断言 grep 的不是
+//   逐条断言文案,而是两行**机读结论行**(`MENUBAR_ASSERT1: ok=1 …` / `MENUBAR_ASSERT2: ok=1 …`)——
+//   一条门禁断言背后是几十条纯逻辑 check,shell 侧不可能逐条 grep(那会把 1 条变成几十条)。
+//   旧实现靠 `TestReport.note(...)` 打这两行;swift-testing 下没有 note,改为**直接 `print`** ——
+//   swift-testing 不接管子测试的 stdout,`swift test` 的输出里照样有这两行,menubar.sh 一个字不用改。
+//   `ok=` 的取值仍由逐条断言累加(`check` 助手同时喂 `#expect` 与 `ok` 变量),不是写死的 1。
 
 import Foundation
+import Testing
 import AAContracts
 import AAHostRuntime
 import AAUISystem
+import AAHostTestKit
 
-/// 菜单模型的纯逻辑一致性测试。
-public enum MenuModelConformanceTests {
-
-    public static func run() -> TestReport {
-        var report = TestReport()
-        let ok1 = runCoverageAndTraceability(&report)
-        let ok2 = runStateReflection(&report)
-        // 结论行:shell 侧各 grep 一条,故每条门禁断言恰好记 1 次 PASS/FAIL。
-        report.note(ok1.line)
-        report.note(ok2.line)
-        return report
-    }
+@Suite("14 菜单模型纯逻辑(覆盖面/可追溯性 + 三态如实反映)—— MENUMODEL_TESTS passed=(逐条 @Test)")
+struct MenuModelConformanceTests {
 
     // ========================================================================
     // 断言 1:覆盖面 + 可追溯性(拿真注册表交叉核对)
     // ========================================================================
 
-    private struct Conclusion { let ok: Bool; let line: String }
-
-    private static func runCoverageAndTraceability(_ report: inout TestReport) -> Conclusion {
+    @Test("14 菜单覆盖面与可追溯性:04 票 In 清单全覆盖 + 每项追溯到真注册表(结论行 MENUBAR_ASSERT1)")
+    func coverageAndTraceability() {
         let registry = AAMenuFixtures.realRegistry()
         let capabilities = registry.list()
         // 覆盖面用**三种固定装置的并集**判:有些用户操作只在特定状态下才有项
@@ -44,8 +35,8 @@ public enum MenuModelConformanceTests {
         let allItems = models.flatMap { $0.flattened }
 
         var ok = true
-        func check(_ condition: Bool, _ desc: String) {
-            report.check(condition, desc)
+        func check(_ condition: Bool, _ desc: String, sourceLocation: SourceLocation = #_sourceLocation) {
+            #expect(condition, "\(desc)", sourceLocation: sourceLocation)
             if !condition { ok = false }
         }
 
@@ -73,7 +64,6 @@ public enum MenuModelConformanceTests {
         }
 
         // ---- ④ 反向交叉核对:注册表里**每一条**用户可发起的 proxy 能力(normal/dangerous)都出现在菜单里 ----
-        //     这一条是防「能力加了、菜单忘了露出来」。名单不是抄的,是从真注册表现算的。
         let actionable = capabilities.filter { $0.id.hasPrefix("proxy.") && ($0.risk == .normal || $0.risk == .dangerous) }
         let exposed = Set(allItems.compactMap { $0.capabilityID })
         let missing = actionable.map { $0.id }.filter { !exposed.contains($0) }
@@ -83,10 +73,6 @@ public enum MenuModelConformanceTests {
               + (missing.isEmpty ? "" : ";漏掉的: \(missing.joined(separator: ","))"))
 
         // ---- ⑤ 可点项带的参数经**真注册表的集中校验**是合法的 ----
-        //     判据不是「我觉得参数对」,而是把它真的送进 `Registry.invoke` 走一遍校验层:
-        //     只要不是 missing_parameter / type_mismatch / invalid_params 三种校验错,就说明参数形状对。
-        //     (业务失败 / denied / pending 都算参数合法 —— 那些是校验之后的事,与本条无关。)
-        //     只查 enabled 的项:置灰项按设计就不带参数(如无组时的「选择节点」),它们**不可能**被发出去。
         let paramErrors: Set<String> = [WireErrorCode.missingParameter, WireErrorCode.typeMismatch,
                                         WireErrorCode.invalidParams]
         var badParams: [String] = []
@@ -107,25 +93,26 @@ public enum MenuModelConformanceTests {
               "14 参数合法:\(checkedCount) 个可点项的参数都过了真注册表的集中校验"
               + (badParams.isEmpty ? "" : ";不合法的: \(badParams.joined(separator: " | "))"))
 
-        let line = "MENUBAR_ASSERT1: ok=\(ok ? 1 : 0) actions=\(covered)/\(AAMenuUserAction.allCases.count)"
-            + " boundItems=\(bound.count) actionableCaps=\(actionable.count) checkedParams=\(checkedCount)"
-            + "(04 票 In 清单全覆盖 + 每项追溯到真注册表里真实存在的能力 id)"
-        return Conclusion(ok: ok, line: line)
+        // 结论行:menubar.sh grep 这一行(每条门禁断言恰好记 1 次 PASS/FAIL)。
+        print("MENUBAR_ASSERT1: ok=\(ok ? 1 : 0) actions=\(covered)/\(AAMenuUserAction.allCases.count)"
+              + " boundItems=\(bound.count) actionableCaps=\(actionable.count) checkedParams=\(checkedCount)"
+              + "(04 票 In 清单全覆盖 + 每项追溯到真注册表里真实存在的能力 id)")
     }
 
     // ========================================================================
     // 断言 2:状态变化在模型里如实反映
     // ========================================================================
 
-    private static func runStateReflection(_ report: inout TestReport) -> Conclusion {
+    @Test("14 三态在菜单模型里如实反映且两两不同(结论行 MENUBAR_ASSERT2)")
+    func stateReflection() {
         let capabilities = AAMenuFixtures.realCapabilities()
         let down = AAMenuModelBuilder.build(capabilities: capabilities, state: AAMenuFixtures.kernelDown.state)
         let running = AAMenuModelBuilder.build(capabilities: capabilities, state: AAMenuFixtures.kernelRunning.state)
         let subbed = AAMenuModelBuilder.build(capabilities: capabilities, state: AAMenuFixtures.activeSubscription.state)
 
         var ok = true
-        func check(_ condition: Bool, _ desc: String) {
-            report.check(condition, desc)
+        func check(_ condition: Bool, _ desc: String, sourceLocation: SourceLocation = #_sourceLocation) {
+            #expect(condition, "\(desc)", sourceLocation: sourceLocation)
             if !condition { ok = false }
         }
         func items(_ m: AAMenuModel) -> [AAMenuItemModel] { m.flattened }
@@ -201,8 +188,7 @@ public enum MenuModelConformanceTests {
               && down.textSnapshot != subbed.textSnapshot,
               "14 三态两两不同:同一构造器喂不同状态确实产出不同模型(排除「模型恒定」的假绿)")
 
-        let line = "MENUBAR_ASSERT2: ok=\(ok ? 1 : 0) states=3"
-            + "(内核死 / 内核活+rule 模式+节点 HK-01 / 有激活订阅 —— 三态在菜单模型里如实反映且两两不同)"
-        return Conclusion(ok: ok, line: line)
+        print("MENUBAR_ASSERT2: ok=\(ok ? 1 : 0) states=3"
+              + "(内核死 / 内核活+rule 模式+节点 HK-01 / 有激活订阅 —— 三态在菜单模型里如实反映且两两不同)")
     }
 }

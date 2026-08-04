@@ -1,13 +1,42 @@
 # --- 断言组 1:Registry 纯逻辑(经 AAHostTestKit 假件,不起真宿主 / 不碰 UDS)---
-echo "--- 断言组 1:Registry 纯逻辑(AAHostTestKit.RegistryConformanceTests)---"
-OUT="$(AA_SPIKE_DIR="$ROOT/.scratch/agent-delegation/research" "$TESTRUNNER" 2>&1)"; RC=$?
-# 14 票:给 runner 输出留一个**不会被后续断言组覆盖**的别名。
+#
+# 17 票换了**产出这份输出的进程**,没换断言:
+#   17 票之前 —— `registry-tests` 跑手写 TestReport 套件,打印 `PASS: <文案>` 若干行,本组逐条 grep 之;
+#   17 票之后 —— 断言全部是 swift-testing 的 `@Test`,由 `Scripts/check/swift-test.sh` 跑,
+#     而**每条被本文件 grep 的旧断言文案都被原样取作 `@Test` 的名字**,swift-testing 会把用例名
+#     打进输出(`◇ Test "…" started.` / `✔ Test "…" passed`)—— 于是下面 96 条 `assert_contains`
+#     **一个字都没改**就继续成立。改这些 grep 文案 = 改门禁,要改必须同步改对应的 `@Test` 名。
+#   $OUT / $RC 因此改成引用 swift-test.sh 的产物(它在 check.sh 里排在本文件之前)。
+echo "--- 断言组 1:纯逻辑域断言(swift-testing 用例名即旧断言文案;详见 swift-test.sh)---"
+OUT="$SWIFT_TEST_OUT"; RC=$SWIFT_TEST_RC
+# 14 票:给这份输出留一个**不会被后续断言组覆盖**的别名。
 #   $OUT 是全脚本共用的临时变量(后面每个 E2E 组都会拿它装自己的命令输出),
-#   而断言组 MB(菜单栏,排在 app-bundle 之后)还要读这份纯逻辑输出里的结论行。
-#   与其为它再跑一遍 runner(那是十几秒 + 一次真进程套件),不如在这里存一份别名。
+#   而断言组 MB(菜单栏,排在 app-bundle 之后)还要读这份纯逻辑输出里的结论行
+#   (`MENUBAR_ASSERT1/2: ok=…`,17 票之后由 MenuModelConformanceTests 直接 `print` 出来)。
 UNIT_OUT="$OUT"
-printf '%s\n' "$OUT" | sed 's/^/    /'
-assert_exit 0 $RC "registry-tests 全绿退出码"
+echo "    (swift test 完整输出见 $SWIFT_TEST_LOG —— 下面 96 条断言 grep 的就是它;此处不重复刷屏)"
+# 用例数**棘轮**:不低于迁移完成时的 182。
+#
+# 为什么是这条,而不是再断言一次 rc:rc 已经由断言组 T 盯着了,在这里重复盯一遍是**为了凑数留的冗余**,
+#   那种断言除了让 PASS 总数好看之外没有任何价值。换成用例数棘轮,才是这一格该有的东西 ——
+#   它补的是 17 票迁移带来的**真实可观测性损失**:
+#   旧 runner 会打 `ALL_UNIT passed=721`(逐条 `check` 累加),某条断言没跑到,那个数字就会掉;
+#   swift-testing 只报**用例数**,于是「用例中途 return、后面的 `#expect` 根本没执行」不再有数字会变。
+#   棘轮挡不住「用例内部少执行了几条 `#expect`」(那一层只能靠 96 条 grep 兜),
+#   但挡得住**更粗也更常见的那种**:整个 `@Test` 被删掉、被 `.disabled` 掉、或整个文件没编进去。
+# 加用例只管加(棘轮只判下限);要**调低**这个数,必须是有意为之并在此处说明理由 —— 那正是要拦的动作。
+MIN_SWIFT_TESTS=182
+if [ -z "${SWIFT_TEST_COUNT:-}" ]; then
+  # 拿不到数(swift test 挂了 / 汇总行解析不出)→ 无法核验,绝不算过。
+  echo "FAIL: 取不到 swift test 的用例数,无法核验用例数棘轮 —— 绝不算过(rc=$RC,日志 $SWIFT_TEST_LOG)"
+  FAIL=$((FAIL+1))
+elif [ "$SWIFT_TEST_COUNT" -ge "$MIN_SWIFT_TESTS" ]; then
+  echo "PASS: swift test 用例数 $SWIFT_TEST_COUNT ≥ 棘轮下限 $MIN_SWIFT_TESTS(整套用例没有被删/禁用/漏编)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: swift test 用例数 $SWIFT_TEST_COUNT < 棘轮下限 $MIN_SWIFT_TESTS —— 有用例被删除、禁用或没编进去"
+  FAIL=$((FAIL+1))
+fi
 assert_contains "$OUT" "demo.echo" "纯逻辑测试覆盖 demo.echo"
 # 04 票安全核三分支(纯逻辑,假件驱动,不起宿主):
 assert_contains "$OUT" "假 confirm=true 时 handler 恰执行一次" "纯逻辑:dangerous+confirm=true → 执行 handler"

@@ -1,53 +1,37 @@
-// registry-tests —— 宿主与 agent 两套测试基建的统一入口(门禁内部工具,非对外产品)。
+// registry-tests —— 反孤儿信号探针的宿主可执行(门禁内部工具,非对外产品)。
 //
-// 11 票之前:这段代码是 `Scripts/check/build.sh` 用 heredoc **动态生成**到 .build/ 下再 swiftc 直编的。
-//   换成 `swift build` 之后 SPM 只认真源文件,故固化成本 target。**内容与那段 heredoc 逐字一致**:
-//   下游 `Scripts/check/unit-and-domain.sh` 在 grep 这些 print 的字面文本,改一个字都会红。
+// **17 票之后它只剩这一件事。** 此前它是 `AAHostTestKit` + `AAAgentTestKit` 里那 ~4500 行手写
+//   `TestReport` 断言的统一入口;17 票把那些断言整体迁进 `Tests/`(swift-testing),由 `swift test` 跑。
+//
+// 为什么这个 target **必须留着**(不是留恋,是有唯一消费者):
+//   `Scripts/check/agent-e2e.sh` 拿它当**反孤儿信号探针**——`AA_ORPHAN_PROBE=exit` 证明 atexit 钩子
+//   回收整个进程组,`=signal` 证明 SIGTERM 钩子同样回收。那件事**在测试进程内根本验不了**:
+//   它要求宿主真的死一次,而 `swift test` 的宿主进程不能中途 exit(一 exit 整轮测试就没了)。
+//   SPM 的 executableTarget 又不能依赖 testTarget,故探针本体留在 `Sources/AAAgentTestKit/
+//   SystemAgentPortOrphanProbe.swift`,由本文件拉起。
 //
 // 这个文件**可以**叫 main.swift:它是顶层代码,没有构造 `@MainActor` 对象的需求
 //   (与 `Sources/aahost/AAHostMain.swift` 相反 —— 那边必须避开 main.swift)。
-//
-// 断言逻辑本身在 `Sources/AAHostTestKit/` 与 `Sources/AAAgentTestKit/` 的手写 `TestReport` 框架里;
-//   把它们改写成 swift-testing 的 `#expect` 归 17 票,本文件届时才会退役。
-import AAHostTestKit
 import AAAgentTestKit
+import AAContracts
 import Foundation
+
 if let probeMode = ProcessInfo.processInfo.environment["AA_ORPHAN_PROBE"] {
-    SystemAgentPortOrphanProbe.run(mode: probeMode)
+    SystemAgentPortOrphanProbe.run(mode: probeMode)   // 不返回(各分支自己 exit)
 }
-let r1 = RegistryConformanceTests.run()
-for line in r1.lines { print(line) }
-let r2 = ProxyConformanceTests.run()
-for line in r2.lines { print(line) }
-let r3 = AAAgentCoreConformanceTests.run()
-for line in r3.lines { print(line) }
-let r4 = ClaudeAdapterTests.run()
-for line in r4.lines { print(line) }
-let r5 = CodexAdapterTests.run()
-for line in r5.lines { print(line) }
-let r6 = AgentTaskTests.run()
-for line in r6.lines { print(line) }
-let r7 = AgentWatchdogTests.run()
-for line in r7.lines { print(line) }
-let r8 = SystemAgentPortTests.run()
-for line in r8.lines { print(line) }
-let r9 = AgentLaunchAssemblerTests.run()
-for line in r9.lines { print(line) }
-// 14 票:菜单栏轻壳的菜单模型(覆盖面/可追溯性 + 三态如实反映)。纯逻辑,不碰 AppKit。
-let r10 = MenuModelConformanceTests.run()
-for line in r10.lines { print(line) }
-print("REGISTRY_TESTS passed=\(r1.passed) failed=\(r1.failed)")
-print("PROXY_TESTS passed=\(r2.passed) failed=\(r2.failed)")
-print("AGENTCORE_TESTS passed=\(r3.passed) failed=\(r3.failed)")
-print("CLAUDEADAPTER_TESTS passed=\(r4.passed) failed=\(r4.failed)")
-print("CODEXADAPTER_TESTS passed=\(r5.passed) failed=\(r5.failed)")
-print("AGENTTASK_TESTS passed=\(r6.passed) failed=\(r6.failed)")
-print("WATCHDOG_TESTS passed=\(r7.passed) failed=\(r7.failed)")
-print("SYSTEMPORT_TESTS passed=\(r8.passed) failed=\(r8.failed)")
-print("LAUNCHASM_TESTS passed=\(r9.passed) failed=\(r9.failed)")
-print("MENUMODEL_TESTS passed=\(r10.passed) failed=\(r10.failed)")
-let passed = r1.passed + r2.passed + r3.passed + r4.passed + r5.passed + r6.passed + r7.passed + r8.passed + r9.passed + r10.passed
-let failed = r1.failed + r2.failed + r3.failed + r4.failed + r5.failed + r6.failed + r7.failed + r8.failed + r9.failed + r10.failed
-print("ALL_UNIT passed=\(passed) failed=\(failed)")
-fflush(stdout)
-exit(failed == 0 ? 0 : 1)
+
+// 没给探针模式就是**用错了**:17 票之后这个可执行不再跑任何断言。
+//   刻意以非零退出 —— 若哪天有人把它当「跑单元测试」用,必须当场红,而不是静默地「全绿地什么都没跑」。
+//
+// 退出码取 `AAExitCode.usage`(=1),**不写裸 2**:
+//   本仓库的退出码是**单一来源**(`AAContracts.AAExitCode`),散写魔数是明令禁止的;
+//   而且 2 在那张锁定表里是 **denied**(dangerous 被拒),用它表达「用法错」是拿错了语义 ——
+//   将来有人照着退出码判因,会被这条误导。「用法错」在表里就是 1,直接用它。
+//   (双轴 CR 抓到:原先写的是裸 `exit(2)`,两条都犯了。)
+FileHandle.standardError.write(Data("""
+registry-tests:本可执行自 17 票起只作为反孤儿信号探针,不再运行任何断言。
+  用法: AA_ORPHAN_PROBE=exit|signal registry-tests
+  单元/域逻辑断言已全部迁至 swift-testing,跑法: bash Scripts/check.sh(或 swift test --disable-xctest --enable-swift-testing)
+
+""".utf8))
+exit(AAExitCode.usage)
