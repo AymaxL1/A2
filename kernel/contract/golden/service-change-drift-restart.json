@@ -1,0 +1,14 @@
+{
+  "status": {
+    "state": "running",
+    "supervisor": "systemd",
+    "label": "com.a2.kernel",
+    "unitPath": "/home/alice/.config/systemd/user/com.a2.kernel.service",
+    "unitInstalled": true,
+    "registered": true,
+    "pid": 90210,
+    "home": "/home/alice/.a2",
+    "socketPath": "/home/alice/.a2/run/kernel.sock"
+  },
+  "actions": ["unit_written", "supervisor_reloaded", "kernel_restarted"]
+}

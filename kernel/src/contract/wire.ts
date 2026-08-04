@@ -306,6 +306,11 @@ export const ServiceActionSchema = z.enum([
   "supervisor_reloaded",
   /** 显式拉起了内核进程(launchd kickstart / systemd start)。 */
   "kernel_started",
+  /**
+   * 显式重启了内核进程 —— unit 内容漂了而服务正跑着,重写文件不足以让**已经在跑的那个进程**换成新内容。
+   * 只在 systemd 那条路上出现;launchd 的同一情形表现为 `supervisor_unloaded` + `supervisor_loaded`。
+   */
+  "kernel_restarted",
 ]);
 export type ServiceAction = z.infer<typeof ServiceActionSchema>;
 

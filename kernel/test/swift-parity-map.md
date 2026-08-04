@@ -111,6 +111,7 @@
 | 10 | supervisor 命令失败 → 退出码 5 + 指引带着能原样重跑的那条命令 | ▸ supervisor 命令失败(故障注入) |
 | 11 | 本平台无 supervisor → 退出码 6 + 指引给 `a2 daemon run` | ▸ 本平台没有已支持的 supervisor |
 | 12 | 红线:只对 `com.a2.kernel` / `gui/<uid>` 说话 | ▸ 红线:整场只对 com.a2.kernel 说过话(逐条命令原文核对)+ 活体冒烟开跑前的"不是我的就不动" |
+| 13 | **漂移收敛到进程**(unit 变了且服务在跑 → 跑着的那个也得换成新内容),05 票 CR 补账 | ▸ unit 内容漂了就收敛回去(launchd:bootout+bootstrap,断言 pid 变了)/ ▸ unit 漂了且服务在跑(systemd:`kernel_restarted`,断言 pid 变了且新实例能答话) |
 
 **一处新口径(无旧对照,记此备查)**:`a2 service status` 三态**都是退出码 0** —— "没装"是这条查询的合法答案,
 不是查询失败;要"没跑就非零退出"的判据请用 `a2 status`(daemon 不可达 = 4)。两条命令各答各的问题,

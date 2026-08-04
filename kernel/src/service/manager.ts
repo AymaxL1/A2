@@ -69,8 +69,18 @@ export async function serviceInstall(paths: KernelPaths): Promise<OpOutcome> {
       actions.push("unit_written");
     }
 
+    const before = await supervisor.query();
     actions.push(...(await supervisor.syncUnitFiles(unitChanged)));
-    actions.push(...(await supervisor.load(await supervisor.query(), unitChanged)));
+    actions.push(...(await supervisor.load(before, unitChanged)));
+
+    // **漂移要收敛到进程,不只是收敛到文件**:unit 内容变了而服务正跑着时,重写文件 + daemon-reload
+    // 只让"磁盘上写的"变了,那个已经在跑的进程仍在用旧的 ExecStart 与旧的 A2_HOME。
+    // 只有 `loadStartsProcess` 为假的 supervisor(systemd)需要这一步 —— launchd 的 bootout + bootstrap
+    // 本身就把进程换掉了(它那条路的 actions 是 supervisor_unloaded + supervisor_loaded)。
+    if (unitChanged && before.pid !== undefined && !supervisor.loadStartsProcess) {
+      await supervisor.restart();
+      actions.push("kernel_restarted");
+    }
 
     // 装载了不等于跑起来了(unit 内容没变时 launchd 根本不会重启它)。显式拉一把,再验。
     // 只有"刚 bootstrap 过 + 该 supervisor 的装载含拉起"这一种情形值得等 —— 其余情形直接问一次就够,
@@ -103,12 +113,14 @@ export async function serviceUninstall(paths: KernelPaths): Promise<OpOutcome> {
 
     actions.push(...(await supervisor.unload(await supervisor.query())));
 
-    const unitRemoved = existsSync(plan.unitPath);
-    if (unitRemoved) {
+    // 名字说的是**赋值那一刻**的事实(unit 文件还在),而不是"已经删掉了"——
+    // 它同时是"要不要删"与"删完要不要让 supervisor 重读目录"两处判据。
+    const unitPresent = existsSync(plan.unitPath);
+    if (unitPresent) {
       await unlink(plan.unitPath);
       actions.push("unit_removed");
     }
-    actions.push(...(await supervisor.syncUnitFiles(unitRemoved)));
+    actions.push(...(await supervisor.syncUnitFiles(unitPresent)));
 
     // 卸载的承诺是"干净移除",所以要真的确认进程没了 —— 否则下一次 install 会撞上一个野生实例。
     const state = await settle(supervisor, (current) => current.pid === undefined);

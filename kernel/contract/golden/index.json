@@ -123,6 +123,24 @@
       "why": "幂等的可观察面:重复 install 收敛不炸,actions 为空数组 = 本来就是这个样子"
     },
     {
+      "file": "service-change-drift-restart.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "漂移收敛到**进程**(systemd 口径):重写 unit + daemon-reload 之后还要重启,否则跑着的进程仍用旧 ExecStart"
+    },
+    {
+      "file": "response-service-unsupported-platform.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之一:本平台没有已支持的 supervisor(退出码 6),指引给出前台常驻的精确命令"
+    },
+    {
+      "file": "response-service-operation-failed.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之二:supervisor 命令失败(退出码 5),指引里带着那条能原样重跑的命令"
+    },
+    {
       "file": "invalid-request-missing-op.json",
       "schema": "RequestEnvelope",
       "kind": "invalid",

@@ -215,10 +215,21 @@ export function renderLaunchdPlist(spec: UnitSpec): string {
   return lines.join("\n");
 }
 
-/** systemd 的值里有空格/引号就得加引号(ExecStart 与 Environment 同一套词法)。 */
+/**
+ * systemd 的值里有空格/引号就得加引号(ExecStart 与 Environment 同一套词法)。
+ *
+ * **`%` 必须写成 `%%`,而且与加不加引号无关**:`%` 是 systemd 的 specifier 前缀(`%h` = home、`%i` = 实例名……),
+ * 展开发生在**解析 unit 文件**的时候,引号拦不住它 —— 一个名字里带 `%h` 的目录会在 ExecStart 里被换成家目录。
+ * 转义规则是文档明写的 `%%` → 字面 `%`,且在 `ExecStart=` 与 `Environment=` 两种值里同样成立,故在此统一做掉。
+ *
+ * **`$` 有意不转义**:它的展开是**上下文相关**的 —— `ExecStart=` 里 `$VAR`/`${VAR}` 会被展开(转义写 `$$`),
+ * 而 `Environment=` 的值里根本不做变量展开(在那里写 `$$` 只会得到字面的两个美元符)。一个函数没法同时对两处
+ * 都做对,故这里只保证「有 `$` 就加引号」这一层,真要处理 `$` 应当由调用点按自己的语境决定。
+ */
 function systemdQuote(value: string): string {
-  if (!/[\s"'\\$%]/.test(value)) return value;
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  const escaped = value.replaceAll("%", "%%");
+  if (!/[\s"'\\$%]/.test(value)) return escaped;
+  return `"${escaped.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
 /**

@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "id": "018f7a20-9b6e-7c48-a0d2-77f1c8ee4a15",
+  "ok": false,
+  "error": {
+    "code": "service_operation_failed",
+    "message": "系统 supervisor 命令失败,服务未收敛到预期状态。",
+    "detail": "命令失败(退出码 5):launchctl bootstrap gui/501 /Users/alice/Library/LaunchAgents/com.a2.kernel.plist\nBootstrap failed: 5: Input/output error",
+    "guidance": {
+      "summary": "原样重跑那条命令看完整输出;确认 unit 文件权限与内容后再试一次。",
+      "steps": [
+        {
+          "description": "重跑失败的那条命令",
+          "command": "launchctl bootstrap gui/501 /Users/alice/Library/LaunchAgents/com.a2.kernel.plist"
+        },
+        {
+          "description": "看 unit 文件内容",
+          "command": "cat /Users/alice/Library/LaunchAgents/com.a2.kernel.plist"
+        },
+        {
+          "description": "重试安装(幂等)",
+          "command": "a2 service install"
+        }
+      ],
+      "context": {
+        "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.kernel.plist",
+        "label": "com.a2.kernel",
+        "supervisor": "launchd"
+      }
+    }
+  }
+}

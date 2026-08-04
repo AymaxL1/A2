@@ -71,7 +71,8 @@
           "supervisor_loaded",
           "supervisor_unloaded",
           "supervisor_reloaded",
-          "kernel_started"
+          "kernel_started",
+          "kernel_restarted"
         ]
       }
     }

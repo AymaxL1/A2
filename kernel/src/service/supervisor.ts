@@ -47,6 +47,12 @@ export interface Supervisor {
   load(state: SupervisorState, unitChanged: boolean): Promise<ServiceAction[]>;
   /** 显式拉起进程(装载了但没在跑时用)。 */
   start(): Promise<void>;
+  /**
+   * 显式重启进程 —— **unit 内容漂了而服务正跑着**时用:重写文件只收敛了「磁盘上写的是什么」,
+   * 已经在跑的那个进程仍在用旧的 ExecStart/环境变量。只有 `loadStartsProcess` 为假的 supervisor
+   * (systemd)才需要走这一步;launchd 的 bootout + bootstrap 本身就把进程换了。
+   */
+  restart(): Promise<void>;
   /** 停 + 取消自启 + 从 supervisor 卸下(unit 文件由 manager 删)。 */
   unload(state: SupervisorState): Promise<ServiceAction[]>;
 }
@@ -143,6 +149,11 @@ class LaunchdSupervisor implements Supervisor {
     await run(["launchctl", "kickstart", this.#target()]);
   }
 
+  /** `-k` = 先杀再拉。**本 supervisor 上走不到这条路**(load 就已经换了进程),留着是为了接口完整。 */
+  async restart(): Promise<void> {
+    await run(["launchctl", "kickstart", "-k", this.#target()]);
+  }
+
   async unload(state: SupervisorState): Promise<ServiceAction[]> {
     if (!state.registered) return [];
     await run(["launchctl", "bootout", this.#target()], [LAUNCHCTL_NO_SUCH_PROCESS]);
@@ -209,6 +220,10 @@ class SystemdSupervisor implements Supervisor {
 
   async start(): Promise<void> {
     await run(this.#systemctl("start", this.#unit()));
+  }
+
+  async restart(): Promise<void> {
+    await run(this.#systemctl("restart", this.#unit()));
   }
 
   async unload(state: SupervisorState): Promise<ServiceAction[]> {

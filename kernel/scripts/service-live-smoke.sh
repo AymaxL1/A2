@@ -64,9 +64,12 @@ case "$OUT" in *'"state":"running"'*) ok "收敛到 running";; *) bad "没收敛
   && ok "用户真实 ~/Library/LaunchAgents 无 com.a2.* 残留" || bad "用户真实 LaunchAgents 里出现了 com.a2.*"
 
 step "3/8 launchd 真的认识它了"
-if launchctl print "$TARGET" >/tmp/a2live-print.txt 2>&1; then
+# 落点在 $TMPHOME 里(而不是固定的 /tmp/a2live-print.txt):trap 的 `rm -rf "$TMPHOME"` 就把它一并收了,
+# 中途从任何一步退出都不留残渣,并发跑两遍也不会互相踩。
+PRINT_OUT="$TMPHOME/launchctl-print.txt"
+if launchctl print "$TARGET" >"$PRINT_OUT" 2>&1; then
   ok "launchctl print $TARGET 退出码 0"
-  LPID="$(sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' /tmp/a2live-print.txt | head -1)"
+  LPID="$(sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' "$PRINT_OUT" | head -1)"
   [ -n "$LPID" ] && ok "launchd 报了 pid=$LPID" || bad "launchd 没报 pid"
 else
   bad "launchctl print 失败"; LPID=""
@@ -121,6 +124,5 @@ ls "$HOME/Library/LaunchAgents" 2>/dev/null | grep -qi '^com\.a2\.' && bad "用�
 [ -e "$HOME/.a2" ] && bad "用户真实 ~/.a2 被创建了" || ok "用户真实 ~/.a2 仍不存在"
 pgrep -f "^$A2BIN daemon run$" >/dev/null 2>&1 && bad "有 a2 孤儿进程" || ok "无 a2 孤儿进程"
 
-rm -f /tmp/a2live-print.txt
 printf '\n== 活体冒烟结束:PASS=%d FAIL=%d ==\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ] || exit 1

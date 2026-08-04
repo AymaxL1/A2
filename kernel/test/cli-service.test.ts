@@ -224,9 +224,10 @@ test("service install 幂等:已收敛时第二次什么都不改(actions 为空
   expect(added.every((call) => call.startsWith("launchctl print "))).toBe(true);
 });
 
-test("service install:unit 内容漂了就收敛回去(重写 + 先 bootout 再 bootstrap)", async () => {
+test("service install:unit 内容漂了就收敛回去(重写 + 先 bootout 再 bootstrap,进程也换掉)", async () => {
   const box = (sandbox = await makeSandbox("launchd"));
-  await service(box, ["install"]);
+  const before = parseJsonStdout(await service(box, ["install"]));
+  const oldPid = before.result.status.pid;
   const expected = await readFile(box.unitPath, "utf8");
   await writeFile(box.unitPath, `${expected}\n<!-- 有人手改过 -->\n`);
   const callsBefore = (await supervisorCalls(box)).length;
@@ -241,6 +242,37 @@ test("service install:unit 内容漂了就收敛回去(重写 + 先 bootout 再 
   const added = (await supervisorCalls(box)).slice(callsBefore);
   expect(added.some((call) => call.startsWith("launchctl bootout "))).toBe(true);
   expect(added.some((call) => call.startsWith("launchctl bootstrap "))).toBe(true);
+  // **收敛的是进程,不只是文件**:旧进程用的是旧内容,它必须被换掉。
+  expect(body.result.status.state).toBe("running");
+  expect(body.result.status.pid).not.toBe(oldPid);
+  await waitFor("旧内核进程退出", () => !isAlive(oldPid));
+});
+
+test("service install(systemd):unit 漂了且服务在跑 → 重写 + daemon-reload + 重启(进程换成新内容)", async () => {
+  const box = (sandbox = await makeSandbox("systemd"));
+  const before = parseJsonStdout(await service(box, ["install"]));
+  const oldPid = before.result.status.pid;
+  const expected = await readFile(box.unitPath, "utf8");
+  // systemd 的 daemon-reload 只让**磁盘上写的**变了;已经在跑的进程仍用旧 ExecStart/旧 A2_HOME。
+  await writeFile(box.unitPath, `${expected}# 有人手改过\n`);
+  const callsBefore = (await supervisorCalls(box)).length;
+
+  const result = await service(box, ["install"]);
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(body.result.actions).toEqual(["unit_written", "supervisor_reloaded", "kernel_restarted"]);
+  expect(await readFile(box.unitPath, "utf8")).toBe(expected);
+  expect(body.result.status.state).toBe("running");
+  expect(body.result.status.pid).not.toBe(oldPid);
+  await waitFor("旧内核进程退出", () => !isAlive(oldPid));
+  const added = (await supervisorCalls(box)).slice(callsBefore);
+  expect(added).toContain("systemctl --user daemon-reload");
+  expect(added).toContain(`systemctl --user restart ${LABEL}.service`);
+  // 装完就是能用的:重启之后照样得能答话。
+  const status = await runCli(["status", "--json"], { home: box.home, env: box.env });
+  expect(status.exitCode).toBe(0);
+  expect(parseJsonStdout(status).result.pid).toBe(body.result.status.pid);
 });
 
 test("service status / install:装了但没跑 → 三态之二,且 install 会把它显式拉起来", async () => {
@@ -252,7 +284,10 @@ test("service status / install:装了但没跑 → 三态之二,且 install 会�
   process.kill(deadPid, "SIGKILL");
   await waitFor("内核进程退出", () => !isAlive(deadPid));
 
-  const status = parseJsonStdout(await service(box, ["status"]));
+  const statusResult = await service(box, ["status"]);
+  // 三态都是**查询成功**:"装了但没跑"同样是退出码 0(要非零判据请用 `a2 status`)。
+  expect(statusResult.exitCode).toBe(0);
+  const status = parseJsonStdout(statusResult);
   expect(status.result.state).toBe("installed_not_running");
   expect(status.result.registered).toBe(true);
   expect(status.result.unitInstalled).toBe(true);

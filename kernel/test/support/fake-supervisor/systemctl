@@ -89,6 +89,22 @@ case "$verb" in
     save "$enabled" 0
     exit 0
     ;;
+  restart)
+    # 真 systemd 的 restart = 停掉旧进程再按**当前** unit 文件起一个新的(这正是"漂移收敛到进程"依赖的语义)。
+    if [ ! -f "$UNIT" ]; then
+      printf 'Failed to restart unit: Unit not found.\n' >&2
+      exit 5
+    fi
+    [ "$pid" = "0" ] || kill "$pid" 2>/dev/null
+    a2home=$(sed -n 's/^Environment=A2_HOME=//p' "$UNIT")
+    execstart=$(sed -n 's/^ExecStart=//p' "$UNIT")
+    (
+      sleep "${A2_FAKE_START_DELAY:-0.3}"
+      exec env A2_HOME="$a2home" $execstart
+    ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
+    save "$enabled" $!
+    exit 0
+    ;;
 esac
 
 printf 'Unknown verb: %s\n' "$verb" >&2

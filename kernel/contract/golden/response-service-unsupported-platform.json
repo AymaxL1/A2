@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "id": "018f7a20-31c4-7b11-8e05-2a9c4d7f6b30",
+  "ok": false,
+  "error": {
+    "code": "service_unsupported_platform",
+    "message": "本平台没有已支持的系统 supervisor,无法安装常驻服务。",
+    "detail": "平台 freebsd 没有已支持的 supervisor(当下承诺 macOS + Linux)",
+    "guidance": {
+      "summary": "常驻托管暂只支持 macOS(launchd)与 Linux(systemd);其余平台请自行常驻内核进程。",
+      "steps": [
+        {
+          "description": "在一个终端里前台起常驻进程(Ctrl-C 结束)",
+          "command": "a2 daemon run"
+        },
+        {
+          "description": "或用你自己的进程管理器托管这条命令",
+          "command": "a2 daemon run"
+        }
+      ],
+      "context": {
+        "home": "/Users/alice/.a2"
+      }
+    }
+  }
+}
