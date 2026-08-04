@@ -33,6 +33,11 @@ let package = Package(
         .library(name: "AAAgentCore", targets: ["AAAgentCore"]),
         .library(name: "AAAgentSystem", targets: ["AAAgentSystem"]),
         .library(name: "AAAgentTestKit", targets: ["AAAgentTestKit"]),
+        // a2 内核 bin 化 09 票:Swift 侧的契约对照层与 UDS 客户端基座。
+        //   **与 AA* 全族零依赖关系**(见 target 处的头注):09 票是 expand 半步,旧壳一行不动;
+        //   10 票原子切换时才由它们接管喂养源,AA* 随之退场。
+        .library(name: "A2Contract", targets: ["A2Contract"]),
+        .library(name: "A2KernelClient", targets: ["A2KernelClient"]),
     ],
     targets: [
         // ① 零依赖底座
@@ -97,6 +102,21 @@ let package = Package(
         //   **一行 AAContracts 都没有** —— 按本文件「依赖边须与源码实际 import 一一对应」的口径去掉它,不挂空头依赖。
         .target(name: "AAAgentTestKit", dependencies: ["AAAgentCore", "AAAgentSystem"]),
 
+        // ③′ a2 内核 bin 化(09 票)—— **与上面整棵 AA* 依赖树没有任何边**,这是有意的。
+        //
+        // 为什么另起一族而不是往 AAContracts 里加:那是**旧宿主 aahost 的线协议**(op 名、错误码、
+        //   包封形状全不同),两份契约同名不同物,混在一个 target 里只会让"这个 CapabilityDescriptor
+        //   是谁的"变成每次都要问一遍的问题。09 票是 expand 半步(不切换任何东西),两族共存到 10 票,
+        //   届时 AA* 退场。**共存期间绝不互相 import** —— check.sh 的既有断言一条都不会因此变色。
+        //
+        // A2Contract:与 `kernel/src/contract/wire.ts` 一一对照的手写 Codable 镜像(零依赖,不碰 Foundation 之外的东西)。
+        //   契约事实源是 TS(ADR 0010),这边**手写**对照 + 双端跑同一批金标样本(`kernel/contract/golden/`),
+        //   契约漂移在门禁层报警,**不引入代码生成链**。
+        .target(name: "A2Contract"),
+        // A2KernelClient:UDS 客户端基座(连接、NDJSON 字节级拆行、请求-响应相关、推送分发、
+        //   角色注册与确认往返)。依赖边与源码实际 import 一一对应:只有 A2Contract + Foundation/Darwin。
+        .target(name: "A2KernelClient", dependencies: ["A2Contract"]),
+
         // ④ CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),
         // agent-delegation 07:委托试驾 CLI(`run|status|cancel|list|prune`)。
@@ -125,6 +145,13 @@ let package = Package(
         //   把 AppKit 拖进去会让「纯逻辑套件不依赖 GUI」这条金字塔底座失守。
         .executableTarget(name: "menu-snapshot",
                           dependencies: ["AAHostMacOS", "AAHostTestKit", "AAUISystem", "AAContracts"]),
+        // 09 票:a2 内核活体烟测的驱动(**门禁内部工具,不是交付物**,故同样刻意不进 products)。
+        //   它做的事:连真 daemon → 注册 confirm-agent 拿快照 → 起一条真 dangerous 调用 →
+        //   收 confirmation 推送 → 回 approve → 核对发起方拿到的是成功。
+        //   **刻意不进 `swift test`**:那会让 `check.sh` 跑门禁时去起一个真 a2 daemon(本票是 expand,
+        //   check.sh 的行为一行不改)。驱动脚本是 `Scripts/a2-smoke-09.sh`,**不在 Scripts/check/ 下**,
+        //   门禁不引用它。依赖边与 main.swift 的实际 import 一一对应。
+        .executableTarget(name: "a2-smoke", dependencies: ["A2KernelClient", "A2Contract"]),
         // ⑤ swift-testing 用例(11 票起 `swift test` 进门禁;17 票把手写 TestReport 断言全量迁进来)。
         //   依赖边一律与各测试文件的实际 import 一一对应,口径与库 target 相同。
         .testTarget(name: "AAContractsTests", dependencies: ["AAContracts"]),
@@ -139,6 +166,14 @@ let package = Package(
         //   裸跑 `swift test` 没有门禁的清场网 —— 警告见 Tests/README.md 与该文件头注。
         .testTarget(name: "AAAgentTestKitTests",
                     dependencies: ["AAAgentTestKit", "AAAgentCore", "AAAgentSystem", "AAContracts"]),
+        // 09 票:双端金标门禁的 Swift 半边 —— 读 `kernel/contract/golden/` 的**同一批样本**,
+        //   合法样本必须解得动且往返语义等价,非法样本必须被拒;外加"金标清单 ↔ 镜像范围表"的对账
+        //   (新增样本而 Swift 没跟 → 当场红)。样本路径由 `#filePath` 推出仓库根,
+        //   **不经环境变量注入** —— check.sh 一行不改是本票的硬约束。
+        .testTarget(name: "A2ContractTests", dependencies: ["A2Contract"]),
+        // 09 票:客户端基座的协议逻辑(拆行、相关性、推送分流、超时顺延)。
+        //   假内核用 `socketpair()` 现造,**不起任何进程、不碰文件系统** —— 真 daemon 那一关归烟测。
+        .testTarget(name: "A2KernelClientTests", dependencies: ["A2KernelClient", "A2Contract"]),
     ],
     swiftLanguageModes: [.v5]
 )
