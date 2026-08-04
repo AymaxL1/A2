@@ -83,6 +83,26 @@ export const ErrorCode = {
   usage: "usage",
   /** 该 A2_HOME 下已经有一个 daemon 在监听 —— 不抢别人的 socket,报错退出。 */
   daemonAlreadyRunning: "daemon_already_running",
+
+  // MARK: 能力面(04 票)—— 校验三码 + 业务失败 + dangerous 默拒
+
+  /** 能力 id 未登记。 */
+  unknownCapability: "unknown_capability",
+  /** 缺必填参数。 */
+  missingParameter: "missing_parameter",
+  /** 参数类型与声明不符。 */
+  typeMismatch: "type_mismatch",
+  /** 参数取值非法(不在 allowedValues 内、input 不是 JSON 对象等)。 */
+  invalidParams: "invalid_params",
+  /** 能力执行了,但业务上失败了(与"没执行成"分开:退出码 5,不是 6)。 */
+  capabilityFailed: "capability_failed",
+  /**
+   * dangerous 能力被调用,但**没有任何确认器在场** —— fail-closed 默拒(ADR 0005 第 4 条第①层)。
+   * 这不是功能缺失,是无 GUI 形态的设计行为;拒绝报文必带 guidance(第②层「拒绝即指引」)。
+   * 08 票补第③层(确认器在场时带外确认),届时新增 `confirmation_denied` / `confirmation_timeout`,
+   * **本码的含义与形状不变** —— 客户端对"没人能替你确认"的分支不必跟着改。
+   */
+  confirmationUnavailable: "confirmation_unavailable",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -128,6 +148,12 @@ export type ResponseEnvelope = z.infer<typeof ResponseEnvelopeSchema>;
 export const Op = {
   /** 取内核运行态快照。 */
   statusGet: "status.get",
+  /** 列出已登记能力(manifest 全量)。 */
+  capabilitiesList: "capabilities.list",
+  /** 取单个能力的 manifest。 */
+  capabilitiesDescribe: "capabilities.describe",
+  /** 调用一个能力。 */
+  capabilitiesCall: "capabilities.call",
 } as const;
 export type Op = (typeof Op)[keyof typeof Op];
 
@@ -169,6 +195,80 @@ export const HelpResultSchema = z.object({
 });
 export type HelpResult = z.infer<typeof HelpResultSchema>;
 
+// MARK: - 能力 manifest 与能力面 result(04 票)
+
+/**
+ * 风险三档(ADR 0004 的分级承载,取值即契约):
+ *   * `safe` —— 只读,直通;
+ *   * `normal` —— 可逆写,直通(不打断,零确认);
+ *   * `dangerous` —— 需真人在场证明,走三层仲裁(ADR 0005 第 4 条)。
+ */
+export const RiskLevelSchema = z.enum(["safe", "normal", "dangerous"]);
+export type RiskLevel = z.infer<typeof RiskLevelSchema>;
+
+/**
+ * 参数类型词汇表。取的是 **JSON Schema 的词**(`boolean` 而非旧 Swift 的 `bool`):
+ * 这张表要同时喂给 agent 和 11 票的插件 `describe` 输出,用 JSON 世界的通用词少一层翻译。
+ */
+export const ParameterTypeSchema = z.enum(["string", "number", "boolean", "object", "array"]);
+export type ParameterType = z.infer<typeof ParameterTypeSchema>;
+
+/**
+ * 单个参数的声明。**数据驱动**(而不是把 zod schema 塞进 manifest):
+ * 插件(11 票)只能用 JSON 描述自己的工具,能力面必须能被纯数据表达,内置能力与插件才是同一套东西。
+ */
+export const ParameterSpecSchema = z.object({
+  name: z.string().min(1),
+  type: ParameterTypeSchema,
+  required: z.boolean(),
+  description: z.string().min(1),
+  /** 仅对 string 生效;缺省/空 = 不约束取值。 */
+  allowedValues: z.array(z.string()).min(1).optional(),
+});
+export type ParameterSpec = z.infer<typeof ParameterSpecSchema>;
+
+/** 能力 manifest:agent 靠它决定"调什么、怎么调、会不会被拦"。 */
+export const CapabilityDescriptorSchema = z.object({
+  id: z.string().min(1),
+  risk: RiskLevelSchema,
+  summary: z.string().min(1),
+  parameters: z.array(ParameterSpecSchema),
+});
+export type CapabilityDescriptor = z.infer<typeof CapabilityDescriptorSchema>;
+
+/** `capabilities.list` 的 result。数组顺序 = 登记顺序(稳定,便于人读与 diff)。 */
+export const CapabilityListResultSchema = z.object({
+  capabilities: z.array(CapabilityDescriptorSchema),
+});
+export type CapabilityListResult = z.infer<typeof CapabilityListResultSchema>;
+
+/** `capabilities.describe` 的 result。 */
+export const CapabilityDescribeResultSchema = z.object({
+  descriptor: CapabilityDescriptorSchema,
+});
+export type CapabilityDescribeResult = z.infer<typeof CapabilityDescribeResultSchema>;
+
+/**
+ * `capabilities.call` 的 result。`capability` 回填便于 agent 对号,`output` 是能力自己的返回值。
+ * (08 票若引入"带外确认中"的异步态,按可选字段追加 —— 可选字段追加不算不兼容变更。)
+ */
+export const CapabilityCallResultSchema = z.object({
+  capability: z.string().min(1),
+  output: JsonValueSchema,
+});
+export type CapabilityCallResult = z.infer<typeof CapabilityCallResultSchema>;
+
+/** `capabilities.describe` 的 params。 */
+export const CapabilityDescribeParamsSchema = z.object({
+  capability: z.string().min(1),
+});
+
+/** `capabilities.call` 的 params。`input` 必须是 JSON 对象(参数按名取),缺省等价于空对象。 */
+export const CapabilityCallParamsSchema = z.object({
+  capability: z.string().min(1),
+  input: z.record(z.string(), JsonValueSchema).optional(),
+});
+
 // MARK: - 构造器(包封只在这里拼,禁止各处手搓字面量)
 
 export function successResponse(id: string, result: JsonValue): SuccessResponse {
@@ -177,6 +277,20 @@ export function successResponse(id: string, result: JsonValue): SuccessResponse 
 
 export function failureResponse(id: string, error: WireError): FailureResponse {
   return { v: PROTOCOL_VERSION, id, ok: false, error };
+}
+
+/**
+ * op 层的成败(**包封之下的一层**):handler 说"成了带这个 result"或"没成带这个 error",
+ * 由 router 统一裹进包封。这样 handler 既不用手搓包封,也不必用异常表达业务失败。
+ */
+export type OpOutcome = { ok: true; result: JsonValue } | { ok: false; error: WireError };
+
+export function opSuccess(result: JsonValue): OpOutcome {
+  return { ok: true, result };
+}
+
+export function opFailure(error: WireError): OpOutcome {
+  return { ok: false, error };
 }
 
 export function request(op: string, params?: Record<string, JsonValue>): RequestEnvelope {

@@ -1,0 +1,15 @@
+{
+  "descriptor": {
+    "id": "demo.echo",
+    "risk": "safe",
+    "summary": "回显一条消息",
+    "parameters": [
+      {
+        "name": "message",
+        "type": "string",
+        "required": true,
+        "description": "要回显的文本"
+      }
+    ]
+  }
+}

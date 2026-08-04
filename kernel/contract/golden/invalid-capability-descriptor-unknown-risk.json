@@ -1,0 +1,6 @@
+{
+  "id": "demo.echo",
+  "risk": "critical",
+  "summary": "风险档只有 safe / normal / dangerous 三个取值",
+  "parameters": []
+}

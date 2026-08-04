@@ -4,6 +4,7 @@
 // 只要有一条命令在 `--json` 下吐散文,agent 的 `JSON.parse` 就得配一张"哪些命令例外"的表 —— 那张表不该存在。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { exitCodeForErrorCode } from "../src/contract/exit-codes.ts";
 import { HelpResultSchema, VersionResultSchema } from "../src/contract/wire.ts";
 import { cleanupHome, makeHome, parseJsonStdout, runCli } from "./support/harness.ts";
 
@@ -43,6 +44,14 @@ test("help --json:帮助文本进 result,机读面不留散文空洞", async () 
   expect(body.ok).toBe(true);
   expect(HelpResultSchema.safeParse(body.result).success).toBe(true);
   expect(body.result.usage).toContain("a2 [--json] <子命令>");
+});
+
+// CLI 缝上跑不出"内核吐了个我不认识的 code"这种情形(码都是自家产的),但契约里这条兜底必须成立:
+// 未来某一版内核加了新码、旧 CLI 还没跟上时,**绝不能吞成成功**。
+test("退出码契约:未登记的 error.code 保守归 6,绝不吞成 0", () => {
+  for (const code of ["brand_new_code_nobody_registered", "", "SUCCESS", "0"]) {
+    expect(exitCodeForErrorCode(code)).toBe(6);
+  }
 });
 
 test("光敲 a2 --json:是用法错(ok=false + 退出码 1),不是成功地打了个帮助", async () => {

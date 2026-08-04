@@ -41,9 +41,19 @@ export function exitCodeForErrorCode(code: string): number {
     // 「已经在跑」不是能力失败也不是协议错,而是"你这条命令这会儿不该发" —— 与用法错同一档。
     case ErrorCode.daemonAlreadyRunning:
       return ExitCode.usage;
+    // dangerous 被拒(本版唯一的来源是"无确认器"的 fail-closed 默拒;08 票的用户拒绝/超时也归这档)。
+    case ErrorCode.confirmationUnavailable:
+      return ExitCode.denied;
+    // 能力执行了但业务失败 —— 与"没执行成"分开,agent 据此决定要不要改参数重试。
+    case ErrorCode.capabilityFailed:
+      return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:
     case ErrorCode.internalError:
+    case ErrorCode.unknownCapability:
+    case ErrorCode.missingParameter:
+    case ErrorCode.typeMismatch:
+    case ErrorCode.invalidParams:
       return ExitCode.protocolError;
     default:
       return ExitCode.protocolError;

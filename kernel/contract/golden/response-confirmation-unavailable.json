@@ -1,0 +1,28 @@
+{
+  "v": 1,
+  "id": "018f3b1c-0a5a-7c3e-9f2b-1d4e5f6a7b8d",
+  "ok": false,
+  "error": {
+    "code": "confirmation_unavailable",
+    "message": "demo.wipe 是 dangerous 能力,当前没有确认器在场,已按 fail-closed 拒绝执行。",
+    "detail": "内核永不接受经 AI agent 之手的确认(`--yes` 类旁路永禁,TTY 也不构成人类证明),确认必须由带外的确认器完成。",
+    "guidance": {
+      "summary": "dangerous 能力需要确认器在场,当前没有任何确认器连接。",
+      "steps": [
+        {
+          "description": "在 Mac 上启动菜单栏壳并保持它运行,它会注册为确认器",
+          "command": "open -a \"A2 Panel\""
+        },
+        {
+          "description": "回到菜单栏图标,在弹出的确认框里亲自点「允许」"
+        }
+      ],
+      "context": {
+        "capability": "demo.wipe",
+        "risk": "dangerous",
+        "home": "/Users/alice/.a2",
+        "socketPath": "/Users/alice/.a2/run/kernel.sock"
+      }
+    }
+  }
+}

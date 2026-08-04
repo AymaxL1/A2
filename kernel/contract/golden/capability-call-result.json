@@ -1,0 +1,6 @@
+{
+  "capability": "demo.echo",
+  "output": {
+    "echo": "hi"
+  }
+}

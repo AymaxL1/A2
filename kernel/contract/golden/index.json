@@ -45,6 +45,42 @@
       "why": "指引载荷本体:步骤可以只有说明、没有命令"
     },
     {
+      "file": "request-capabilities-call.json",
+      "schema": "RequestEnvelope",
+      "kind": "valid",
+      "why": "能力调用请求:params 里 capability + input(按参数名取值的 JSON 对象)"
+    },
+    {
+      "file": "capability-descriptor.json",
+      "schema": "CapabilityDescriptor",
+      "kind": "valid",
+      "why": "能力 manifest:风险档 + 参数声明(含可选参数与 allowedValues 取值域)"
+    },
+    {
+      "file": "capability-list-result.json",
+      "schema": "CapabilityListResult",
+      "kind": "valid",
+      "why": "capabilities.list 的 result:含一条无入参的 dangerous 能力"
+    },
+    {
+      "file": "capability-describe-result.json",
+      "schema": "CapabilityDescribeResult",
+      "kind": "valid",
+      "why": "capabilities.describe 的 result:单条 manifest 包一层 descriptor"
+    },
+    {
+      "file": "capability-call-result.json",
+      "schema": "CapabilityCallResult",
+      "kind": "valid",
+      "why": "capabilities.call 的 result:capability 回填 + 能力自己的 output"
+    },
+    {
+      "file": "response-confirmation-unavailable.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "dangerous 默拒(fail-closed)的完整报文形状 —— 08 票补确认器时本形状不变"
+    },
+    {
       "file": "version-result.json",
       "schema": "VersionResult",
       "kind": "valid",
@@ -85,6 +121,18 @@
       "schema": "Guidance",
       "kind": "invalid",
       "why": "指引必须至少给出一步 —— 空指引等于没指引"
+    },
+    {
+      "file": "invalid-capability-descriptor-unknown-risk.json",
+      "schema": "CapabilityDescriptor",
+      "kind": "invalid",
+      "why": "风险档不在 safe/normal/dangerous 三档内 —— 分级是仲裁的输入,不许有第四档"
+    },
+    {
+      "file": "invalid-capability-call-result-missing-output.json",
+      "schema": "CapabilityCallResult",
+      "kind": "invalid",
+      "why": "调用成功却没有 output:成功就必须有结果,哪怕是 null"
     },
     {
       "file": "invalid-version-result-protocol-drift.json",

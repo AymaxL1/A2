@@ -1,0 +1,23 @@
+{
+  "capabilities": [
+    {
+      "id": "demo.echo",
+      "risk": "safe",
+      "summary": "回显一条消息",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true,
+          "description": "要回显的文本"
+        }
+      ]
+    },
+    {
+      "id": "demo.wipe",
+      "risk": "dangerous",
+      "summary": "演示 dangerous 档仲裁",
+      "parameters": []
+    }
+  ]
+}

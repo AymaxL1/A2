@@ -13,6 +13,10 @@
 import path from "node:path";
 import { z } from "zod";
 import {
+  CapabilityCallResultSchema,
+  CapabilityDescribeResultSchema,
+  CapabilityDescriptorSchema,
+  CapabilityListResultSchema,
   GuidanceSchema,
   HelpResultSchema,
   RequestEnvelopeSchema,
@@ -31,6 +35,10 @@ export const CONTRACT_SCHEMAS = {
   StatusResult: StatusResultSchema,
   VersionResult: VersionResultSchema,
   HelpResult: HelpResultSchema,
+  CapabilityDescriptor: CapabilityDescriptorSchema,
+  CapabilityListResult: CapabilityListResultSchema,
+  CapabilityDescribeResult: CapabilityDescribeResultSchema,
+  CapabilityCallResult: CapabilityCallResultSchema,
 } as const;
 
 export type ContractName = keyof typeof CONTRACT_SCHEMAS;

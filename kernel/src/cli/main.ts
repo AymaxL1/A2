@@ -4,68 +4,14 @@
 // 纪律(ADR 0005/0008):永不交互阻塞、无 `--yes` 旁路、`--json` 时 stdout 只有一条 JSON 包封。
 
 import { ExitCode } from "../contract/exit-codes.ts";
-import {
-  ErrorCode,
-  PROTOCOL_VERSION,
-  failureResponse,
-  successResponse,
-} from "../contract/wire.ts";
+import { PROTOCOL_VERSION, successResponse } from "../contract/wire.ts";
 import { resolvePaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
+import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
-import { emitOutcome, renderWireError, type CommandOutcome } from "./outcome.ts";
+import { emitOutcome, type CommandOutcome } from "./outcome.ts";
 import { statusCommand } from "./status.ts";
-
-const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内核
-
-用法:
-  a2 [--json] <子命令> [参数]
-
-子命令:
-  status               查询 daemon 运行态(经 UDS 往返)
-  daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
-  help                 打印本帮助
-  version              打印版本
-
-全局参数:
-  --json               机读输出:stdout 上只有一条 JSON 包封(成功与失败同一形状)
-  -h, --help           同 help
-  -V, --version        同 version
-
-环境变量:
-  A2_HOME              覆写 ~/.a2(socket 落 <A2_HOME>/run/kernel.sock)
-
-退出码:0 成功 / 1 用法错 / 2 denied / 3 超时 / 4 daemon 不可达 / 5 能力业务失败 / 6 协议·校验错`;
-
-/** 用法错 —— 也照「拒绝即指引」给出下一步命令。 */
-function usageOutcome(message: string): CommandOutcome {
-  const envelope = failureResponse(crypto.randomUUID(), {
-    code: ErrorCode.usage,
-    message,
-    guidance: {
-      summary: "查看可用子命令与参数后重试。",
-      steps: [{ description: "打印帮助", command: "a2 help" }],
-    },
-  });
-  return {
-    envelope,
-    human: `${renderWireError(envelope.error)}\n\n${USAGE}`,
-    exitCode: ExitCode.usage,
-  };
-}
-
-/**
- * 帮助与版本这两条**不走 daemon**,但机读面一视同仁:`--json` 下照样是一条包封
- * (result 形状见 wire.ts 的 `HelpResult` / `VersionResult`)。人类面仍是老样子 ——
- * `a2 version` 打裸版本号,脚本里 `$(a2 version)` 不会突然变成一坨 JSON。
- */
-function helpOutcome(): CommandOutcome {
-  return {
-    envelope: successResponse(crypto.randomUUID(), { usage: USAGE }),
-    human: USAGE,
-    exitCode: ExitCode.success,
-  };
-}
+import { USAGE, helpOutcome, usageOutcome } from "./usage.ts";
 
 /** argv(不含 argv0/argv1)→ 结果。**不**碰进程状态,好让下面那三行决定怎么输出、怎么退出。 */
 async function dispatch(argv: string[]): Promise<CommandOutcome> {
@@ -74,8 +20,10 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   // 光敲 `a2` 不是"帮我打印帮助",是"我没说要干什么" —— 照用法错处理(ok=false + 退出码 1),
   // 免得 agent 读到 ok=true 却拿到非零退出码。
   if (command === undefined) return usageOutcome("缺少子命令。");
-  if (command === "help" || command === "-h" || command === "--help") return helpOutcome();
+  if (command === "help" || command === "-h" || command === "--help") return helpOutcome(USAGE);
   if (command === "version" || command === "-V" || command === "--version") {
+    // 版本不走 daemon,但机读面一视同仁:`--json` 下照样是一条包封(result 形状见 wire.ts 的 VersionResult)。
+    // 人类面仍是裸版本号,脚本里的 `$(a2 version)` 不会突然变成一坨 JSON。
     return {
       envelope: successResponse(crypto.randomUUID(), {
         version: KERNEL_VERSION,
@@ -88,6 +36,9 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   if (command === "status") {
     if (args.length > 0) return usageOutcome(`status 不接受多余参数:${args.join(" ")}`);
     return await statusCommand(resolvePaths());
+  }
+  if (command === "capabilities") {
+    return await capabilitiesCommand(args, resolvePaths());
   }
   if (command === "daemon") {
     if (args[0] !== "run" || args.length > 1) {

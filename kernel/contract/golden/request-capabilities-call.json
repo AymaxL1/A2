@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "req-0003",
+  "op": "capabilities.call",
+  "params": {
+    "capability": "demo.note.set",
+    "input": {
+      "key": "机场",
+      "value": "东京",
+      "scope": "persistent"
+    }
+  }
+}

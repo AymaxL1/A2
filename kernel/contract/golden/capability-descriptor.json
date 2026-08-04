@@ -1,0 +1,20 @@
+{
+  "id": "demo.note.set",
+  "risk": "normal",
+  "summary": "记一条便签(可逆写,直通不打断)",
+  "parameters": [
+    {
+      "name": "key",
+      "type": "string",
+      "required": true,
+      "description": "便签的键"
+    },
+    {
+      "name": "scope",
+      "type": "string",
+      "required": false,
+      "description": "作用域(可选,默认 session)",
+      "allowedValues": ["session", "persistent"]
+    }
+  ]
+}
