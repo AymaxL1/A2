@@ -1,9 +1,12 @@
 ---
-status: accepted
+status: superseded by ADR-0009
 date: 2026-07-28
+superseded: 2026-08-04
 ---
 
 # 平台边界：Mac-only / Mac-first
+
+> **2026-08-04 废止**：本 ADR 已由 [ADR 0009](0009-kernel-platform-scope.md)（内核承诺 macOS + Linux、Windows 远景不设预留、UI 仅 Mac）取代。触发原因是架构反转（[ADR 0008](0008-kernel-bin-ui-optional.md)）——需要跨端的是无头内核的 CLI 面，不是 UI，本 ADR「三端 UI 成本过高」的论证前提随之消失。以下正文保留为历史记录。
 
 原调研文档曾承诺 macOS、Windows 为完整宿主、Web 为能力子集；本次 V1 重梳开图时（2026-07-27）用户确认将平台承诺收缩为 **Mac-only / Mac-first**，V1 只做 macOS。Windows/Web 将来若有真实需求，按新效fort重画目的地，接受届时重写（含核心代码）。
 

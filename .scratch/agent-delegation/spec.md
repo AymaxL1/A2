@@ -1,6 +1,6 @@
 # Spec:宿主调用本地 agent 适配层(AAAgentCore)
 
-Status: ready-for-agent
+Status: ready-for-agent(**正文按旧架构写成,开工前必须先读文末[修订指令](#修订指令2026-08-04a2-内核-bin-化)**)
 创建:2026-07-29(/to-spec 综合 agent-delegation wayfinder 图,无新面试)
 决策来源:`.scratch/agent-delegation/map.md`(四轮批量面试 14 项决议)、[multica 适配层调研](research/multica-adapter-analysis.md)、[01 Claude spike](issues/01-spike-claude-headless.md) + [findings](research/spike-claude-headless/findings.md)、[02 Codex spike](issues/02-spike-codex-exec.md) + [findings](research/spike-codex-exec/findings.md)、[03 任务工作区结构](research/task-workspace-proposal.md)。
 
@@ -157,3 +157,12 @@ V1 的委托入口是一个**试驾 CLI**(独立可执行,不碰现有 `aa`/宿�
 - **spike 样本是一等测试资产**:`research/spike-*/` 下的真实事件流不是临时产物,是次 seam 的黄金向量,实施时纳入版本库并被测试引用。
 - **旗舰验收辞**:「宿主经 `aa-agent` 委托 codex/claude 完成一次诊断任务并产出 HTML 报告;委托一次经 `aa demo.note.set` 的可逆改动全程零打断;委托一次经 `aa demo.wipe` 的信任面改动必触发宿主 GUI 确认且拒绝分支能挡住」——此场景通过即本模块出口。
 - **与参考项目 multica 的关键差异**:multica 全自动无平台审批面(连 agent 的「问人」工具都禁用),本模块的双层信任正是补上这一环;multica 在 daemon 边界丢 CallID、消息排序有隐患,本模块保留 CallID 全链;multica 会话机器绑定,本模块 V1 索性不做续接。详见 [multica 调研报告](research/multica-adapter-analysis.md) 第 8 节借鉴与踩坑清单。
+
+## 修订指令(2026-08-04,a2 内核 bin 化)
+
+架构反转(见 [ADR 0008](../../docs/adr/0008-kernel-bin-ui-optional.md))之后,本 spec 正文所依赖的宿主模型(`aahost` 持有主逻辑、GUI 弹窗确认、`aa` 薄客户端、`~/.aa` 路径)已整体作废。**本次不改正文实现细节**——正文继续作为「一次委托怎么跑」的行为规范参考;下列三条是重启本效fort时必须先落地的修订方向,冲突处以本指令为准。指令来源:`.scratch/kernel-bin-recharter/` 的 04/05/06/08 票。
+
+1. **审批收敛到内核统一仲裁**。委托执行器的 dangerous 与普通调用一律走内核的**三层仲裁**([ADR 0005](../../docs/adr/0005-agent-first-interaction.md) 修订后第 4 条):无确认器 → 结构化默拒;拒绝报文自带「人类如何完成」的精确命令并结构化回传发起方;有确认器 → 带外确认(确认信息永不过 agent 之手)。同一条确认器通道、同一套禁旁路规则(`--yes` 永禁、TTY 确认禁止)、内核统一 audit 记账。正文「双层信任」一节里凡是「经 `aa` → `Registry.invoke` → 宿主 GUI 确认 / nil 回调 fail-closed」的表述,一律按新模型重读:**平台信任面不可绕过这一条不变,变的是确认由谁出面、不在场时怎么办**。
+2. **执行器将来在内核内以 TS 重生**。`aa-agent` / `AAAgentCore` 随旧可执行一并**挂起**(04 票):不再新建 Swift 实现,已有 Swift 代码与测试降级为行为规范参考;将来在 `kernel/` 内以 TS 重建([ADR 0010](../../docs/adr/0010-ts-kernel-bun-runtime.md))。连带改名:委托入口 `aa-agent …` → 内核子命令(`a2 …`,具体命名届时定);任务工作区根 `~/.aa/agent-tasks/` → `~/.a2/agent-tasks/`(`A2_HOME` 可覆写);正文里 agent 反向调用平台的 `aa …` 一律为 `a2 … --json`。**AgentPort/ClockPort/FileSystemPort 的端口化思想、6 型消息归一化、三处不对称的抹平规则、两个 spike 的黄金样本**在 TS 侧原样继承——spike 样本继续是一等测试资产。
+3. **壳侧无专属通道**。菜单栏壳 `a2-panel` 是对等客户端 + 角色注册(确认器 / 订阅者),**不含业务逻辑**,不为委托开任何私有入口;正文 Out of Scope 里的「宿主 GUI 接线(菜单栏委托入口、系统通知、GUI 实时滚屏)」按新契约重画——委托状态经内核事件流推送给订阅者,壳只做投影。委托的发起端首选 CLI(agent 与人都走同一条),GUI 入口是可选糖。
+4. **仍然待裁**:「发起方决定确认强度」(人亲手发起 vs 插件/CLI 发起委托的档位差异)在本次批次里**没有被裁**,继续挂在本 spec 的 fog 里,重启本效fort时连同 TS 重建方案一并 sharpen。

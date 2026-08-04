@@ -1,9 +1,12 @@
 ---
-status: accepted
+status: superseded by ADR-0010
 date: 2026-07-28
+superseded: 2026-08-04
 ---
 
 # 技术栈：Swift 原生（SwiftUI + AppKit 兜底，SPM 单包多 target）
+
+> **2026-08-04 废止**：本 ADR 已由 [ADR 0010](0010-ts-kernel-bun-runtime.md)（TS 内核 + Bun compile 单 bin，Mac 壳留 Swift）取代。触发原因是架构反转与跨端承诺（[ADR 0008](0008-kernel-bin-ui-optional.md)、[ADR 0009](0009-kernel-platform-scope.md)）——本 ADR 的前提「Mac-only + UI 是必需品」不再成立。**注意重立的是内核语言，不是 UI 路线**：Mac 菜单栏壳与全套 UI 资产继续用 Swift（见 ADR 0010），文末 electron-recon 重评结论（不回 Electron）依然有效。以下正文保留为历史记录。
 
 Mac-only 前提下（[ADR 0001](0001-mac-only-platform-boundary.md)），V1 技术栈裁决为 **Swift 原生**（2026-07-28 用户裁决）：Swift/SwiftUI，AppKit 兜底，SPM 单包多 target monorepo（包结构粒度经 [07 票](../../.scratch/v1-mac-recharter/issues/07-swift-architecture-mapping.md)细化裁决）。Electron 方案废弃，Tauri 退出候选；回退候选为 Electron+TS。
 
