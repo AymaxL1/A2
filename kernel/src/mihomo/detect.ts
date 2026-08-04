@@ -16,6 +16,7 @@ import { readAdoption, type MihomoAdoption } from "./install.ts";
 import {
   loopbackTarget,
   readControllerFromConfig,
+  readSecretOf,
   type MihomoLayout,
   type MihomoScanInputs,
 } from "./paths.ts";
@@ -102,10 +103,7 @@ async function collectManaged(
     classifyManagedBinary(layout.binaryPath),
     supervisor.query(),
   ]);
-  const config = await Bun.file(layout.configPath)
-    .text()
-    .catch(() => undefined);
-  const secret = config ? readControllerFromConfig(config)?.secret : undefined;
+  const secret = await readSecretOf(layout.configPath);
   const version =
     kind.binaryKind === "absent" ? undefined : await binaryVersion(layout.binaryPath);
   const probe = await probeController(layout.controller, secret);
@@ -169,7 +167,8 @@ async function findForeignController(
   if (adoption) {
     const target = loopbackTarget(adoption.controller);
     if (!target) return { skipped: { address: adoption.controller, ...(adoption.configFile ? { configFile: adoption.configFile } : {}) } };
-    const secret = adoption.configFile ? await secretOf(adoption.configFile) : undefined;
+    // 收编记录只存地址,钥匙每次现读那份配置(它随时可能被主人改)。
+    const secret = adoption.configFile ? await readSecretOf(adoption.configFile) : undefined;
     return {
       target,
       address: adoption.controller,
@@ -204,12 +203,6 @@ async function findForeignController(
     };
   }
   return undefined;
-}
-
-/** 从一份配置里只把 secret 读出来(收编记录只存地址,钥匙每次现读 —— 它随时可能被主人改)。 */
-async function secretOf(configFile: string): Promise<string | undefined> {
-  const text = await Bun.file(configFile).text().catch(() => undefined);
-  return text ? readControllerFromConfig(text)?.secret : undefined;
 }
 
 /** 跑一次 `<bin> -v` 问版本。**这是只读操作**:mihomo 的 `-v` 打印一行就退出,不碰配置、不开端口。 */

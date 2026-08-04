@@ -4,6 +4,8 @@
 
 import { ExitCode } from "../contract/exit-codes.ts";
 import { ErrorCode, failureResponse, successResponse } from "../contract/wire.ts";
+// 帮助文本里的默认端口从常量插值 —— 帮助与实现是同一个数,改常量不会留下一句过时的散文。
+import { A2_MIHOMO_CONTROLLER_PORT } from "../mihomo/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { renderWireError, type CommandOutcome } from "./outcome.ts";
 
@@ -102,11 +104,12 @@ export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据�
   A2_HOME                  覆写 ~/.a2(自管 mihomo 落在 <A2_HOME>/mihomo/)
   A2_MIHOMO_CONTROLLER     直接指定要收编的 external-controller(host:port),跳过配置解析
   A2_MIHOMO_SECRET         配套上一条的 secret
-  A2_MIHOMO_CONTROLLER_PORT 覆写 a2 自管实例的控制端口(默认 9097,有意避开 mihomo 默认的 9090)
+  A2_MIHOMO_CONTROLLER_PORT 覆写 a2 自管实例的控制端口(默认 ${A2_MIHOMO_CONTROLLER_PORT},有意避开 mihomo 默认的 9090)
   A2_MIHOMO_RELEASE_BASE   覆写发布渠道根地址(镜像源)
   A2_MIHOMO_BIN_DIRS       覆写二进制搜索目录(冒号分隔)。仅测试与诊断用
   A2_MIHOMO_CONFIG_FILES   覆写配置搜索路径(冒号分隔)。仅测试与诊断用
   A2_MIHOMO_EXPECT_SHA256  覆写下载物的期望摘要。仅测试与诊断用
+  A2_MIHOMO_ASSET_KEY      覆写本机资产键(如 linux-amd64,用于在别的平台上验这条路径)。仅测试与诊断用
 
 内核只对回环地址上的 external-controller 发只读请求(GET /version、GET /configs),从不做端口扫描。
 

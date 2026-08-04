@@ -7,7 +7,10 @@
 // 不碰网络、不碰任何系统状态** —— `demo.wipe` 尤其:它叫 wipe 只是为了让"dangerous 被默拒"这条链
 // 在门禁里端到端可验证,handler 本身什么都不擦。
 //
-// 真能力(service / mihomo / 代理)分别归 05、06、07 票,往这张表上加即可。
+// 真能力往这张表上加。**但不是所有子命令都是能力**:`a2 service`(05 票)与 `a2 mihomo`(06 票)
+// 问的是文件系统、supervisor 与 external-controller,daemon 没跑时更要能答话,所以它们**不进本表**
+// (口径见 `test/swift-parity-map.md`「有意的契约变更」第 13 条)。
+// 进本表的是必须经 daemon 的代理域能力(`proxy.*`,07 票)与将来的插件工具(11 票)。
 
 import {
   CapabilityFailedError,

@@ -62,9 +62,13 @@ export interface Supervisor {
   /** 显式拉起进程(装载了但没在跑时用)。 */
   start(): Promise<void>;
   /**
-   * 显式重启进程 —— **unit 内容漂了而服务正跑着**时用:重写文件只收敛了「磁盘上写的是什么」,
-   * 已经在跑的那个进程仍在用旧的 ExecStart/环境变量。只有 `loadStartsProcess` 为假的 supervisor
-   * (systemd)才需要走这一步;launchd 的 bootout + bootstrap 本身就把进程换了。
+   * 显式重启进程。两个调用场景,**两端各占一个**:
+   *   * **unit 内容漂了而服务正跑着**(`converge.ts`):重写文件只收敛了「磁盘上写的是什么」,
+   *     已经在跑的那个进程仍在用旧的 ExecStart/环境变量。这一路只有 `loadStartsProcess` 为假的
+   *     supervisor(systemd)走得到 —— launchd 的 bootout + bootstrap 本身就把进程换了。
+   *   * **文件换了而 unit 没变**(`mihomo/manager.ts` 的 `mihomoUpgrade`):二进制被换成新版本,
+   *     unit 内容一个字都没动,收敛逻辑因此不会做任何事,而跑着的那个进程还攥着旧 inode。
+   *     这一路**两端都走得到**,launchd 上就是下面那条 `kickstart -k`。
    */
   restart(): Promise<void>;
   /** 停 + 取消自启 + 从 supervisor 卸下(unit 文件由 manager 删)。 */
@@ -163,7 +167,10 @@ class LaunchdSupervisor implements Supervisor {
     await run(["launchctl", "kickstart", this.#target()]);
   }
 
-  /** `-k` = 先杀再拉。**本 supervisor 上走不到这条路**(load 就已经换了进程),留着是为了接口完整。 */
+  /**
+   * `-k` = 先杀再拉。**漂移收敛那一路走不到这里**(launchd 的 load 已经换了进程),
+   * 但 `a2 mihomo upgrade` 走得到:换二进制不改 unit,只能靠这条把进程换到新 inode 上。
+   */
   async restart(): Promise<void> {
     await run(["launchctl", "kickstart", "-k", this.#target()]);
   }

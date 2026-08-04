@@ -50,6 +50,13 @@ export const MihomoEnv = {
   releaseBase: "A2_MIHOMO_RELEASE_BASE",
   /** 覆写下载物的期望 SHA-256。仅测试与诊断用(生产走 `pin.ts` 的摘要表)。 */
   expectSha256: "A2_MIHOMO_EXPECT_SHA256",
+  /**
+   * 覆写本机资产键(`<os>-<cpu>`,如 `linux-amd64`)。仅测试与诊断用。
+   * 与 `A2_SERVICE_SUPERVISOR` 同一种用途:在 mac 上把**另一个平台**的代码路径真的跑一遍 ——
+   * 摘要表目前只有 `darwin-arm64` 一项,「本平台没登记摘要就 fail-closed」这条在本机上
+   * 只能靠它才验得到(而那正是 Linux 上的真实路径)。
+   */
+  assetKey: "A2_MIHOMO_ASSET_KEY",
 } as const;
 
 export function mihomoLayout(
@@ -146,6 +153,18 @@ export function readControllerFromConfig(
   if (!controller) return undefined;
   const secret = scalar("secret");
   return secret ? { controller, secret } : { controller };
+}
+
+/**
+ * 从**一份配置文件**里现读 secret —— 读不到(文件不在、没那一行)就当没有,不猜、不报错。
+ *
+ * **每次现读、绝不缓存**:那份配置的主人随时可能改 secret(收编档尤其 —— 那压根是别人的文件),
+ * 缓存一把过期的钥匙只会让探测在某个时刻毫无征兆地变成 401。
+ * 三处调用点(检测自管实例、检测别人的实例、就位后等控制端点应答)共用这一条,免得各写各的 catch。
+ */
+export async function readSecretOf(configFile: string): Promise<string | undefined> {
+  const text = await Bun.file(configFile).text().catch(() => undefined);
+  return text === undefined ? undefined : readControllerFromConfig(text)?.secret;
 }
 
 /**

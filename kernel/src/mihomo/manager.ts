@@ -48,7 +48,7 @@ import {
   recordAdoption,
   releaseAdoption,
 } from "./install.ts";
-import { mihomoLayout, readControllerFromConfig, resolveScanInputs, type MihomoLayout } from "./paths.ts";
+import { mihomoLayout, readSecretOf, resolveScanInputs, type MihomoLayout } from "./paths.ts";
 import { compareVersions, MIHOMO_COMPAT_FLOOR, MIHOMO_LOCKED_VERSION } from "./pin.ts";
 
 /** 等"自管实例的控制端点真的应答"的上限。与内核 install 同一条口径:有 pid ≠ 能用。 */
@@ -244,8 +244,7 @@ function mihomoActions(actions: UnitAction[]): MihomoAction[] {
 
 /** 轮询到自管实例的控制端点真的应答为止(有 pid ≠ 能用,与内核 install 同一口径)。 */
 async function settleControllerReady(ctx: MihomoContext): Promise<boolean> {
-  const config = await Bun.file(ctx.layout.configPath).text().catch(() => undefined);
-  const secret = config ? readControllerFromConfig(config)?.secret : undefined;
+  const secret = await readSecretOf(ctx.layout.configPath);
   const deadline = Date.now() + CONTROLLER_READY_TIMEOUT_MS;
   for (;;) {
     if ((await probeController(ctx.layout.controller, secret)).reachable) return true;

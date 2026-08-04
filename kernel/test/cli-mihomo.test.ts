@@ -528,8 +528,8 @@ test("mihomo install:脚本安装档 —— 按锁定版下载、校验 SHA-256�
 
 test("mihomo install:摘要对不上就 fail-closed —— 退出码 5,且落点上一个字节都没写", async () => {
   const box = (sandbox = await makeSandbox());
-  // 有意**不**给 A2_MIHOMO_EXPECT_SHA256:走 pin.ts 里那张真摘要表,与假资产必然不符
-  // (本平台没登记摘要时同样 fail-closed —— 两条分支都是"没有可信摘要就不装")。
+  // 有意**不**给 A2_MIHOMO_EXPECT_SHA256:走 pin.ts 里那张真摘要表(本机 = darwin-arm64,表里有这一项),
+  // 与假资产必然不符。「本平台压根没登记摘要」是**另一条**分支,另有一条测试守(见下)。
   const release = serveRelease(await releasePayload("\n# 冒牌货\n"));
   try {
     const result = await mihomo(box, ["install"], { A2_MIHOMO_RELEASE_BASE: release.base });
@@ -545,6 +545,43 @@ test("mihomo install:摘要对不上就 fail-closed —— 退出码 5,且落点
     expect(existsSync(box.mihomoUnitPath)).toBe(false);
   } finally {
     release.stop();
+  }
+});
+
+test("mihomo install:本平台没登记摘要 → 拒绝下载(连一次 GET 都不发),指引给出补救两条路", async () => {
+  const box = (sandbox = await makeSandbox());
+  // linux-amd64 在 pin.ts 的摘要表里是空的 —— 这不是假设,是 Linux 上此刻的真实路径。
+  // 渠道指到一个**会记账的**本地服务:断言"内核连问都没问",而不只是"它没落盘"。
+  let hits = 0;
+  const channel = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => {
+      hits += 1;
+      return new Response("绝不该被取到", { status: 200 });
+    },
+  });
+  try {
+    const result = await mihomo(box, ["install"], {
+      A2_MIHOMO_ASSET_KEY: "linux-amd64",
+      A2_MIHOMO_RELEASE_BASE: `http://127.0.0.1:${channel.port}`,
+    });
+
+    expect(result.exitCode).toBe(5);
+    const body = parseJsonStdout(result);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("mihomo_operation_failed");
+    expect(body.error.message).toContain("linux-amd64");
+    expect(body.error.message).toContain("校验摘要");
+    expect(body.error.guidance.context.platform).toBe("linux-amd64");
+    expect(body.error.guidance.context.lockedVersion).toBe(MIHOMO_LOCKED_VERSION);
+    // 「没有可信摘要就没有可信安装」= **先拒绝,再谈下载**:渠道一次都没被访问过。
+    expect(hits).toBe(0);
+    expect(existsSync(box.managedBinary)).toBe(false);
+    expect(existsSync(`${box.managedBinary}.download`)).toBe(false);
+    expect(existsSync(box.mihomoUnitPath)).toBe(false);
+  } finally {
+    channel.stop(true);
   }
 });
 

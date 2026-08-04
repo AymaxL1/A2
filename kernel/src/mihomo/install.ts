@@ -157,7 +157,7 @@ export async function downloadLockedBinary(
   layout: MihomoLayout,
   env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
-  const key = assetKey();
+  const key = env[MihomoEnv.assetKey]?.trim() || assetKey();
   const expected = env[MihomoEnv.expectSha256]?.trim() || MIHOMO_ASSET_DIGESTS[key];
   if (!expected) {
     throw new MihomoOperationError(
