@@ -16,7 +16,10 @@ type Step = {
 };
 
 const steps: Step[] = [];
+/** 硬断言：会判成败、能被证伪。数字口径只数这一栏。 */
 const checks: { name: string; pass: boolean; detail: string }[] = [];
+/** 纯记录：只留观察到的原文，不参与成败判定、不计入断言数。 */
+const records: { name: string; detail: string }[] = [];
 
 const clip = (s: string, n = 1600) =>
   s.length > n ? s.slice(0, n) + `\n…(truncated, total ${s.length} bytes)` : s;
@@ -60,6 +63,11 @@ const check = (name: string, pass: boolean, detail = "") => {
   return pass;
 };
 
+/** 只记不判。用于「行为原文留档」这类没有对错的观察，避免拿恒真项充断言数。 */
+const record = (name: string, detail: string) => {
+  records.push({ name, detail });
+};
+
 const markers = (dir: string) =>
   existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith("_RAN")).sort() : ["<dir missing>"];
 
@@ -81,8 +89,27 @@ async function selftest(work: string) {
   mkdirSync(neutral, { recursive: true });
 
   // ── Q1：BUN_BE_BUN 下能否 bun install，lifecycle scripts 是否被跳过 ──────────
-  const install = await runSelf("install(default)", ["install"], { cwd: pluginDir });
+  // 所有 install 都把 BUN_INSTALL_CACHE_DIR 指到 workdir 下的私有缓存：既不写用户的
+  // ~/.bun/install/cache，也让「冷/热」两个数字有确定含义——第一次 install 走空缓存
+  // （= 冷缓存，真下载），之后的 install 复用同一份缓存（= 热缓存）。
+  const cache = join(work, "bun-cache");
+  const cacheEnv = { BUN_INSTALL_CACHE_DIR: cache };
+
+  const installCold = await runSelf("install(冷缓存·首次真下载)", ["install"], {
+    cwd: join(work, "plugin-src-cold"),
+    env: cacheEnv,
+  });
+
+  const install = await runSelf("install(默认·热缓存)", ["install"], {
+    cwd: pluginDir,
+    env: cacheEnv,
+  });
   check("Q1.install 退出码 0", install.exitCode === 0, `exit=${install.exitCode}`);
+  check(
+    "Q1.冷缓存 install(workdir 私有 BUN_INSTALL_CACHE_DIR)也成功",
+    installCold.exitCode === 0 && existsSync(join(cache, "picocolors")),
+    `exit=${installCold.exitCode} 冷缓存耗时=${installCold.ms}ms vs 热缓存=${install.ms}ms`,
+  );
   check(
     "Q1.node_modules 装出依赖",
     existsSync(join(pluginDir, "node_modules", "picocolors")) &&
@@ -98,7 +125,15 @@ async function selftest(work: string) {
     `root markers=[${rootMarkers}]`,
   );
 
-  const untrusted = await runSelf("pm untrusted", ["pm", "untrusted"], { cwd: pluginDir });
+  record(
+    "install 的 stdout 原文(依赖脚本被拦的官方措辞)",
+    install.stdout.replace(/\x1b\[[0-9;]*m/g, "").trim(),
+  );
+
+  const untrusted = await runSelf("pm untrusted", ["pm", "untrusted"], {
+    cwd: pluginDir,
+    env: cacheEnv,
+  });
   check(
     "Q1.bun pm untrusted 可列出被拦的脚本(审计素材)",
     untrusted.exitCode === 0 && untrusted.stdout.includes("a2-lifecycle-probe"),
@@ -108,6 +143,7 @@ async function selftest(work: string) {
   // --ignore-scripts 对照组：连根脚本一起封死
   const installIgnore = await runSelf("install(--ignore-scripts)", ["install", "--ignore-scripts"], {
     cwd: pluginDirIgnore,
+    env: cacheEnv,
   });
   const rootMarkersIgnore = markers(pluginDirIgnore);
   const depMarkersIgnore = markers(join(pluginDirIgnore, "node_modules", "a2-lifecycle-probe"));
@@ -117,20 +153,7 @@ async function selftest(work: string) {
     `exit=${installIgnore.exitCode} root=[${rootMarkersIgnore}] dep=[${depMarkersIgnore}]`,
   );
 
-  // 冷缓存 install：把 BUN_INSTALL_CACHE_DIR 指到临时目录（不动用户的 ~/.bun 缓存），
-  // 量一次「真下载」的耗时，作为 a2 plugin add 的最坏时延参考。
-  const coldCache = join(work, "cold-cache");
-  const installCold = await runSelf("install(冷缓存)", ["install"], {
-    cwd: join(work, "plugin-src-cold"),
-    env: { BUN_INSTALL_CACHE_DIR: coldCache },
-  });
-  check(
-    "Q1.冷缓存 install(临时 BUN_INSTALL_CACHE_DIR)也成功",
-    installCold.exitCode === 0,
-    `exit=${installCold.exitCode} 冷缓存耗时=${installCold.ms}ms vs 热缓存=${install.ms}ms`,
-  );
-
-  const pmls = await runSelf("pm ls", ["pm", "ls"], { cwd: pluginDir });
+  const pmls = await runSelf("pm ls", ["pm", "ls"], { cwd: pluginDir, env: cacheEnv });
   check(
     "Q1.bun pm ls 可列依赖清单(审计素材)",
     pmls.exitCode === 0 && pmls.stdout.includes("picocolors"),
@@ -264,10 +287,13 @@ async function selftest(work: string) {
     ["build", "./index.ts", "--target=bun", "--outfile", edgeDynOut],
     { cwd: edgeDyn },
   );
+  // 这里的实质命题是「打包期抓不到动态 require」：build 成功、有产物、且**一句告警都没有**。
   check(
-    "边界.动态 require 的 build 行为已记录",
-    true,
-    `exit=${edgeDynBuild.exitCode} 产物=${existsSync(edgeDynOut)} stderrHead=${clip(edgeDynBuild.stderr, 200)}`,
+    "边界.动态 require → 打包期静默通过(exit=0、有产物、零告警)",
+    edgeDynBuild.exitCode === 0 &&
+      existsSync(edgeDynOut) &&
+      !/warn/i.test(edgeDynBuild.stderr + edgeDynBuild.stdout),
+    `exit=${edgeDynBuild.exitCode} 产物=${existsSync(edgeDynOut)} stderr=${clip(edgeDynBuild.stderr, 200) || "<空>"}`,
   );
   // 若动态 require 能打进去，运行期是否翻车？分两种：内置模块 vs npm 包
   if (existsSync(edgeDynOut)) {
@@ -318,6 +344,10 @@ async function selftest(work: string) {
     edgeNativeBuild.exitCode !== 0 && !existsSync(edgeNativeOut),
     `exit=${edgeNativeBuild.exitCode} stderrHead=${clip(edgeNativeBuild.stderr, 240)}`,
   );
+  record(
+    "native .node addon + --outfile 的报错原文(不提 addon，指引得内核自己写)",
+    edgeNativeBuild.stderr.replace(/\x1b\[[0-9;]*m/g, "").trim(),
+  );
   const edgeNativeDir = join(work, "edge-out", "native-outdir");
   const edgeNativeBuild2 = await runSelf(
     "build(native .node addon, --outdir)",
@@ -325,9 +355,13 @@ async function selftest(work: string) {
     { cwd: edgeNative },
   );
   const nativeOutFiles = existsSync(edgeNativeDir) ? readdirSync(edgeNativeDir).sort() : [];
+  // 实质命题：换成 --outdir 后 build **不再失败**，而是多吐一个 .node —— 所以 12 票
+  // 用 --outdir 时的判据只能是「产物文件数 > 1」，不能指望非零退出码。
   check(
-    "边界.native .node addon + --outdir → 产物不止一个文件(非单文件即拒绝依据)",
-    edgeNativeBuild2.exitCode === 0 ? nativeOutFiles.length > 1 : true,
+    "边界.native .node addon + --outdir → build 成功但产物不止一个文件(非单文件即拒绝依据)",
+    edgeNativeBuild2.exitCode === 0 &&
+      nativeOutFiles.length > 1 &&
+      nativeOutFiles.some((f) => f.endsWith(".node")),
     `exit=${edgeNativeBuild2.exitCode} files=[${nativeOutFiles}] stderrHead=${clip(edgeNativeBuild2.stderr, 160)}`,
   );
 
@@ -343,6 +377,19 @@ async function selftest(work: string) {
     runIso.exitCode === 0 && existsSync(join(autoIsoCache, "is-odd")),
     `exit=${runIso.exitCode} stdout=${clip(runIso.stdout, 120)}`,
   );
+  // 对照：有 package.json、但仍无 node_modules —— auto-install 是否照样触发？
+  const autoPkgCache = join(work, "auto-pkgjson-cache");
+  rmSync(autoPkgCache, { recursive: true, force: true });
+  const runPkgJSON = await runSelf("run(有 package.json、无 node_modules)", ["./iso.ts"], {
+    cwd: join(work, "auto-pkgjson"),
+    env: { BUN_INSTALL_CACHE_DIR: autoPkgCache },
+  });
+  check(
+    "边界.有 package.json 但无 node_modules → 照样 auto-install(触发条件与 package.json 无关)",
+    runPkgJSON.exitCode === 0 && existsSync(join(autoPkgCache, "is-odd")),
+    `exit=${runPkgJSON.exitCode} stdout=${clip(runPkgJSON.stdout, 120)}`,
+  );
+
   const runBlocked = await runSelf("run(祖先目录有空 node_modules)", ["./iso.ts"], {
     cwd: join(work, "auto-blocked", "sub"),
     env: { BUN_INSTALL_CACHE_DIR: join(work, "auto-blocked-cache") },
@@ -374,7 +421,14 @@ async function selftest(work: string) {
     workdir: work,
     artifact: { path: artifact, bytes: artifactSize },
     checks,
-    summary: { total: checks.length, passed, failed: checks.length - passed },
+    records,
+    // 数字口径：只有硬断言进 total；records 是留档观察，不判成败、不计数。
+    summary: {
+      total: checks.length,
+      passed,
+      failed: checks.length - passed,
+      recordCount: records.length,
+    },
     steps,
   };
   console.log(JSON.stringify(report, null, 2));

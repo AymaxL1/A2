@@ -12,20 +12,24 @@ Bun `--compile` 出来的单文件 bin，在 `BUN_BE_BUN=1` 下能否当完整 `
 2. 跑 `bun build --target=bun` 把该目录打成**单文件 JS 工件**？
 3. 该工件再被**同一个 bin**经 `BUN_BE_BUN` 作子进程拉起，stdin/stdout JSON 往返与退出码语义正确？
 
-结论：**三问全成，31/31 断言通过（Bun 1.3.14 / macOS 15.7.8 arm64）。** 另外撞出三条 12 票必须显式处理的边界（根 package.json 的 lifecycle scripts 默认会执行、运行期 auto-install 会联网装包、`.node` addon 的失败信号形态），详见研究文档 §8。
+结论：**三问全成，32/32 硬断言通过**（另有 2 条留档记录，不计入断言数；Bun 1.3.14 / macOS 15.7.8 arm64）。另外撞出三条 12 票必须显式处理的边界（根 package.json 的 lifecycle scripts 默认会执行、运行期 auto-install 会联网装包、`.node` addon 的失败信号形态），详见研究文档 §8。
 
 ## 一条命令
 
 ```bash
-bash Spikes/K1BunPluginBundle/run.sh [workdir]     # workdir 缺省用 mktemp -d
-K1_REBUILD=1 bash Spikes/K1BunPluginBundle/run.sh  # 强制重编 spike 内核 bin
+bash Spikes/K1BunPluginBundle/run.sh [workdir]        # workdir 缺省用 mktemp -d
+A2_SPIKE_WORKDIR=/tmp/k1 bash Spikes/…/run.sh         # 或用环境变量指定（与位置参数等价，位置参数优先）
+K1_REBUILD=1 bash Spikes/K1BunPluginBundle/run.sh     # 强制重编 spike 内核 bin
+BUN_BIN=/path/to/bun bash Spikes/…/run.sh             # 覆写系统 bun 路径
 ```
 
-跑完打印 31 条 PASS/FAIL 断言 + 每步子进程的退出码与耗时，全量报告 JSON 落 `<workdir>/report.json`。
+跑完打印 32 条 PASS/FAIL 硬断言 + 2 条留档记录 + 每步子进程的退出码与耗时，全量报告 JSON 落 `<workdir>/run/report.json`。
 
-- **产物一律不落仓库**：编译出的 spike 内核 bin 约 **60.5MiB**（63,446,114 字节），连同临时插件工程全在 `workdir` 下。
-- **需要网络**：冷缓存 install 与 auto-install 两组对照要连 npm registry；这些步骤把缓存指到 `workdir` 下的临时目录（`BUN_INSTALL_CACHE_DIR`），**不写用户的 `~/.bun/install/cache`**。
+- **断言与记录分开计数**：`check()` 是判成败、能被证伪的硬断言（进 `summary.total`）；`record()` 只留观察原文（如 bun 的报错措辞），不判成败、不计入断言数——数字不掺水，恒真项一律不当断言。
+- **产物一律不落仓库**：编译出的 spike 内核 bin 约 **60.5MiB**（63,446,114 字节）落 `<workdir>/bin/`（跨次运行复用），本次实验的全部临时工程落 `<workdir>/run/`（每次先删后建）。
+- **需要网络**：冷缓存 install 与三组 auto-install 对照要连 npm registry。**所有 install / auto-install 步骤都把 `BUN_INSTALL_CACHE_DIR` 指到 `<workdir>` 下的私有缓存**，不写用户的 `~/.bun/install/cache`；"冷/热缓存"两个数字因此含义确定——第一次 install 走空缓存（冷·真下载），之后复用同一份（热）。
 - 只用到 `~/.bun/bin/bun` 编译出 spike 的内核 bin（可用 `BUN_BIN` 覆写）；之后的每一步都由那个 bin 自己经 `BUN_BE_BUN=1` 驱动，不再碰系统 bun——这正是被验证的命题。
+- **已知妥协**：`run.sh` 铺料用的子目录名与 `fixtures/kernel.ts` 里读的路径是两处手写、靠约定对齐（清场只要一条 `rm -rf $WORK/run`，所以没有重复的删除清单，但目录名仍是双写）。spike 属抛弃式代码，未为此引入共享清单文件。
 
 ## 构成
 
@@ -40,6 +44,7 @@ fixtures/edge/dynamic-require/  边界：非静态可分析的 require
 fixtures/edge/native-addon/     边界：.node addon（占位文件，只看编译期行为）
 fixtures/edge/missing-dep/      边界：声明了依赖但没 install
 fixtures/edge/auto-install/     边界：静态 import 一个本地没装的包，验 auto-install 触发规则
+                                （run.sh 铺成三个对照：全隔离 / 只有 package.json / 祖先有空 node_modules）
 run.sh                          编译 bin → 备料 → 内核 bin 自测 → 打表
 ```
 
@@ -49,10 +54,11 @@ run.sh                          编译 bin → 备料 → 内核 bin 自测 → 
 
 | 问题 | 结论 | 关键数据 |
 |---|---|---|
-| ① `BUN_BE_BUN` 跑 `bun install` | **成** | 热缓存 16–18ms、冷缓存约 4.0s（2 包）；依赖 lifecycle scripts 被拦：`Blocked 2 postinstalls` |
+| ① `BUN_BE_BUN` 跑 `bun install` | **成** | 同一 workdir 私有缓存下：冷（首次真下载）3.4s、热 19ms（2 包）；依赖 lifecycle scripts 被拦：`Blocked 2 postinstalls` |
 | ①附带 | **根 `package.json` 的 pre/post/prepare 脚本默认照跑**（供应链口子） | 三个标记文件全落地；`--ignore-scripts` 可连根一并封死 |
 | ② `BUN_BE_BUN` 跑 `bun build --target=bun` | **成** | 6,002 字节单文件工件，`Bundled 3 modules in 5ms`，依赖全内联 |
 | ③ 工件被同一 bin 拉起 | **成** | 删掉整个源目录（含 node_modules）后 describe/call 输出不变；独立 PID；退出码 0/2/3/4 语义按插件定义传回 |
-| 边界·动态 require | 打包期静默通过，运行期 **auto-install 联网装包** | 加 `--no-install` 即 fail-closed（`Cannot find package`, exit 1） |
+| 边界·动态 require | 打包期静默通过（exit=0、零告警），运行期 **auto-install 联网装包** | 加 `--no-install` 即 fail-closed（`Cannot find package`, exit 1） |
+| 边界·auto-install 触发条件 | 只看**祖先目录链上有没有 `node_modules`**，与 `package.json` 无关 | 三组对照：全隔离 → 装；只有 package.json → 照样装；祖先有空 `node_modules` → 硬错 |
 | 边界·`.node` addon | `--outfile` 直接 build 失败；`--outdir` 会额外吐出 `.node` 文件 | 「产物不止一个文件」可作拒绝依据 |
 | 边界·依赖未装 | build 明确失败，不产坏工件 | `error: Could not resolve: "left-pad". Maybe you need to "bun install"?` |
