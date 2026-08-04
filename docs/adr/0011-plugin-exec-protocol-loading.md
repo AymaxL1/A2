@@ -11,8 +11,8 @@ date: 2026-08-04
 
 - 两条接口必须分开看：**agent → 内核**维持纯 CLI（[ADR 0005](0005-agent-first-interaction.md) 既有立场：Bash 起子进程 `a2 … --json` 读 stdout，零协议零配置）；**内核 → 插件**才是本 ADR 要定的那条。
 - 业界形态调研的分野：命令面扩展走 exec 流（git / kubectl / cargo / gh），能力面扩展走常驻协议流（LSP / Terraform / MCP），agent 生态在收敛到 MCP。用户在两轮调研后**推翻了「直接采 MCP」的推荐**——MCP 要配置、agent 反而要现学，与北极星「现场写、当场用」相冲。
-- 本机实测（`docs/research/ts-kernel-runtime-bun.md`）：`BUN_BE_BUN=1` + `process.execPath` 可把外部 `.ts` 当真子进程拉起（独立 PID / stdout / 可信号控制）；Bun 冷启动约 8ms，撑得住「一次调用一次进程」。但插件 `import` npm 包**严格要求 `node_modules` 在场**，运行时不会现场联网装包。
-- 决策原文：`.scratch/kernel-bin-recharter/issues/13-plugin-protocol-loading.md`（含 04 票的进程模型前置）。
+- 本机实测（`docs/research/ts-kernel-runtime-bun.md`，**未入库**）：`BUN_BE_BUN=1` + `process.execPath` 可把外部 `.ts` 当真子进程拉起（独立 PID / stdout / 可信号控制）；Bun 冷启动约 8ms，撑得住「一次调用一次进程」。但插件 `import` npm 包**严格要求 `node_modules` 在场**，运行时不会现场联网装包。
+- 决策原文：`.scratch/kernel-bin-recharter/issues/13-plugin-protocol-loading.md`（含 04 票的进程模型前置）——**本机决策记录，未入库**；本 ADR 正文已自足。
 
 ## Decision
 

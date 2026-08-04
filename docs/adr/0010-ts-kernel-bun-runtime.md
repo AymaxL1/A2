@@ -14,7 +14,7 @@ supersedes: ADR-0002
 - **关键定性**：本内核是**控制面**不是数据面——流量在 mihomo 子进程里，内核只做生命周期、注册表、UDS API、确认仲裁。因此 Rust 的性能优势兑现不了，TS 的 GC/吞吐短板也大半打不到。
 - **决定性裁定**：插件北极星 =「**agent 现场写插件**」——插件≈一个 `.ts` 文本文件，agent 当场写、当场装、当场调用，内核 bin 用自带运行时把它作**子进程**拉起。此形态只有 TS 内核能做到最轻（Go 只能嵌 goja 折中）。安全（进程外隔离）与法律（跨语言天然隔离 mihomo）两关皆过之后，按裁决序轮到 agent-first 说话。
 - **本机实测背书**（`docs/research/ts-kernel-runtime-bun.md`，未入库）：Bun compile 产物 60.5MiB、冷启动 7.7–13ms、常驻 RSS 26.4MiB；`--target=bun-linux-x64` 交叉编译产出合法 ELF；编译产物内部 `Bun.spawn(process.execPath, …, { BUN_BE_BUN: "1" })` 能把编译期完全不存在的外部 `.ts` 当真正的子进程拉起；`bun:ffi` + `node:net` 取 fd 调 `getpeereid()` 在 macOS 完整打通。
-- 决策原文：`.scratch/kernel-bin-recharter/issues/10-kernel-language-decision.md`、`.../11-ts-runtime-bun-verification.md`、`.../07-target-architecture-mapping.md`。
+- 决策原文：`.scratch/kernel-bin-recharter/issues/10-kernel-language-decision.md`、`.../11-ts-runtime-bun-verification.md`、`.../07-target-architecture-mapping.md`——**本机决策记录，未入库**；本 ADR 正文已自足。
 
 ## Decision
 
@@ -34,7 +34,7 @@ supersedes: ADR-0002
 
 用户明确认下的账单：
 
-- **全量重建**：约 10213 行 Swift 逻辑 + 4929 行测试（428 断言）在 TS 侧重建；旧代码与断言降级为**行为规范参考**，按行为对等逐条映射（允许合并/淘汰只属 Swift 实现细节的断言）。
+- **全量重建**：既有 Swift 逻辑与测试全部在 TS 侧重建，旧代码与断言降级为**行为规范参考**（规模数字与行为对等映射口径见 [v1-roadmap.md](../v1-roadmap.md) Phase 1「行为规范参考与断言迁移」，此处不复述）。
 - **体积与内存换来的**：单 bin 约 60–90MB、常驻 RSS 比原生高一档，换到的是「单文件下载即用 + 自带插件运行时」。
 - **自己踩路**：UDS 对端凭据走 FFI（`getpeereid`/`SO_PEERCRED`）；Bun 的 UDS 权限跟随 umask，内核必须自建 socket 父目录 0700 并在 bind 后显式收紧权限；launchd/systemd 集成在 Bun 生态里没有成熟先例可抄。
 - **ADR 0002 的「回退候选 Electron+TS」条款早已于 2026-07-28 的 electron-recon 重评中行使并了结**，本 ADR 不复活它：这次换的是**内核语言与运行时**，不是把 UI 搬回 Web——Mac UI 仍是原生 Swift。

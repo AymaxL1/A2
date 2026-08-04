@@ -28,5 +28,5 @@ date: 2026-08-04
 - **一次大重构**：`aahost` 职责全迁内核，`aa` 被整体接替，`aa-agent` 挂起；迁移按六步走，每步可合并、门禁绿——①契约与骨架 → ②控制面重建 → ③mihomo 监督面 → ④仲裁与确认器协议 → ⑤**壳原子切换**（唯一门禁切换点）→ ⑥插件宿主。**Phase 1 出口判据改为第⑤步完成**（见 [v1-roadmap.md](../v1-roadmap.md)）。
 - **本批连带的 ADR 处置**：[ADR 0001](0001-mac-only-platform-boundary.md) 与 [ADR 0002](0002-swift-native-stack.md) 废止重立（→ [0009](0009-kernel-platform-scope.md) / [0010](0010-ts-kernel-bun-runtime.md)）；[ADR 0005](0005-agent-first-interaction.md) 第 4 条与 [ADR 0007](0007-mihomo-subprocess-gpl-compliance.md) 修订；新增 [ADR 0011](0011-plugin-exec-protocol-loading.md)（插件 exec 协议与装载）。[ADR 0004](0004-capability-registry-sole-call-surface.md)（能力面唯一事实源）与 [ADR 0006](0006-local-first-no-cloud.md)（local-first）不受影响，只是「唯一调用面」的实现从 Swift 宿主换成 TS 内核。
 - **安全模型的结构性变化**：「防 agent 自批」不再依赖「GUI 一定在」，而是依赖**确认器在场与否的显式分级**——在场则带外确认，不在场则 fail-closed 默拒。这让无 GUI 端不必为了安全而假装有 UI，也让 dangerous 的可用性变成一条可观测的运行时事实（长连接在/不在）。
-- **接受的代价**：Swift 侧约 10213 行逻辑与 4929 行测试（428 断言）不再是主干实现，降级为 TS 重写期的**行为规范参考**（逐条行为对等映射，允许合并/淘汰只属 Swift 实现细节的断言）；重构期间主干必须一直可用，代价是六步切法带来的额外协调成本。
+- **接受的代价**：既有 Swift 逻辑与测试不再是主干实现，整体降级为 TS 重写期的**行为规范参考**（规模数字与行为对等映射口径见 [v1-roadmap.md](../v1-roadmap.md) Phase 1「行为规范参考与断言迁移」，此处不复述）；重构期间主干必须一直可用，代价是六步切法带来的额外协调成本。
 - **可审计的两条结构红线**（旧红线在新图的等价物）：「插件不得 import Host\*」→「插件 = 进程外子进程，能力只经协议白名单」（[ADR 0011](0011-plugin-exec-protocol-loading.md)）；「GUI 是薄壳」→「`a2-panel` 不得含业务逻辑」。

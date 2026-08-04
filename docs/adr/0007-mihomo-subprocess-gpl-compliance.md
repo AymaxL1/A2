@@ -28,7 +28,7 @@ amended: 2026-08-04
 - 换取：不分发 GPL 二进制后，义务面显著收窄（无重签、无随包锁版、无自建内核分发通道）；用户的 mihomo 版本不再被我们的发版节奏绑架。
 - 代价：安装链多一步网络获取（无网络/官方渠道不可达时安装失败，须有明确指引）；mihomo 版本不再是「可测的固定配套」，兼容性下限检查成为内核的常设职责。
 - 红线永久排除进程内集成的体积/性能优化路径——这条不因语言、不因分发形态而松动。
-- 依据：`.scratch/v1-mac-recharter/issues/02-mihomo-integration-survey.md`、[mihomo-integration.md](../research/mihomo-integration.md)（原始 GPL 分析）；本次修订依据 `.scratch/kernel-bin-recharter/issues/12-mihomo-distribution-form.md`、`.../04-kernel-boundary-process-model.md`、`.../08-adr-roadmap-revision.md`。
+- 依据：`.scratch/v1-mac-recharter/issues/02-mihomo-integration-survey.md`、[mihomo-integration.md](../research/mihomo-integration.md)（原始 GPL 分析）；本次修订依据 `.scratch/kernel-bin-recharter/issues/12-mihomo-distribution-form.md`、`.../04-kernel-boundary-process-model.md`、`.../08-adr-roadmap-revision.md`（**本机决策记录，未入库**——本 ADR 正文已自足，不读那批票也能理解修订后的边界）。
 
 ## 修订记录（2026-08-04）
 
