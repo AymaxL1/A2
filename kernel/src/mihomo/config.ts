@@ -89,11 +89,22 @@ export function renderManagedConfig(input: ManagedConfigInput): RenderedConfig {
 const DEFAULT_BODY = ["proxies: []", "proxy-groups: []", "rules:", "  - MATCH,DIRECT"].join("\n");
 
 /**
+ * 顶层键的三种合法写法(YAML 允许键加引号):裸键、单引号、双引号。
+ * **三种都必须认**:只认裸键的话,一份写着 `'external-controller': 127.0.0.1:9090` 的订阅就能绕过摘除,
+ * 与 a2 头部凑成重复键 —— yaml.v3 遇到重复键直接报错(那条订阅从此永远激活不了),
+ * 而换一个容忍重复键的解析器则是后者覆盖前者,内核当场失控。两种结局都不能接受。
+ */
+const TOP_LEVEL_KEY = /^(?:'([^']+)'|"([^"]+)"|([A-Za-z0-9_.\-]+))[ \t]*:(?:[ \t]|$)/;
+
+/**
  * 摘掉订阅正文里与 a2 头部重名的**顶层**键。
  *
- * 判据严格到只认「零缩进 + `key:` + 键名在表里」这一种行;命中之后连同它的续行
- * (更深缩进的行、`- ` 列表项、以及块标量的内容)一起丢,直到下一个零缩进行为止 ——
+ * 判据只认「零缩进 + 键 + 冒号 + 键名在表里」这一种行;命中之后连同它的续行
+ * (更深缩进的行、`- ` 列表项、以及块标量 `|` / `>` 的内容)一起丢,直到下一个零缩进的键为止 ——
  * 这样 `secret: |` 这类块写法也不会留下半截孤儿正文。
+ *
+ * **不会误伤前缀相同的键**:键名必须整段匹配到冒号,所以 `port:` 与 `mixed-port:` 是两个不同的键,
+ * 前者不在表上、原样保留。
  */
 export function stripOwnedKeys(body: string): { text: string; strippedKeys: string[] } {
   const owned = new Set<string>(A2_OWNED_KEYS);
@@ -103,12 +114,13 @@ export function stripOwnedKeys(body: string): { text: string; strippedKeys: stri
   let dropping = false;
 
   for (const line of lines) {
-    const topLevel = /^([A-Za-z0-9_.\-]+)[ \t]*:/.exec(line);
+    const topLevel = TOP_LEVEL_KEY.exec(line);
     if (topLevel) {
       // 到了下一个顶层键:上一段的丢弃状态到此为止。
-      const key = topLevel[1] as string;
+      const key = (topLevel[1] ?? topLevel[2] ?? topLevel[3]) as string;
       if (owned.has(key)) {
         dropping = true;
+        // 记的是**归一后的键名**(不带引号)—— 报文里出现 `'secret'` 与 `secret` 两条毫无意义。
         if (!strippedKeys.includes(key)) strippedKeys.push(key);
         continue;
       }
@@ -122,4 +134,29 @@ export function stripOwnedKeys(body: string): { text: string; strippedKeys: stri
   }
 
   return { text: kept.join("\n").trimEnd(), strippedKeys };
+}
+
+/**
+ * 找订阅正文里的 **YAML 文档分隔符**(`---` 文档开始 / `...` 文档结束)。
+ *
+ * 为什么这一条要**拒绝**而不是像重复键那样"摘掉":a2 的渲染物是「a2 头部 + 订阅正文」拼起来的**一份**文档,
+ * 正文里只要有一个零缩进的 `---`,拼出来的就成了**多文档流**——而 mihomo 只读第一个文档,
+ * 也就是只剩 a2 那几行头部。后果极其阴险:重载会成功,`reloaded: true` 是真的,
+ * 而那份订阅的节点与规则**整份静默失效**,用户以为切过去了、实际全走了默认直连。
+ *
+ * 摘掉分隔符同样不安全(那等于把两份互不相干的文档硬粘成一份,语义由 a2 替用户瞎猜),
+ * 所以这里的处置是**结构化拒绝 + 指引**:告诉人第几行、让人自己拆。
+ *
+ * 返回命中的行号(**从 1 起**,给人读的)与那一行原文;没有则 undefined。
+ */
+export function findDocumentSeparator(body: string): { line: number; text: string } | undefined {
+  const lines = body.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] as string;
+    // 只认零缩进:缩进过的 `---` 是别的东西(块标量内容、字符串值),不是文档分隔符。
+    if (/^(---|\.\.\.)([ \t].*)?$/.test(line)) {
+      return { line: index + 1, text: line };
+    }
+  }
+  return undefined;
 }

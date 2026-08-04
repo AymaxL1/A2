@@ -119,8 +119,11 @@ export async function makeProxySandbox(
     snapshotPath: path.join(home, "system-proxy.json"),
     supervisionLog: path.join(home, "log", "proxy-supervision.log"),
     env: {
-      // 被测进程的 PATH 只有假件目录 —— 真 launchctl / 真 networksetup 在它眼里不存在。
-      PATH: `${FAKE_SUPERVISOR_DIR}:${path.dirname(FAKE_NETSETUP_SH)}`,
+      // 被测进程的 PATH 只有假 supervisor 目录 —— 真 launchctl / systemctl 在它眼里不存在。
+      // **注意 PATH 这道防线只对它们成立**:它们是按名字查 PATH 找到的;而 networksetup 走的是
+      // 绝对路径(`/usr/sbin/networksetup`),PATH 拦不住它 —— 挡它的是下面那条 `A2_NETWORKSETUP`
+      // 覆写,外加 `harness.ts` 里那道"忘了注入就大声失败"的全局兜底。
+      PATH: FAKE_SUPERVISOR_DIR,
       HOME: root,
       XDG_CONFIG_HOME: path.join(root, "xdg"),
       A2_SERVICE_SUPERVISOR: "launchd",

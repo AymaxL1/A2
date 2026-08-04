@@ -43,12 +43,14 @@ import {
 } from "../proxy/system-proxy.ts";
 import type { ProxySupervisor } from "../proxy/supervision.ts";
 import {
+  assertUsableBody,
   CatalogCorruptError,
   fetchSubscription,
   readCatalog,
   readSubscriptionBody,
   removeSubscriptionBody,
   subscriptionId,
+  SubscriptionBodyError,
   SubscriptionError,
   writeCatalog,
   writeSubscriptionBody,
@@ -116,7 +118,7 @@ function status(context: ProxyContext): Capability {
       // **没有实例不是错误**:如实报「没在跑」,退出码 0(与 `a2 service status` 同一口径)。
       const target = await resolveProxyTarget(context.paths, context.env).catch(() => undefined);
       if (!target) {
-        return { running: false, apiReachable: false, systemProxy: system } as unknown as JsonValue;
+        return payload({ running: false, apiReachable: false, systemProxy: system });
       }
 
       const base = {
@@ -127,16 +129,16 @@ function status(context: ProxyContext): Capability {
         systemProxy: system,
       };
       // 控制面不通时**绝不臆造** mode/端口/节点 —— 那几个字段直接缺席。
-      if (!target.apiReachable) return base as unknown as JsonValue;
+      if (!target.apiReachable) return payload(base);
 
       const configs = await readConfigs(target.controller).catch(() => undefined);
       const node = await readCurrentNode(target.controller).catch(() => undefined);
-      return {
+      return payload({
         ...base,
         ...(configs?.mode ? { mode: configs.mode } : {}),
         ...(configs?.mixedPort ? { mixedPort: configs.mixedPort } : {}),
         ...(node ? { node } : {}),
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -160,14 +162,14 @@ function configGet(context: ProxyContext): Capability {
       const current = await Bun.file(layout.configPath)
         .text()
         .catch(() => undefined);
-      return {
+      return payload({
         settings: desired.settings,
         configPath: layout.configPath,
         controller: layout.controller,
         activeSubscription: desired.activeSubscription,
         inSync: current === desired.text,
         actions: [],
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -224,14 +226,14 @@ function configSet(context: ProxyContext): Capability {
       if (applied.written) actions.push("config_written");
       if (applied.reloaded) actions.push("config_reloaded");
 
-      return {
+      return payload({
         settings: desired.settings,
         configPath: layout.configPath,
         controller: layout.controller,
         activeSubscription: desired.activeSubscription,
         inSync: true,
         actions,
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -250,7 +252,7 @@ function modeGet(context: ProxyContext): Capability {
     handler: async () => {
       const target = await reachableTarget(context);
       const configs = await withController(() => readConfigs(target.controller));
-      return { endpoint: target.endpoint, mode: configs.mode } as unknown as JsonValue;
+      return payload({ endpoint: target.endpoint, mode: configs.mode });
     },
   };
 }
@@ -278,7 +280,7 @@ function modeSet(context: ProxyContext): Capability {
       // 改的是**运行时开关**:`PATCH /configs`,不换配置文件、不碰进程 ——
       // 所以这一条对被收编的实例同样成立(票面:收编档的写面到配置为止)。
       await withController(() => patchConfigs(target.controller, { mode }));
-      return { endpoint: target.endpoint, mode, set: true } as unknown as JsonValue;
+      return payload({ endpoint: target.endpoint, mode, set: true });
     },
   };
 }
@@ -297,7 +299,7 @@ function groupsList(context: ProxyContext): Capability {
     handler: async () => {
       const target = await reachableTarget(context);
       const groups = await withController(() => readGroups(target.controller));
-      return { endpoint: target.endpoint, groups } as unknown as JsonValue;
+      return payload({ endpoint: target.endpoint, groups });
     },
   };
 }
@@ -329,7 +331,7 @@ function nodeSelect(context: ProxyContext): Capability {
       const node = input["node"] as string;
       const target = await reachableTarget(context);
       await withController(() => selectNode(target.controller, group, node));
-      return { endpoint: target.endpoint, group, node, selected: true } as unknown as JsonValue;
+      return payload({ endpoint: target.endpoint, group, node, selected: true });
     },
   };
 }
@@ -371,7 +373,7 @@ function latencyTest(context: ProxyContext): Capability {
       const results = await withController(() =>
         testGroupDelay(target.controller, group, url, timeoutMs),
       );
-      return { endpoint: target.endpoint, group, url, timeoutMs, results } as unknown as JsonValue;
+      return payload({ endpoint: target.endpoint, group, url, timeoutMs, results });
     },
   };
 }
@@ -405,7 +407,7 @@ function systemStatus(context: ProxyContext): Capability {
       parameters: [],
       cliAlias: ["proxy", "system"],
     },
-    handler: async () => (await systemStatusResult(context)) as unknown as JsonValue,
+    handler: async () => payload(await systemStatusResult(context)),
   };
 }
 
@@ -447,12 +449,12 @@ function systemEnable(context: ProxyContext): Capability {
       const result = await withSystemProxy(() =>
         takeover(context.paths, net, "127.0.0.1", configs.mixedPort as number),
       );
-      return {
+      return payload({
         enabled: true,
         host: result.snapshot.host,
         port: result.snapshot.port,
         status: await systemStatusResult(context, net, result.live),
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -472,11 +474,11 @@ function systemDisable(context: ProxyContext): Capability {
       // **有意不要求内核可达**:还原是善后动作 —— mihomo 死了、内核刚崩过、快照是上一世代留下的,
       // 恰恰是最需要它能跑通的时候。它只读快照、只写 networksetup,与 mihomo 无关。
       const result = await withSystemProxy(() => restore(context.paths, net));
-      return {
+      return payload({
         enabled: false,
         restored: result.restored,
         status: await systemStatusResult(context, net, result.live),
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -495,11 +497,11 @@ function subscriptionList(context: ProxyContext): Capability {
     handler: async () => {
       const layout = mihomoLayout(context.paths, context.env);
       const catalog = await withSubscriptionErrors(() => readCatalog(layout));
-      return {
+      return payload({
         active: catalog.activeId,
         subscriptions: catalog.subscriptions,
         directory: layout.subscriptionsDir,
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -544,6 +546,8 @@ function subscriptionAdd(context: ProxyContext): Capability {
       const catalog = await withSubscriptionErrors(() => readCatalog(layout));
       const existing = catalog.subscriptions.find((entry) => entry.id === id);
       const body = await withSubscriptionErrors(() => (context.fetch ?? fetchSubscription)(source));
+      // **落盘之前**先看这份正文 a2 拼不拼得进自管配置:坏东西根本不该进库。
+      await withSubscriptionErrors(() => assertUsableBody(body, source));
 
       await withSubscriptionErrors(() => writeSubscriptionBody(layout, id, body));
       const entry = {
@@ -558,14 +562,14 @@ function subscriptionAdd(context: ProxyContext): Capability {
         writeCatalog(layout, { subscriptions: next, activeId: catalog.activeId }),
       );
 
-      return {
+      return payload({
         id,
         action: existing ? "replaced" : "added",
         subscription: entry,
         active: catalog.activeId,
         // **add 绝不自动激活**:引入一份来源与让它生效是两个决定,分开做。
         reloaded: false,
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -592,6 +596,8 @@ function subscriptionUpdate(context: ProxyContext): Capability {
       const body = await withSubscriptionErrors(() =>
         (context.fetch ?? fetchSubscription)(entry.source),
       );
+      // 同 add:拉到的新正文若拼不进自管配置,**旧的那份原样留着**,一个字节都不动。
+      await withSubscriptionErrors(() => assertUsableBody(body, entry.source));
       const oldBody = await readSubscriptionBody(layout, id);
       await withSubscriptionErrors(() => writeSubscriptionBody(layout, id, body));
 
@@ -623,13 +629,13 @@ function subscriptionUpdate(context: ProxyContext): Capability {
           activeId: catalog.activeId,
         }),
       );
-      return {
+      return payload({
         id,
         action: "updated",
         subscription: updated,
         active: catalog.activeId,
         reloaded,
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -663,13 +669,13 @@ function subscriptionActivate(context: ProxyContext): Capability {
       try {
         const desired = await withSubscriptionErrors(() => resolveDesiredConfig(layout, context.env));
         const applied = await applyManagedConfig(target, desired);
-        return {
+        return payload({
           id,
           action: "activated",
           subscription: entry,
           active: id,
           reloaded: applied.reloaded,
-        } as unknown as JsonValue;
+        });
       } catch (error) {
         // 内核不认这份配置:清单也退回去 —— **不留半态**(磁盘上的 config.yaml 已由事务回滚)。
         await writeCatalog(layout, {
@@ -720,12 +726,12 @@ function subscriptionRemove(context: ProxyContext): Capability {
           reloaded = (await applyManagedConfig(target, desired)).reloaded;
         }
       }
-      return {
+      return payload({
         id,
         action: "removed",
         active: wasActive ? null : catalog.activeId,
         reloaded,
-      } as unknown as JsonValue;
+      });
     },
   };
 }
@@ -742,11 +748,24 @@ function supervisionGet(context: ProxyContext): Capability {
       parameters: [],
       cliAlias: ["proxy", "supervision"],
     },
-    handler: () => context.supervisor.snapshot() as unknown as JsonValue,
+    handler: () => payload(context.supervisor.snapshot()),
   };
 }
 
 // MARK: - 共用
+
+/**
+ * 能力返回值 → `JsonValue`。
+ *
+ * handler 的返回值本质上是"某个已登记 result 的形状"(`ProxyStatusResult` 之类),而 `JsonValue` 是个
+ * 递归联合类型 —— TS 不认为一个具名 interface 结构化地属于它(可选字段的 `| undefined` 在联合里对不上),
+ * 于是每处都要写一遍 `as unknown as JsonValue`。**运行时什么都没发生**:那些对象本来就只含 JSON 值。
+ * 收敛到这一个函数,是为了让"这里有一次类型放行"只需要读一遍、也只有一个地方可以出错。
+ * (真正的形状把关在别处:CLI 侧 `outcomeFromEnvelope` 拿 zod schema 校验 daemon 的应答,漂了就红。)
+ */
+function payload(value: object): JsonValue {
+  return value as unknown as JsonValue;
+}
 
 async function reachableTarget(context: ProxyContext): Promise<ProxyTarget> {
   const target = await resolveProxyTarget(context.paths, context.env);
@@ -814,6 +833,24 @@ async function withSubscriptionErrors<T>(body: () => Promise<T> | T): Promise<T>
             },
           ],
           context: { catalogPath: error.catalogPath },
+        },
+      });
+    }
+    if (error instanceof SubscriptionBodyError) {
+      throw new CapabilityFailedError(error.message, error.detail ?? "", {
+        code: ErrorCode.subscriptionFailed,
+        guidance: {
+          summary:
+            "a2 不会替你猜该保留哪一段 —— 请把这份订阅裁成单文档 YAML(去掉文档分隔符)后再换源。",
+          steps: [
+            { description: `打开那份订阅,看第 ${error.line} 行前后是不是两份配置被粘在了一起` },
+            {
+              description: "裁成单文档之后重新换源(add 同名即换源)",
+              command: "a2 proxy subscription add --name <名字> --source <裁好的源> --json",
+            },
+            { description: "看当前有哪些订阅", command: "a2 proxy subscription list --json" },
+          ],
+          context: { line: String(error.line) },
         },
       });
     }

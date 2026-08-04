@@ -17,7 +17,7 @@ import { ControllerError, reloadConfig } from "../mihomo/controller.ts";
 import { defaultSettings, renderManagedConfig } from "../mihomo/config.ts";
 import { currentSecret, ensureConfig } from "../mihomo/install.ts";
 import type { MihomoLayout } from "../mihomo/paths.ts";
-import { readCatalog, readSubscriptionBody } from "./subscriptions.ts";
+import { assertUsableBody, readCatalog, readSubscriptionBody } from "./subscriptions.ts";
 import type { ProxyTarget } from "./endpoint.ts";
 
 const DATA_DIR_MODE = 0o700;
@@ -94,6 +94,9 @@ export async function resolveDesiredConfig(
   const catalog = await readCatalog(layout);
   const activeId = catalog.activeId;
   const body = activeId ? await readSubscriptionBody(layout, activeId) : undefined;
+  // 渲染之前的最后一道闸:正文若含 YAML 文档分隔符,拼出来的配置会让订阅整份静默失效。
+  // add/update 落盘时已经查过一次,这里兜的是"有人在 a2 背后改了那个文件"。
+  if (activeId && body !== undefined) assertUsableBody(body, `订阅 ${activeId} 的物化配置`);
   const rendered = renderManagedConfig({
     layout,
     secret,
@@ -142,49 +145,74 @@ export async function applyManagedConfig(
     await reloadConfig(target.controller, layout.configPath);
     return { written, reloaded: true };
   } catch (error) {
-    // rollback 自己不抛就说明"已经回到旧配置了",但这次操作仍然是失败的。
-    await rollback(target, before, error);
-    throw reloadFailure(target, error, true);
+    // rollback 自己不抛就说明"该回滚的都回滚了";它返回**这次到底有没有旧配置可回滚**,
+    // 因为那句话要原样出现在报文里 —— 说"已回滚"而实际没有可回滚的东西,是在骗读报文的人。
+    const rolledBack = await rollback(target, before, error);
+    throw reloadFailure(target, error, rolledBack ? "rolled_back" : "nothing_to_roll_back");
   }
 }
 
 /**
- * 回滚:把旧字节写回去,并**再让内核重载一次旧的**。
- * 写回失败时不发第二次 reload —— 内核此刻跑的就是旧配置,再 reload 只会把一次失败变成两次。
+ * 回滚:把旧字节写回去,并**再让内核重载一次旧的**。返回本次是否真的回滚了。
+ *
+ * 两种"没回滚"要分清:
+ *   * `before === undefined` —— 这次之前**根本没有配置文件**(第一次落盘就被内核拒了)。
+ *     没有可回滚的东西,磁盘上留下的就是这次写的那一份;报文必须照实说,不能谎称"已回滚"。
+ *   * 写回本身失败 —— 抛出去,并且**不发第二次 reload**:内核此刻跑的就是旧配置,
+ *     再 reload 一次只会把一次失败变成两次不明不白的失败。
  */
 async function rollback(
   target: ProxyTarget,
   before: string | undefined,
   cause: unknown,
-): Promise<void> {
-  if (before === undefined) return;
+): Promise<boolean> {
+  if (before === undefined) return false;
   try {
     await ensureConfig(target.layout, before);
   } catch (writeError) {
-    throw reloadFailure(target, cause, false, `回滚写回旧配置也失败了:${String(writeError)}`);
+    throw reloadFailure(
+      target,
+      cause,
+      "rollback_failed",
+      `回滚写回旧配置也失败了:${String(writeError)}`,
+    );
   }
   await reloadConfig(target.controller, target.layout.configPath).catch(() => {});
+  return true;
 }
+
+/** 重载失败的三种收场 —— 文案与实际发生的事一一对应,不共用一句含糊的话。 */
+type RollbackOutcome = "rolled_back" | "nothing_to_roll_back" | "rollback_failed";
+
+const ROLLBACK_MESSAGE: Record<RollbackOutcome, string> = {
+  rolled_back: "内核拒绝重载新配置,已回滚到上一份配置。",
+  nothing_to_roll_back:
+    "内核拒绝重载新配置;这之前没有旧配置可回滚,磁盘上留下的是这次写的那一份。",
+  rollback_failed: "内核拒绝重载新配置,且回滚未能完成。",
+};
+
+const ROLLBACK_SUMMARY: Record<RollbackOutcome, string> = {
+  rolled_back: "内核仍在跑上一份配置。多半是新配置本身内核解析不了(订阅格式不对、字段非法)。",
+  nothing_to_roll_back:
+    "内核跑的还是它启动时那份配置。磁盘上这份是新写的、内核不认 —— 先看它错在哪,再决定改还是删。",
+  rollback_failed: "磁盘上的配置可能与内核里跑的那份不一致,先看清楚再动手。",
+};
 
 function reloadFailure(
   target: ProxyTarget,
   cause: unknown,
-  rolledBack: boolean,
+  outcome: RollbackOutcome,
   extra?: string,
 ): CapabilityFailedError {
   const detail =
     cause instanceof ControllerError ? cause.message : String(cause);
   return new CapabilityFailedError(
-    rolledBack
-      ? "内核拒绝重载新配置,已回滚到上一份配置。"
-      : "内核拒绝重载新配置,且回滚未能完成。",
+    ROLLBACK_MESSAGE[outcome],
     `${detail}${extra ? `\n${extra}` : ""}`,
     {
       code: ErrorCode.proxyOperationFailed,
       guidance: {
-        summary: rolledBack
-          ? "内核仍在跑上一份配置。多半是新配置本身内核解析不了(订阅格式不对、字段非法)。"
-          : "磁盘上的配置可能与内核里跑的那份不一致,先看清楚再动手。",
+        summary: ROLLBACK_SUMMARY[outcome],
         steps: [
           { description: "看那份自管配置", command: `cat ${target.layout.configPath}` },
           {

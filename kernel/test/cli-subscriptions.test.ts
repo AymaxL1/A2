@@ -319,6 +319,140 @@ test("subscription update:内容为空 → 拒绝落盘(空订阅比坏订阅更
   ).toContain("# marker: v1");
 });
 
+// MARK: - 正文里的 YAML 文档分隔符(拒绝,不摘除)
+
+test("update:拉到的正文含 `---` → 结构化拒绝(带行号),旧的那份一个字节都不动", async () => {
+  const box = await managedBox();
+  const sourcePath = path.join(box.root, "two-docs.yaml");
+  // 两份配置被粘在了一起 —— 拼进 a2 头部之后 mihomo 只会读到第一个文档(只剩 a2 那几行),
+  // 重载"成功"而订阅整份静默失效。这正是必须**拒绝**而不是摘除的那种输入。
+  await writeFile(
+    sourcePath,
+    ["# fake-groups: SUBA=S9", "proxies: []", "---", "rules:", "  - MATCH,DIRECT", ""].join("\n"),
+  );
+  const ids = await seed(
+    box,
+    [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1"), source: `file://${sourcePath}` }],
+    "甲",
+  );
+  await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+  const configBefore = await readFile(box.managedConfig, "utf8");
+
+  const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  const parsed = body(result);
+  expect(parsed.error.code).toBe("subscription_failed");
+  expect(parsed.error.message).toContain("文档分隔符");
+  // 行号要指得准(第 3 行就是那条 `---`),人才知道去哪儿裁。
+  expect(parsed.error.message).toContain("第 3 行");
+  expect(parsed.error.guidance.context.line).toBe("3");
+  // **失败不留痕**:物化配置与已生效的自管配置都还是旧的那一份。
+  expect(
+    await readFile(
+      path.join(box.home, "mihomo", "subscriptions", "configs", `${ids["甲"]}.conf`),
+      "utf8",
+    ),
+  ).toContain("# marker: v1");
+  expect(await readFile(box.managedConfig, "utf8")).toBe(configBefore);
+}, 30000);
+
+test("activate:物化配置在 a2 背后被改成多文档 → 渲染前那道闸把它拦下(不静默失效)", async () => {
+  const box = await managedBox();
+  const ids = await seed(box, [
+    { name: "甲", body: ["proxies: []", "...", "rules: []", ""].join("\n") },
+  ]);
+
+  const result = await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  const parsed = body(result);
+  expect(parsed.error.code).toBe("subscription_failed");
+  expect(parsed.error.message).toContain("文档分隔符");
+  // 拒绝即指引:告诉人去哪一行看、裁好之后怎么换源。
+  const commands = parsed.error.guidance.steps.map((s: { command?: string }) => s.command);
+  expect(commands.some((c: string | undefined) => c?.includes("subscription add"))).toBe(true);
+  // 激活项没被改成它(半态都没留下)。
+  expect(out(await proxy(box, ["subscription", "list"])).active).toBeNull();
+}, 30000);
+
+// MARK: - http(s) 订阅源(回环,不出网)
+
+test("update:http:// 源走真 HTTP 往返(回环夹具),拉到的正文生效", async () => {
+  const box = await managedBox();
+  // 起一个**回环**上的订阅源。与假 mihomo 同一种姿势:门禁里的"网络"只到 127.0.0.1 为止,
+  // 「门禁不出网」这条纪律说的是不连外网,不是不许有 HTTP 往返。
+  let hits = 0;
+  const feed = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(request) {
+      if (!new URL(request.url).pathname.endsWith("/sub.yaml")) {
+        return new Response("not found", { status: 404 });
+      }
+      hits += 1;
+      return new Response(subscriptionBody("SUBA=H1,H2", "http-v2"));
+    },
+  });
+  try {
+    const source = `http://127.0.0.1:${feed.port}/sub.yaml`;
+    const ids = await seed(
+      box,
+      [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1"), source }],
+      "甲",
+    );
+    await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+    const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+    expect(result.exitCode).toBe(0);
+    expect(out(result).reloaded).toBe(true);
+    expect(hits).toBeGreaterThan(0);
+    // 拉到的新正文真的生效了(分组换成 http 那份)。
+    expect(out(await proxy(box, ["groups"])).groups[0].all).toEqual(["H1", "H2"]);
+    expect(await readFile(box.managedConfig, "utf8")).toContain("# marker: http-v2");
+  } finally {
+    feed.stop(true);
+  }
+}, 30000);
+
+test("update:http 源返回 404 → subscription_failed,什么都没改", async () => {
+  const box = await managedBox();
+  const feed = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response("gone", { status: 404 }),
+  });
+  try {
+    const ids = await seed(
+      box,
+      [
+        {
+          name: "甲",
+          body: subscriptionBody("SUBA=S1", "v1"),
+          source: `http://127.0.0.1:${feed.port}/sub.yaml`,
+        },
+      ],
+      "甲",
+    );
+
+    const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+    expect(result.exitCode).toBe(5);
+    const parsed = body(result);
+    expect(parsed.error.code).toBe("subscription_failed");
+    expect(parsed.error.detail).toContain("404");
+    expect(
+      await readFile(
+        path.join(box.home, "mihomo", "subscriptions", "configs", `${ids["甲"]}.conf`),
+        "utf8",
+      ),
+    ).toContain("# marker: v1");
+  } finally {
+    feed.stop(true);
+  }
+}, 30000);
+
 // MARK: - 清单损坏
 
 test("清单文件损坏:一切读写都停手 + 指引,**绝不把它当空清单覆盖掉**", async () => {

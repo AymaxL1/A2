@@ -193,6 +193,55 @@ test("接管写到一半失败 → 回滚到本次调用前,退出码 5,且不�
   expect(existsSync(box.snapshotPath)).toBe(false);
 }, 30000);
 
+test("还原写到一半失败 → **快照留着**,再敲一次 off 仍能把系统精确还原(还原依据不丢)", async () => {
+  // 接管要写 2 服务 × 3 类 × 2 条命令 = 12 次;把故障放在第 15 次,
+  // 于是接管全成、而**还原**走到一半时挂掉(故障是一次性的,重试那轮不会再被打中)。
+  const box = await managedBox({ A2_FAKE_NETSETUP_FAIL_AT: "15" });
+  await proxy(box, ["on"]);
+  const takenOver = await networkState(box);
+
+  const failed = await proxy(box, ["off"]);
+
+  expect(failed.exitCode).toBe(5);
+  expect(body(failed).error.code).toBe("system_proxy_failed");
+  // 还原没走完(状态既不是接管态、也还没回到接管前)——这正是最危险的时刻。
+  const halfway = await networkState(box);
+  expect(halfway).not.toEqual(INITIAL_NETWORK_STATE);
+  // **唯一的还原依据必须还在**:把它跟着一起删掉,用户就再也回不去了。
+  expect(existsSync(box.snapshotPath)).toBe(true);
+  expect(out(await proxy(box, ["system"])).takenOver).toBe(true);
+
+  // 再敲一次:这回写得进去,系统精确回到接管前(含那个第三方代理)。
+  const retried = await proxy(box, ["off"]);
+  expect(retried.exitCode).toBe(0);
+  expect(out(retried).restored).toBe(true);
+  expect(await networkState(box)).toEqual(INITIAL_NETWORK_STATE);
+  expect(existsSync(box.snapshotPath)).toBe(false);
+  expect(takenOver).not.toEqual(INITIAL_NETWORK_STATE);
+}, 30000);
+
+test("二次接管写到一半失败 → 只撤销**本次调用**:既有接管仍启用,首次快照原样留着", async () => {
+  // 首次接管用掉 12 次写;第 15 次(二次接管的第 3 次写)挂掉。
+  const box = await managedBox({ A2_FAKE_NETSETUP_FAIL_AT: "15" });
+  await proxy(box, ["on"]);
+  const takenOver = await networkState(box);
+
+  const second = await proxy(box, ["on"]);
+
+  expect(second.exitCode).toBe(5);
+  expect(body(second).error.code).toBe("system_proxy_failed");
+  // ① 只撤销本次调用:回到**本次调用开始时**的状态 —— 也就是"仍然被接管着",
+  //    而不是被一路退回到接管前(那会在用户不知情时把代理关了)。
+  expect(await networkState(box)).toEqual(takenOver);
+  // ② 首次快照原样留着(不是被这次的"已接管态"覆盖,也不是被删掉)。
+  expect(existsSync(box.snapshotPath)).toBe(true);
+  const snapshot = JSON.parse(await readFile(box.snapshotPath, "utf8"));
+  expect(snapshot.services).toEqual(INITIAL_NETWORK_STATE.services);
+  // ③ 因此 off 仍然能把系统精确还原到最初 —— 这才是"只撤销本次"的意义所在。
+  expect((await proxy(box, ["off"])).exitCode).toBe(0);
+  expect(await networkState(box)).toEqual(INITIAL_NETWORK_STATE);
+}, 30000);
+
 test("内核报不出混合端口 → 拒绝接管且**零写入**(把系统代理指到不存在的端口 = 立刻断网)", async () => {
   const box = (sandbox = await makeProxySandbox({ groups: GROUPS }));
   await startProxyDaemon(box);

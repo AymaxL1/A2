@@ -15,6 +15,7 @@
 import { mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Subscription } from "../contract/wire.ts";
+import { findDocumentSeparator } from "../mihomo/config.ts";
 import type { MihomoLayout } from "../mihomo/paths.ts";
 
 const DIR_MODE = 0o700;
@@ -48,6 +49,37 @@ export class CatalogCorruptError extends SubscriptionError {
     super("订阅清单文件损坏,已拒绝读写以免覆盖既有数据。", detail);
     this.name = "CatalogCorruptError";
   }
+}
+
+/**
+ * 订阅正文本身 a2 用不了 —— 单独一个类型,因为它的处置是**告诉人第几行**,不是重试也不是替他改。
+ * 目前唯一的成因是 YAML 文档分隔符(见 `mihomo/config.ts::findDocumentSeparator` 的长注释)。
+ */
+export class SubscriptionBodyError extends SubscriptionError {
+  constructor(
+    message: string,
+    detail: string,
+    readonly line: number,
+  ) {
+    super(message, detail);
+    this.name = "SubscriptionBodyError";
+  }
+}
+
+/**
+ * 订阅正文能不能被 a2 拼进自管配置。**在落盘之前、在渲染之前**各查一次:
+ * 前者拦住"坏东西进不了库",后者兜住"有人在 a2 背后改了那个文件"。
+ */
+export function assertUsableBody(body: string, origin: string): void {
+  const separator = findDocumentSeparator(body);
+  if (!separator) return;
+  throw new SubscriptionBodyError(
+    `这份订阅里有 YAML 文档分隔符(第 ${separator.line} 行 ${JSON.stringify(separator.text)}),a2 无法把它拼进自管配置。`,
+    `a2 的自管配置是「a2 头部 + 订阅正文」拼成的**一份**文档;正文里有 ${JSON.stringify(separator.text.trim())} ` +
+      `就成了多文档流,而 mihomo 只读第一个文档 —— 也就是只剩 a2 那几行头部。` +
+      `重载会"成功",但这份订阅的节点与规则会整份静默失效。来源:${origin}`,
+    separator.line,
+  );
 }
 
 // MARK: - id

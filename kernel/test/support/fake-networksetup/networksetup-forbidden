@@ -1,0 +1,16 @@
+#!/bin/sh
+# **兜底假件:一执行就大声失败。**
+#
+# 它存在的唯一理由是防一类静默事故:代理域能力跑在 daemon 里,而 `NetworkSetupPort` 的默认实现走的是
+# **绝对路径** `/usr/sbin/networksetup` —— PATH 那道防线对它无效(PATH 只挡按名字查找的 launchctl/systemctl)。
+# 于是只要哪个测试忘了注入 `A2_NETWORKSETUP`,内核就会去动**用户真机的系统代理**。
+# 用户此刻的网络很可能正靠他自己的代理活着,把系统代理留在坏状态 = 用户断网 = 事故。
+#
+# 所以 `harness.ts` 的 startDaemon / runCli **默认**把 A2_NETWORKSETUP 指到这里:
+# 谁忘了注入行为假件,谁就当场拿到一条非零退出 + 这段话,而不是悄悄改了用户的机器。
+# 真正要验系统代理行为的测试经 `proxy-sandbox.ts` 显式覆写成同目录下的 `networksetup`(行为假件)。
+echo "fake networksetup(兜底):这个测试没有注入行为假件就想动系统代理。" >&2
+echo "  收到的 argv:$*" >&2
+echo "  修法:经 test/support/proxy-sandbox.ts 建沙盒(它总是注入 A2_NETWORKSETUP)。" >&2
+echo "  绝不允许让门禁去调真的 /usr/sbin/networksetup。" >&2
+exit 97

@@ -14,6 +14,21 @@ import path from "node:path";
 
 const CLI_ENTRY = path.resolve(import.meta.dir, "../../src/cli/main.ts");
 
+/**
+ * **全局兜底:任何被测进程都别想碰到真的 `networksetup`。**
+ *
+ * 为什么需要它:`NetworkSetupPort` 的默认实现走**绝对路径** `/usr/sbin/networksetup`,
+ * 所以"把 PATH 钉死成假件目录"这道防线对它**无效**(PATH 只挡按名字查找的 launchctl/systemctl)。
+ * 哪个测试忘了注入,内核就会去动用户真机的系统代理 —— 用户此刻的网络多半正靠他自己的代理活着。
+ *
+ * 于是这里默认把它指到一个**一执行就大声失败**的假件;真要验系统代理行为的测试经
+ * `proxy-sandbox.ts` 显式覆写成同目录下的行为假件。默认值排在 `...options.env` **之前**,覆写永远赢。
+ */
+const FORBIDDEN_NETWORKSETUP = path.resolve(
+  import.meta.dir,
+  "fake-networksetup/networksetup-forbidden",
+);
+
 /** 被测的 a2 命令行(编译产物或源码入口)。 */
 export function a2Command(): string[] {
   const bin = process.env.A2_TEST_BIN;
@@ -48,7 +63,12 @@ export async function runCli(
 ): Promise<CliResult> {
   const proc = Bun.spawn({
     cmd: [...a2Command(), ...args],
-    env: { ...process.env, A2_HOME: options.home, ...options.env },
+    env: {
+      ...process.env,
+      A2_HOME: options.home,
+      A2_NETWORKSETUP: FORBIDDEN_NETWORKSETUP,
+      ...options.env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -91,7 +111,12 @@ export async function startDaemon(
 ): Promise<DaemonHandle> {
   const proc = Bun.spawn({
     cmd: [...a2Command(), "daemon", "run"],
-    env: { ...process.env, A2_HOME: home, ...env },
+    env: {
+      ...process.env,
+      A2_HOME: home,
+      A2_NETWORKSETUP: FORBIDDEN_NETWORKSETUP,
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
