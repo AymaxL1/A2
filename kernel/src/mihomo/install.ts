@@ -12,12 +12,7 @@
 import { chmod, lstat, mkdir, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ErrorCode, type Guidance, type WireError } from "../contract/wire.ts";
-import {
-  MihomoEnv,
-  readControllerFromConfig,
-  renderManagedConfig,
-  type MihomoLayout,
-} from "./paths.ts";
+import { MihomoEnv, readControllerFromConfig, type MihomoLayout } from "./paths.ts";
 import {
   assetKey,
   assetUrl,
@@ -118,20 +113,32 @@ export async function ensureDataDir(layout: MihomoLayout): Promise<boolean> {
 }
 
 /**
- * 写(或收敛)a2 自管配置。**secret 一旦生成就留住** —— 否则每次 install 都换一把钥匙,
- * 既让"幂等 = 什么都没改"不成立,也会把已经连着的客户端踢掉。
+ * 落一份已经渲染好的 a2 自管配置。**逐字比较,有差才写** —— 幂等("这次什么都没改")的判据就是它。
+ *
+ * 渲染本身在 `src/proxy/config.ts`(它要读可调项与激活订阅);本函数只管"写不写、怎么写"。
+ * secret 的留存不在这里做,而在渲染那一侧(`currentSecret()` 现读磁盘那份)—— 换钥匙会把
+ * 已连着的客户端踢掉,也让幂等不成立。
  */
-export async function ensureConfig(layout: MihomoLayout): Promise<boolean> {
+export async function ensureConfig(layout: MihomoLayout, rendered: string): Promise<boolean> {
   const current = await Bun.file(layout.configPath)
     .text()
     .catch(() => undefined);
-  const secret = (current ? readControllerFromConfig(current)?.secret : undefined) ?? newSecret();
-  const wanted = renderManagedConfig(layout, secret);
-  if (current === wanted) return false;
+  if (current === rendered) return false;
   await mkdir(path.dirname(layout.configPath), { recursive: true, mode: DATA_DIR_MODE });
-  await writeFile(layout.configPath, wanted, { mode: CONFIG_MODE });
+  await writeFile(layout.configPath, rendered, { mode: CONFIG_MODE });
   await chmod(layout.configPath, CONFIG_MODE);
   return true;
+}
+
+/**
+ * 自管配置里此刻那把钥匙:磁盘上有就用它,没有就现造一把。
+ * **不写盘** —— 写盘是 `ensureConfig` 的事,这里只负责"别把钥匙换了"。
+ */
+export async function currentSecret(layout: MihomoLayout): Promise<string> {
+  const current = await Bun.file(layout.configPath)
+    .text()
+    .catch(() => undefined);
+  return (current ? readControllerFromConfig(current)?.secret : undefined) ?? newSecret();
 }
 
 /**

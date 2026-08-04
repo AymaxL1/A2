@@ -259,6 +259,120 @@
       "schema": "ServiceChangeResult",
       "kind": "invalid",
       "why": "收敛动作不在已登记词表内 —— actions 是审计素材,不能是自由文本"
+    },
+    {
+      "file": "proxy-status-running.json",
+      "schema": "ProxyStatusResult",
+      "kind": "valid",
+      "why": "proxy.status 的 output:实例在跑、控制面通,mode/端口/节点/系统代理摘要俱全"
+    },
+    {
+      "file": "proxy-status-absent.json",
+      "schema": "ProxyStatusResult",
+      "kind": "valid",
+      "why": "一个实例都没有:两条事实都为假,且**不臆造** mode/端口/节点(那几个键直接缺席)"
+    },
+    {
+      "file": "proxy-status-api-unreachable.json",
+      "schema": "ProxyStatusResult",
+      "kind": "valid",
+      "why": "两条独立事实不合并:进程面在(running)而控制面不通(apiReachable=false)"
+    },
+    {
+      "file": "proxy-groups-result.json",
+      "schema": "ProxyGroupsResult",
+      "kind": "valid",
+      "why": "分组按名排序;`now` 为空的组(GLOBAL)把该键整个缺省,而不是给空串"
+    },
+    {
+      "file": "proxy-mode-result.json",
+      "schema": "ProxyModeResult",
+      "kind": "valid",
+      "why": "proxy.mode.set 的 output(`set` 只在 set 时出现)"
+    },
+    {
+      "file": "proxy-node-select-result.json",
+      "schema": "ProxyNodeSelectResult",
+      "kind": "valid",
+      "why": "按组选节点的 output"
+    },
+    {
+      "file": "proxy-latency-result.json",
+      "schema": "ProxyLatencyResult",
+      "kind": "valid",
+      "why": "测速:超时节点**没有 delayMs 这个键**(而不是 0),条数与顺序对齐该组候选清单"
+    },
+    {
+      "file": "proxy-config-result.json",
+      "schema": "ProxyConfigResult",
+      "kind": "valid",
+      "why": "自管配置的可调项 + 激活订阅 + 本次收敛动作"
+    },
+    {
+      "file": "system-proxy-status-taken-over.json",
+      "schema": "SystemProxyStatusResult",
+      "kind": "valid",
+      "why": "系统代理实况:a2 接管中,逐服务逐类型指向内核混合端口"
+    },
+    {
+      "file": "system-proxy-change-restored.json",
+      "schema": "SystemProxyChangeResult",
+      "kind": "valid",
+      "why": "还原之后:restored=true,且**原本就有的第三方代理精确复原**(不是一律关闭)"
+    },
+    {
+      "file": "subscription-list-result.json",
+      "schema": "SubscriptionListResult",
+      "kind": "valid",
+      "why": "订阅清单:active 可为 null;从未拉取成功过的条目没有 lastUpdatedAt"
+    },
+    {
+      "file": "subscription-change-activated.json",
+      "schema": "SubscriptionChangeResult",
+      "kind": "valid",
+      "why": "激活一条订阅:action=activated 且 reloaded=true"
+    },
+    {
+      "file": "proxy-supervision-down.json",
+      "schema": "ProxySupervisionResult",
+      "kind": "valid",
+      "why": "存活观测:instance_down 事件**必带 guidance**(08 票的推送载荷就是这一份)"
+    },
+    {
+      "file": "response-proxy-operation-failed.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "代理控制面失败的完整报文(组不存在),带可直接敲的下一步"
+    },
+    {
+      "file": "response-system-proxy-unsupported.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "平台不支持系统代理接管(退出码 6 那一档)的完整报文"
+    },
+    {
+      "file": "invalid-proxy-status-missing-system-proxy.json",
+      "schema": "ProxyStatusResult",
+      "kind": "invalid",
+      "why": "少了必填的 systemProxy —— 系统代理那一格不是可选信息"
+    },
+    {
+      "file": "invalid-subscription-change-unknown-action.json",
+      "schema": "SubscriptionChangeResult",
+      "kind": "invalid",
+      "why": "action 词表封闭:`renamed` 不是已登记动作"
+    },
+    {
+      "file": "invalid-proxy-supervision-unknown-event.json",
+      "schema": "ProxySupervisionResult",
+      "kind": "invalid",
+      "why": "事件 kind 词表封闭:`instance_restarted` **内核永远不会做那件事**,故不在表上"
+    },
+    {
+      "file": "invalid-proxy-latency-negative-delay.json",
+      "schema": "ProxyLatencyResult",
+      "kind": "invalid",
+      "why": "延迟不可能是负数(负延迟只能来自解析出错)"
     }
   ]
 }

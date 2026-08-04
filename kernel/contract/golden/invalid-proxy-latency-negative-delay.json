@@ -1,0 +1,13 @@
+{
+  "endpoint": {
+    "owner": "a2",
+    "controller": "127.0.0.1:9097",
+    "managed": true
+  },
+  "group": "PROXY",
+  "url": "http://www.gstatic.com/generate_204",
+  "timeoutMs": 5000,
+  "results": [
+    { "node": "香港 01", "delayMs": -1, "timeout": false }
+  ]
+}

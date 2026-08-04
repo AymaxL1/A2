@@ -48,6 +48,7 @@ import {
   recordAdoption,
   releaseAdoption,
 } from "./install.ts";
+import { resolveDesiredConfig } from "../proxy/config.ts";
 import { mihomoLayout, readSecretOf, resolveScanInputs, type MihomoLayout } from "./paths.ts";
 import { compareVersions, MIHOMO_COMPAT_FLOOR, MIHOMO_LOCKED_VERSION } from "./pin.ts";
 
@@ -112,7 +113,9 @@ export async function mihomoInstall(
     // 免得留着一个"我还盯着别人那个实例"的假状态。
     if (await releaseAdoption(ctx.layout)) actions.push("adoption_released");
     if (await ensureDataDir(ctx.layout)) actions.push("data_dir_created");
-    if (await ensureConfig(ctx.layout)) actions.push("config_written");
+    // 配置内容由 07 票的配置面算(可调项 + 当前激活订阅);install 只负责"把它落到位"。
+    const desired = await resolveDesiredConfig(ctx.layout, ctx.env);
+    if (await ensureConfig(ctx.layout, desired.text)) actions.push("config_written");
 
     if (decision.rung === "reuse_binary") {
       // ② 只读复用:落点上放一个指向那份二进制的符号链接,真身一个字节都不碰。

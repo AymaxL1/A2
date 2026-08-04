@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "restored": true,
+  "status": {
+    "supported": true,
+    "takenOver": false,
+    "snapshotPath": "/Users/alice/.a2/system-proxy.json",
+    "services": [
+      {
+        "service": "Wi-Fi",
+        "http": { "enabled": false, "host": "", "port": 0 },
+        "https": { "enabled": false, "host": "", "port": 0 },
+        "socks": { "enabled": false, "host": "", "port": 0 }
+      },
+      {
+        "service": "Ethernet",
+        "http": { "enabled": true, "host": "203.0.113.9", "port": 8080 },
+        "https": { "enabled": true, "host": "203.0.113.9", "port": 8080 },
+        "socks": { "enabled": false, "host": "", "port": 0 }
+      }
+    ]
+  }
+}

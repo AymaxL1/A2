@@ -57,6 +57,11 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.mihomoBelowFloor:
     case ErrorCode.mihomoNotManaged:
     case ErrorCode.mihomoOperationFailed:
+    // 代理面同档:控制面通了但这件事没办成 / networksetup 报错 / 订阅拉不到。
+    // 「参数写错了」仍归 6(那是校验层的事),这三码说的都是"路走通了、事没办成"。
+    case ErrorCode.proxyOperationFailed:
+    case ErrorCode.systemProxyFailed:
+    case ErrorCode.subscriptionFailed:
       return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:
@@ -68,6 +73,8 @@ export function exitCodeForErrorCode(code: string): number {
     // 「本平台没有已支持的 supervisor」不是你敲错了命令(1),也不是事没办成(5)——
     // 是这条请求在这台机器上根本不成立,与校验层拒绝同档。
     case ErrorCode.serviceUnsupportedPlatform:
+    // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
+    case ErrorCode.systemProxyUnsupported:
       return ExitCode.protocolError;
     default:
       return ExitCode.protocolError;

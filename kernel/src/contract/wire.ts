@@ -130,6 +130,23 @@ export const ErrorCode = {
   mihomoNotManaged: "mihomo_not_managed",
   /** mihomo 操作执行了但没成:下载失败、摘要对不上、落位失败、unit 装了却没跑起来。 */
   mihomoOperationFailed: "mihomo_operation_failed",
+
+  // MARK: 代理控制面(07 票)
+
+  /**
+   * 代理控制面的操作发出去了、但没成:REST 非 2xx、组或节点不存在、重载被内核拒绝。
+   * 与 `mihomo_unreachable`(压根连不上)分开:这一档说明**通了,是这件事本身没办成**。
+   */
+  proxyOperationFailed: "proxy_operation_failed",
+  /** 系统代理那条路没走通:`networksetup` 非零退出、读不回状态、接管写到一半已回滚。 */
+  systemProxyFailed: "system_proxy_failed",
+  /**
+   * 本平台没有已支持的系统代理接管路径(V1 只认 macOS 的 `networksetup`)。
+   * 与 `service_unsupported_platform` 同一档:不是你敲错了,是这条请求在这台机器上不成立(退出码 6)。
+   */
+  systemProxyUnsupported: "system_proxy_unsupported",
+  /** 订阅拉取/物化/清单读写没成(含「清单文件损坏,拒绝读写以免覆盖既有数据」)。 */
+  subscriptionFailed: "subscription_failed",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -254,12 +271,21 @@ export const ParameterSpecSchema = z.object({
 });
 export type ParameterSpec = z.infer<typeof ParameterSpecSchema>;
 
-/** 能力 manifest:agent 靠它决定"调什么、怎么调、会不会被拦"。 */
+/**
+ * 能力 manifest:agent 靠它决定"调什么、怎么调、会不会被拦"。
+ *
+ * `cliAlias`(07 票加回)是**同一条能力的域子命令写法**:`["proxy","on"]` ⇒ `a2 proxy on`。
+ * 它只是 argv 的一层门面 —— 解析在客户端做,**仲裁仍在 `registry.invoke` 里发生**
+ * (`a2 proxy on` 与 `a2 capabilities call proxy.system.enable` 逐字节同一个结果,有断言)。
+ * 04 票曾把它标为"可派生的展示串"而淘汰,05 票改标顺延 07;此处按域子命令面的实际需要收回契约。
+ */
 export const CapabilityDescriptorSchema = z.object({
   id: z.string().min(1),
   risk: RiskLevelSchema,
   summary: z.string().min(1),
   parameters: z.array(ParameterSpecSchema),
+  /** 域子命令写法(有序 token;缺省 = 这条能力只能用 `capabilities call` 调)。 */
+  cliAlias: z.array(z.string().min(1)).min(1).optional(),
 });
 export type CapabilityDescriptor = z.infer<typeof CapabilityDescriptorSchema>;
 
@@ -547,6 +573,281 @@ export const MihomoChangeResultSchema = z.object({
   actions: z.array(MihomoActionSchema),
 });
 export type MihomoChangeResult = z.infer<typeof MihomoChangeResultSchema>;
+
+// MARK: - 代理控制面 result(07 票)
+//
+// 与 service / mihomo 两面**不同口径**:代理域全部是**真能力**(经注册表、经 daemon,`a2 capabilities call`
+// 与 `a2 proxy …` 走的是同一条路)。理由:它们要对 external-controller 发写请求、要动系统代理、
+// 要读 daemon 里那份存活观测 —— 每一件都必须有一个唯一的仲裁点与唯一的状态持有者。
+//
+// 一条贯穿本节的边界:**「这份归不归 a2 管」决定写面能发到哪一层**。
+//   * 归 a2 管(自管档)→ 配置文件、整份重载、订阅激活全都可以;
+//   * 不归 a2 管(收编档)→ 只能 `PATCH /configs`(改 mode)与 `PUT /proxies/<组>`(选节点),
+//     凡是"换配置文件"的动作一律 `mihomo_not_managed`。这是「生命周期归原托管方」在代理面的投影。
+
+/** 代理模式三档。取值即契约(**大小写敏感**,与旧 `aa` 同口径:`RULE` 会被 allowedValues 拒掉)。 */
+export const ProxyModeSchema = z.enum(["rule", "global", "direct"]);
+export type ProxyMode = z.infer<typeof ProxyModeSchema>;
+
+/** 「我这条命令是在跟谁说话」—— 每条代理 result 都带上,agent 不必再问一次 `a2 mihomo status`。 */
+export const ProxyEndpointSchema = z.object({
+  owner: MihomoOwnerSchema,
+  /** external-controller 地址(恒回环)。 */
+  controller: z.string().min(1),
+  /** 这份归不归 a2 管(决定"换配置文件"类写面能不能发)。 */
+  managed: z.boolean(),
+  /** a2 自管那份的配置文件路径(收编档缺省 —— 那是别人的文件,内核不写)。 */
+  configPath: z.string().optional(),
+});
+export type ProxyEndpoint = z.infer<typeof ProxyEndpointSchema>;
+
+/** 系统代理的三类(macOS `networksetup` 的三组子命令,一一对应)。 */
+export const ProxyKindSchema = z.enum(["http", "https", "socks"]);
+export type ProxyKind = z.infer<typeof ProxyKindSchema>;
+
+/** 一个网络服务上某一类代理的设置。**逐字段**(而不是只记开/关)—— 精确还原全靠它。 */
+export const ProxySettingSchema = z.object({
+  enabled: z.boolean(),
+  host: z.string(),
+  port: z.number().int().nonnegative(),
+});
+export type ProxySetting = z.infer<typeof ProxySettingSchema>;
+
+/** 一个网络服务(Wi-Fi / Ethernet / …)的三类代理设置。 */
+export const NetworkServiceProxySchema = z.object({
+  service: z.string().min(1),
+  http: ProxySettingSchema,
+  https: ProxySettingSchema,
+  socks: ProxySettingSchema,
+});
+export type NetworkServiceProxy = z.infer<typeof NetworkServiceProxySchema>;
+
+/** 系统代理的紧凑摘要(嵌进 `proxy.status`;完整实况见 `proxy.system.status`)。 */
+export const SystemProxySummarySchema = z.object({
+  /** 本平台有没有已支持的接管路径(V1 只有 macOS)。 */
+  supported: z.boolean(),
+  /** a2 手里有没有一份接管快照 —— **有 = 现在是我接管着,还原有据可依**。 */
+  takenOver: z.boolean(),
+  host: z.string().optional(),
+  port: z.number().int().positive().optional(),
+});
+export type SystemProxySummary = z.infer<typeof SystemProxySummarySchema>;
+
+/** `proxy.system.status` 的 output:摘要 + 快照落点 + **当前实况**(逐服务逐类型)。 */
+export const SystemProxyStatusResultSchema = SystemProxySummarySchema.extend({
+  /** 接管快照的落点(未接管时也给出:那是接管会写的位置)。 */
+  snapshotPath: z.string().min(1),
+  takenOverAt: z.string().optional(),
+  /** 此刻系统上的真实设置(读回来的,不是推断的)。平台不支持时为空数组。 */
+  services: z.array(NetworkServiceProxySchema),
+});
+export type SystemProxyStatusResult = z.infer<typeof SystemProxyStatusResultSchema>;
+
+/** `proxy.system.enable|disable` 的 output。`restored` 只在 disable 出现(**本次真的还原了吗**)。 */
+export const SystemProxyChangeResultSchema = z.object({
+  enabled: z.boolean(),
+  restored: z.boolean().optional(),
+  host: z.string().optional(),
+  port: z.number().int().positive().optional(),
+  status: SystemProxyStatusResultSchema,
+});
+export type SystemProxyChangeResult = z.infer<typeof SystemProxyChangeResultSchema>;
+
+/**
+ * `proxy.status` 的 output。**两条独立事实不合并**(沿旧口径):
+ * `running` = 有没有一个实例在(进程/实例层),`apiReachable` = 控制面答不答话。
+ * 内核没跑时**不臆造 mode/端口/节点** —— 那几个字段直接缺省。
+ */
+export const ProxyStatusResultSchema = z.object({
+  running: z.boolean(),
+  apiReachable: z.boolean(),
+  /** 一个实例都没有时缺省。 */
+  endpoint: ProxyEndpointSchema.optional(),
+  version: z.string().optional(),
+  /** **原样透传字符串,不强枚举** —— 内核将来新增模式时客户端不该炸。 */
+  mode: z.string().optional(),
+  mixedPort: z.number().int().positive().optional(),
+  node: z.string().optional(),
+  systemProxy: SystemProxySummarySchema,
+});
+export type ProxyStatusResult = z.infer<typeof ProxyStatusResultSchema>;
+
+/**
+ * 一个可切换分组。**判据是条目带 `all`**(不看 type)—— Selector/URLTest/Fallback/LoadBalance 都带,
+ * 裸节点不带,内核新增组类型时不必改代码。`now` 为空串时归一为缺省。
+ */
+export const ProxyGroupSchema = z.object({
+  name: z.string().min(1),
+  type: z.string().min(1),
+  now: z.string().optional(),
+  all: z.array(z.string()),
+});
+export type ProxyGroup = z.infer<typeof ProxyGroupSchema>;
+
+/** `proxy.groups.list` 的 output。数组**按组名排序**(确定性,便于 diff 与逐字断言)。 */
+export const ProxyGroupsResultSchema = z.object({
+  endpoint: ProxyEndpointSchema,
+  groups: z.array(ProxyGroupSchema),
+});
+export type ProxyGroupsResult = z.infer<typeof ProxyGroupsResultSchema>;
+
+/** `proxy.mode.get|set` 的 output(`set` 只在 set 时出现)。 */
+export const ProxyModeResultSchema = z.object({
+  endpoint: ProxyEndpointSchema,
+  mode: z.string().min(1),
+  set: z.boolean().optional(),
+});
+export type ProxyModeResult = z.infer<typeof ProxyModeResultSchema>;
+
+/** `proxy.node.select` 的 output。 */
+export const ProxyNodeSelectResultSchema = z.object({
+  endpoint: ProxyEndpointSchema,
+  group: z.string().min(1),
+  node: z.string().min(1),
+  selected: z.literal(true),
+});
+export type ProxyNodeSelectResult = z.infer<typeof ProxyNodeSelectResultSchema>;
+
+/**
+ * `proxy.latency.test` 的 output。**结果以该组候选清单为准逐个对齐**:
+ * 内核的 delay map 里缺席的节点就是超时(`delayMs` 缺省 + `timeout: true`),**绝不臆造 0**。
+ */
+export const ProxyLatencyResultSchema = z.object({
+  endpoint: ProxyEndpointSchema,
+  group: z.string().min(1),
+  url: z.string().min(1),
+  timeoutMs: z.number().int().positive(),
+  results: z.array(
+    z.object({
+      node: z.string().min(1),
+      delayMs: z.number().int().nonnegative().optional(),
+      timeout: z.boolean(),
+    }),
+  ),
+});
+export type ProxyLatencyResult = z.infer<typeof ProxyLatencyResultSchema>;
+
+/** a2 自管配置里的可调项(**只有这几项可调** —— 其余由内核渲染,手改会在下次收敛时被改回)。 */
+export const ProxySettingsSchema = z.object({
+  /** 混合入站端口(HTTP + SOCKS 同一个;系统代理接管指向的就是它)。 */
+  mixedPort: z.number().int().positive(),
+  allowLan: z.boolean(),
+  logLevel: z.enum(["silent", "error", "warning", "info", "debug"]),
+  /** 写进配置文件的默认模式(运行时改 mode 走 `proxy.mode.set`,不落盘)。 */
+  mode: ProxyModeSchema,
+});
+export type ProxySettings = z.infer<typeof ProxySettingsSchema>;
+
+/** 配置面的收敛动作(词表封闭,审计素材)。空数组 = 本来就是这个样子。 */
+export const ProxyConfigActionSchema = z.enum([
+  /** 写了 `<A2_HOME>/mihomo/settings.json`。 */
+  "settings_written",
+  /** 渲染并写了 a2 自管配置(逐字比较有差才写)。 */
+  "config_written",
+  /** 让内核从配置文件整份重载(`PUT /configs`)。 */
+  "config_reloaded",
+]);
+export type ProxyConfigAction = z.infer<typeof ProxyConfigActionSchema>;
+
+/** `proxy.config.get|set` 的 output。 */
+export const ProxyConfigResultSchema = z.object({
+  settings: ProxySettingsSchema,
+  configPath: z.string().min(1),
+  controller: z.string().min(1),
+  /** 当前激活的订阅 id(没有则 null)。 */
+  activeSubscription: z.string().nullable(),
+  /** 磁盘上那份配置与内核此刻应当渲染出的内容是否逐字一致。 */
+  inSync: z.boolean(),
+  actions: z.array(ProxyConfigActionSchema),
+});
+export type ProxyConfigResult = z.infer<typeof ProxyConfigResultSchema>;
+
+/** 一条订阅。`id` 由名字确定性派生(同名 → 同 id,即 upsert 语义)。 */
+export const SubscriptionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  source: z.string().min(1),
+  /** 最近一次成功拉取的时刻(ISO 8601 UTC);从未拉取成功过则缺省。 */
+  lastUpdatedAt: z.string().optional(),
+  /** 物化配置的字节数(拉到的是不是空东西,agent 一眼可见)。 */
+  bytes: z.number().int().nonnegative().optional(),
+});
+export type Subscription = z.infer<typeof SubscriptionSchema>;
+
+/** `proxy.subscription.list` 的 output。`active` 显式可为 null(「一个都没激活」是合法答案)。 */
+export const SubscriptionListResultSchema = z.object({
+  active: z.string().nullable(),
+  subscriptions: z.array(SubscriptionSchema),
+  directory: z.string().min(1),
+});
+export type SubscriptionListResult = z.infer<typeof SubscriptionListResultSchema>;
+
+/** 订阅面的变更动作。 */
+export const SubscriptionActionSchema = z.enum([
+  "added",
+  /** 同名再 add = 换源(id 不变,配置字节被替换)。 */
+  "replaced",
+  "updated",
+  "activated",
+  "removed",
+]);
+export type SubscriptionAction = z.infer<typeof SubscriptionActionSchema>;
+
+/** `proxy.subscription.add|update|activate|remove` 的 output。 */
+export const SubscriptionChangeResultSchema = z.object({
+  id: z.string().min(1),
+  action: SubscriptionActionSchema,
+  /** 变更后的那一条(remove 时缺省 —— 它已经不在了)。 */
+  subscription: SubscriptionSchema.optional(),
+  active: z.string().nullable(),
+  /** 本次有没有让内核真的重载配置(add 恒 false:**add 不自动激活**)。 */
+  reloaded: z.boolean(),
+});
+export type SubscriptionChangeResult = z.infer<typeof SubscriptionChangeResultSchema>;
+
+/**
+ * 存活监督的一条观测事件。**内容即 08 票的推送载荷** —— 本票只落日志 + 可查询,
+ * 推送面(订阅/确认器)归 08,届时把同一份对象发出去即可,形状不变。
+ */
+export const ProxySupervisionEventSchema = z.object({
+  at: z.string().min(1),
+  kind: z.enum([
+    /** daemon 起来了,开始盯着某个端点。 */
+    "watch_started",
+    /** 之前不可达 → 现在可达。 */
+    "instance_up",
+    /** 之前可达 → 现在不可达(**这就是票面说的报警**)。 */
+    "instance_down",
+    /** 盯的对象换了(比如从收编档切到自管档)。 */
+    "target_changed",
+    /** daemon 要停了。 */
+    "watch_stopped",
+  ]),
+  controller: z.string().min(1),
+  owner: MihomoOwnerSchema,
+  detail: z.string().optional(),
+  /** `instance_down` 必带 —— 「人类如何完成」与 `a2 mihomo install` 那条同源。 */
+  guidance: GuidanceSchema.optional(),
+});
+export type ProxySupervisionEvent = z.infer<typeof ProxySupervisionEventSchema>;
+
+/** `proxy.supervision.get` 的 output:当下观测 + 最近若干条事件(全量在日志文件里)。 */
+export const ProxySupervisionResultSchema = z.object({
+  /** daemon 里那条观测循环在不在跑。 */
+  watching: z.boolean(),
+  intervalMs: z.number().int().positive(),
+  /** 起来之后一共探了多少次(证明它真在跑,而不是"看起来在跑")。 */
+  checks: z.number().int().nonnegative(),
+  target: ProxyEndpointSchema.optional(),
+  alive: z.boolean().optional(),
+  lastCheckAt: z.string().optional(),
+  lastTransitionAt: z.string().optional(),
+  /** 事件全量落这儿(NDJSON,一行一条)。 */
+  logPath: z.string().min(1),
+  /** 最近若干条(新的在后),供 CLI 直接看;要全量请读 `logPath`。 */
+  events: z.array(ProxySupervisionEventSchema),
+});
+export type ProxySupervisionResult = z.infer<typeof ProxySupervisionResultSchema>;
 
 /** `capabilities.describe` 的 params。 */
 export const CapabilityDescribeParamsSchema = z.object({

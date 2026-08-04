@@ -1,0 +1,120 @@
+{
+  "title": "SystemProxyStatusResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "supported": {
+      "type": "boolean"
+    },
+    "takenOver": {
+      "type": "boolean"
+    },
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "snapshotPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "takenOverAt": {
+      "type": "string"
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "minLength": 1
+          },
+          "http": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "enabled",
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
+          },
+          "https": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "enabled",
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
+          },
+          "socks": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "enabled",
+              "host",
+              "port"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "service",
+          "http",
+          "https",
+          "socks"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "supported",
+    "takenOver",
+    "snapshotPath",
+    "services"
+  ],
+  "additionalProperties": false
+}

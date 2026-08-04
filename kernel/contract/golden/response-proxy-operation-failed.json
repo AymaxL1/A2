@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "8f0c4c1e-6f6d-4a19-9d0e-2f7b1c3a5d90",
+  "ok": false,
+  "error": {
+    "code": "proxy_operation_failed",
+    "message": "mihomo 控制面拒绝了这次操作。",
+    "detail": "内核里没有名叫 \"NOPE\" 的分组。现有分组:GLOBAL、PROXY",
+    "guidance": {
+      "summary": "先看清楚内核此刻的实况(分组名/节点名是否存在、模式是否可切),再重试。",
+      "steps": [
+        { "description": "看代理实况", "command": "a2 proxy status --json" },
+        { "description": "看有哪些分组与候选节点", "command": "a2 proxy groups --json" }
+      ]
+    }
+  }
+}

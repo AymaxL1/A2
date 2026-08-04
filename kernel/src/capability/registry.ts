@@ -11,6 +11,7 @@ import {
   opFailure,
   opSuccess,
   type CapabilityDescriptor,
+  type Guidance,
   type JsonValue,
   type OpOutcome,
   type ParameterSpec,
@@ -33,14 +34,28 @@ export interface Capability {
 /**
  * 「能力执行了,但业务上失败了」—— 与"没执行成"(校验失败/被拒)分开,退出码 5 而非 6。
  * agent 据此判断"参数没错、路走通了,是这件事本身没成",不必重试同一条命令。
+ *
+ * **07 票加的两样**(可选,不带即与 04 票行为逐字相同):
+ *   * `code` —— 换一个已登记的 `ErrorCode`(如 `mihomo_unreachable`),让 agent 能按细因分支;
+ *     退出码仍由 `exitCodeForErrorCode` 统一裁,能力自己决定不了自己的退出码。
+ *   * `guidance` —— 「拒绝即指引」不该只属于仲裁层:代理域的失败大多有一条人类可执行的下一步
+ *     (「把你自己的 mihomo 拉起来」「先 a2 mihomo install」),不带上就等于让 agent 猜。
  */
 export class CapabilityFailedError extends Error {
+  readonly code: ErrorCode;
+  readonly detail?: string;
+  readonly guidance?: Guidance;
+
   constructor(
     message: string,
-    readonly detail?: string,
+    detail?: string,
+    options: { code?: ErrorCode; guidance?: Guidance } = {},
   ) {
     super(message);
     this.name = "CapabilityFailedError";
+    this.code = options.code ?? ErrorCode.capabilityFailed;
+    if (detail !== undefined) this.detail = detail;
+    if (options.guidance !== undefined) this.guidance = options.guidance;
   }
 }
 
@@ -125,9 +140,10 @@ export class CapabilityRegistry {
     } catch (error) {
       if (error instanceof CapabilityFailedError) {
         return opFailure({
-          code: ErrorCode.capabilityFailed,
+          code: error.code,
           message: error.message,
           ...(error.detail === undefined ? {} : { detail: error.detail }),
+          ...(error.guidance === undefined ? {} : { guidance: error.guidance }),
         });
       }
       return opFailure({

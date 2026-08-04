@@ -1,0 +1,38 @@
+{
+  "watching": true,
+  "intervalMs": 5000,
+  "checks": 42,
+  "target": {
+    "owner": "foreign",
+    "controller": "127.0.0.1:9090",
+    "managed": false,
+    "configPath": "/Users/alice/.config/mihomo/config.yaml"
+  },
+  "alive": false,
+  "lastCheckAt": "2026-08-05T04:03:20.000Z",
+  "lastTransitionAt": "2026-08-05T04:03:15.000Z",
+  "logPath": "/Users/alice/.a2/log/proxy-supervision.log",
+  "events": [
+    {
+      "at": "2026-08-05T04:00:00.000Z",
+      "kind": "watch_started",
+      "controller": "127.0.0.1:9090",
+      "owner": "foreign"
+    },
+    {
+      "at": "2026-08-05T04:03:15.000Z",
+      "kind": "instance_down",
+      "controller": "127.0.0.1:9090",
+      "owner": "foreign",
+      "detail": "GET http://127.0.0.1:9090/version 失败:ConnectionRefused",
+      "guidance": {
+        "summary": "被收编的那个实例没在应答 —— 它的生命周期归原托管方,内核绝不替你重拉。",
+        "steps": [
+          { "description": "按你原本的方式把那个 mihomo 拉起来" },
+          { "description": "拉起来之后重新检测", "command": "a2 mihomo status --json" }
+        ],
+        "context": { "controller": "127.0.0.1:9090", "owner": "foreign" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "running": true,
+  "apiReachable": false,
+  "endpoint": {
+    "owner": "a2",
+    "controller": "127.0.0.1:9097",
+    "managed": true,
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml"
+  },
+  "systemProxy": {
+    "supported": true,
+    "takenOver": false
+  }
+}

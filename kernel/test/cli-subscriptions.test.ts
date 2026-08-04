@@ -1,0 +1,363 @@
+// CLI 缝:订阅管理(07 票)—— 清单 / 激活 / 更新 / 换源 / 删除。
+//
+// **一处必须先说清的测试形状**:`proxy.subscription.add` 与 `.remove` 是 **dangerous**,
+// 而本票没有确认器(那是 08 票),所以它们在门禁里只能验一件事 —— **fail-closed 默拒 + 不留痕**。
+// 于是 `list` / `activate` / `update` 这三条 safe/normal 档的全链路,用**直接把清单与物化配置写进沙盒**
+// 的方式起头(那两份文件的格式是登记在案的落盘约定,不是内部细节)。08 票补上确认器之后,
+// 这里应当再加一组"经 add 造数据"的链路,与现在这组并存。
+//
+// 订阅源一律用 `file://` 指向沙盒里的文件:**门禁不出网**。
+
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { SubscriptionListResultSchema } from "../src/contract/wire.ts";
+import { subscriptionId } from "../src/proxy/subscriptions.ts";
+import { runCli } from "./support/harness.ts";
+import {
+  body,
+  cleanupProxySandbox,
+  makeProxySandbox,
+  out,
+  provisionManaged,
+  proxy,
+  startForeignInstance,
+  startProxyDaemon,
+  type ProxySandbox,
+} from "./support/proxy-sandbox.ts";
+
+const BASE_GROUPS = "PROXY=A1,A2;GLOBAL=,A1";
+
+/**
+ * 一份订阅正文。**头几行有意与 a2 头部撞名**(mixed-port / external-controller / secret):
+ * 它们必须被摘掉,否则 a2 一重载就把自己的控制端点交出去了 —— 那等于把内核的手脚砍了。
+ */
+function subscriptionBody(groups: string, marker: string): string {
+  return [
+    `# fake-groups: ${groups}`,
+    `# marker: ${marker}`,
+    "mixed-port: 1234",
+    "external-controller: 127.0.0.1:1",
+    "secret: not-mine",
+    "proxies: []",
+    "proxy-groups: []",
+    "rules:",
+    "  - MATCH,DIRECT",
+    "",
+  ].join("\n");
+}
+
+let sandbox: ProxySandbox | undefined;
+
+beforeEach(() => {
+  sandbox = undefined;
+});
+
+afterEach(async () => {
+  if (sandbox) await cleanupProxySandbox(sandbox);
+  sandbox = undefined;
+});
+
+async function managedBox(extraEnv: Record<string, string> = {}): Promise<ProxySandbox> {
+  const box = (sandbox = await makeProxySandbox({ groups: BASE_GROUPS }));
+  Object.assign(box.env, extraEnv);
+  await provisionManaged(box);
+  await startProxyDaemon(box);
+  return box;
+}
+
+/** 直接把一条订阅落进沙盒(清单 + 物化配置),绕开 dangerous 的 add(理由见文件头)。 */
+async function seed(
+  box: ProxySandbox,
+  entries: { name: string; body: string; source?: string }[],
+  activeName?: string,
+): Promise<Record<string, string>> {
+  const dir = path.join(box.home, "mihomo", "subscriptions");
+  await mkdir(path.join(dir, "configs"), { recursive: true });
+  const ids: Record<string, string> = {};
+  const subscriptions = [];
+  for (const entry of entries) {
+    const id = subscriptionId(entry.name) as string;
+    ids[entry.name] = id;
+    await writeFile(path.join(dir, "configs", `${id}.conf`), entry.body);
+    subscriptions.push({
+      id,
+      name: entry.name,
+      source: entry.source ?? `file://${path.join(box.root, `${id}.yaml`)}`,
+      lastUpdatedAt: "2026-08-05T00:00:00.000Z",
+      bytes: new TextEncoder().encode(entry.body).byteLength,
+    });
+  }
+  await writeFile(
+    path.join(dir, "catalog.json"),
+    `${JSON.stringify({ activeId: activeName ? ids[activeName] : null, subscriptions }, null, 2)}\n`,
+  );
+  return ids;
+}
+
+// MARK: - dangerous 档(本票内默拒)
+
+test("subscription add 是 dangerous:无确认器 → 默拒 + 退出码 2,且**一点痕迹都没留**", async () => {
+  const box = await managedBox();
+  const catalogPath = path.join(box.home, "mihomo", "subscriptions", "catalog.json");
+
+  const result = await proxy(box, [
+    "subscription",
+    "add",
+    "--name",
+    "机场甲",
+    "--source",
+    `file://${path.join(box.root, "any.yaml")}`,
+  ]);
+
+  expect(result.exitCode).toBe(2);
+  const parsed = body(result);
+  expect(parsed.ok).toBe(false);
+  expect(parsed.error.code).toBe("confirmation_unavailable");
+  expect(parsed.error.guidance.steps.length).toBeGreaterThan(0);
+  // handler 一次都没被碰到:既没有清单,也没有物化配置。
+  expect(existsSync(catalogPath)).toBe(false);
+  expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "configs"))).toBe(false);
+});
+
+test("subscription remove 同样是 dangerous:默拒之后那条订阅原封不动", async () => {
+  const box = await managedBox();
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("S=S1", "v1") }]);
+
+  const result = await proxy(box, ["subscription", "remove", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(2);
+  expect(body(result).error.code).toBe("confirmation_unavailable");
+  const listed = out(await proxy(box, ["subscription", "list"]));
+  expect(listed.subscriptions.map((s: { id: string }) => s.id)).toEqual([ids["甲"]]);
+});
+
+// MARK: - list
+
+test("subscription list:空清单 → active=null、条目为空,退出码 0(不报错)", async () => {
+  const box = await managedBox();
+
+  const result = await proxy(box, ["subscription", "list"]);
+
+  expect(result.exitCode).toBe(0);
+  const listed = out(result);
+  expect(SubscriptionListResultSchema.safeParse(listed).success).toBe(true);
+  expect(listed.active).toBeNull();
+  expect(listed.subscriptions).toEqual([]);
+});
+
+test("id 由名字确定性派生:同名(大小写不敏感)同 id,两个不同的纯中文名不塌成同一个", () => {
+  expect(subscriptionId("subA")).toBe(subscriptionId("SUBA"));
+  expect(subscriptionId("机场甲")).not.toBe(subscriptionId("机场乙"));
+  // 纯非 ASCII 名抠不出 slug,但仍有确定性哈希后缀 —— id 永不为空。
+  expect(subscriptionId("机场甲")).toMatch(/^[0-9a-f]{8}$/);
+  expect(subscriptionId("  ")).toBeUndefined();
+  expect(subscriptionId("")).toBeUndefined();
+});
+
+// MARK: - activate
+
+test("subscription activate:正文渲染进自管配置、内核重载、分组真的换了;a2 头部把控制端点保住", async () => {
+  const box = await managedBox();
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("SUBA=S1,S2", "v1") }]);
+
+  // 激活前:分组来自沙盒的默认注入。
+  expect(
+    out(await proxy(box, ["groups"])).groups.map((g: { name: string }) => g.name),
+  ).toEqual(["GLOBAL", "PROXY"]);
+
+  const result = await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(0);
+  const activated = out(result);
+  expect(activated.action).toBe("activated");
+  expect(activated.active).toBe(ids["甲"]);
+  expect(activated.reloaded).toBe(true);
+
+  // 内核**重载之后**报的分组换成了订阅里那份 —— 这条才是"真的生效了"。
+  const groups = out(await proxy(box, ["groups"]));
+  expect(groups.groups.map((g: { name: string }) => g.name)).toEqual(["SUBA"]);
+  expect(groups.groups[0].all).toEqual(["S1", "S2"]);
+
+  // a2 头部赢了:订阅里那几个撞名的顶层键被摘掉,控制端点与 secret 仍是 a2 的。
+  const config = await readFile(box.managedConfig, "utf8");
+  expect(config).toContain(`external-controller: 127.0.0.1:${box.controllerPort}`);
+  expect(config).not.toContain("127.0.0.1:1");
+  expect(config).not.toContain("not-mine");
+  expect(config).toContain(`mixed-port: ${box.mixedPort}`);
+  expect(config).not.toContain("mixed-port: 1234");
+  expect(config).toContain("订阅正文里这些顶层键由 a2 接管、已摘除");
+  // 订阅自己的正文照样在(注释与规则都留着)。
+  expect(config).toContain("# marker: v1");
+  expect(config).toContain("- MATCH,DIRECT");
+
+  // 配置面也如实反映激活项。
+  expect(out(await proxy(box, ["config"])).activeSubscription).toBe(ids["甲"]);
+}, 30000);
+
+test("subscription activate:已经是激活项 → 幂等(不再打扰内核,reloaded=false)", async () => {
+  const box = await managedBox();
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1") }]);
+  await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+  const again = out(await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]));
+
+  expect(again.action).toBe("activated");
+  expect(again.reloaded).toBe(false);
+}, 30000);
+
+test("subscription activate:未知 id → subscription_failed + 退出码 5,激活项不变", async () => {
+  const box = await managedBox();
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1") }], "甲");
+
+  const result = await proxy(box, ["subscription", "activate", "--id", "nope-00000000"]);
+
+  expect(result.exitCode).toBe(5);
+  const parsed = body(result);
+  expect(parsed.error.code).toBe("subscription_failed");
+  expect(out(await proxy(box, ["subscription", "list"])).active).toBe(ids["甲"]);
+});
+
+test("subscription activate:内核不认那份配置 → 回滚,清单与磁盘配置都退回上一态(无半态)", async () => {
+  const box = (sandbox = await makeProxySandbox({ groups: BASE_GROUPS }));
+  await provisionManaged(box);
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1") }]);
+  const before = await readFile(box.managedConfig, "utf8");
+
+  // 换成一个"拒绝一切重载"的假内核实例。
+  await runCli(["mihomo", "uninstall", "--json"], { home: box.home, env: box.env });
+  await runCli(["mihomo", "install", "--json"], {
+    home: box.home,
+    env: { ...box.env, A2_FAKE_MIHOMO_REJECT_RELOAD: "1" },
+  });
+  await startProxyDaemon(box);
+
+  const result = await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  expect(body(result).error.code).toBe("proxy_operation_failed");
+  // 清单退回"没有激活项",磁盘上的配置逐字回到激活前。
+  expect(out(await proxy(box, ["subscription", "list"])).active).toBeNull();
+  expect(await readFile(box.managedConfig, "utf8")).toBe(before);
+}, 30000);
+
+// MARK: - update
+
+test("subscription update:重新拉取 file:// 源、激活项重载、分组换成新版本", async () => {
+  const box = await managedBox();
+  const sourcePath = path.join(box.root, "feed.yaml");
+  await writeFile(sourcePath, subscriptionBody("SUBA=S1,S2", "v2"));
+  const ids = await seed(
+    box,
+    [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1"), source: `file://${sourcePath}` }],
+    "甲",
+  );
+  await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+  expect(out(await proxy(box, ["groups"])).groups[0].all).toEqual(["S1"]);
+
+  const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(0);
+  const updated = out(result);
+  expect(updated.action).toBe("updated");
+  expect(updated.reloaded).toBe(true);
+  expect(updated.subscription.lastUpdatedAt).not.toBe("2026-08-05T00:00:00.000Z");
+  // 拉到的新正文真的生效了。
+  expect(out(await proxy(box, ["groups"])).groups[0].all).toEqual(["S1", "S2"]);
+  expect(await readFile(box.managedConfig, "utf8")).toContain("# marker: v2");
+}, 30000);
+
+test("subscription update:拉取失败 → 什么都没改(物化配置与激活项原封不动)", async () => {
+  const box = await managedBox();
+  const ids = await seed(
+    box,
+    [
+      {
+        name: "甲",
+        body: subscriptionBody("SUBA=S1", "v1"),
+        source: `file://${path.join(box.root, "missing.yaml")}`,
+      },
+    ],
+    "甲",
+  );
+  await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+  const configBefore = await readFile(box.managedConfig, "utf8");
+
+  const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  expect(body(result).error.code).toBe("subscription_failed");
+  expect(await readFile(box.managedConfig, "utf8")).toBe(configBefore);
+  expect(
+    await readFile(
+      path.join(box.home, "mihomo", "subscriptions", "configs", `${ids["甲"]}.conf`),
+      "utf8",
+    ),
+  ).toContain("# marker: v1");
+}, 30000);
+
+test("subscription update:内容为空 → 拒绝落盘(空订阅比坏订阅更难查)", async () => {
+  const box = await managedBox();
+  const sourcePath = path.join(box.root, "empty.yaml");
+  await writeFile(sourcePath, "   \n\n");
+  const ids = await seed(
+    box,
+    [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1"), source: `file://${sourcePath}` }],
+    "甲",
+  );
+
+  const result = await proxy(box, ["subscription", "update", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  expect(body(result).error.message).toContain("为空");
+  expect(
+    await readFile(
+      path.join(box.home, "mihomo", "subscriptions", "configs", `${ids["甲"]}.conf`),
+      "utf8",
+    ),
+  ).toContain("# marker: v1");
+});
+
+// MARK: - 清单损坏
+
+test("清单文件损坏:一切读写都停手 + 指引,**绝不把它当空清单覆盖掉**", async () => {
+  const box = await managedBox();
+  const dir = path.join(box.home, "mihomo", "subscriptions");
+  await mkdir(dir, { recursive: true });
+  const catalogPath = path.join(dir, "catalog.json");
+  await writeFile(catalogPath, "{ 这不是 JSON");
+
+  const listed = await proxy(box, ["subscription", "list"]);
+  expect(listed.exitCode).toBe(5);
+  const parsed = body(listed);
+  expect(parsed.error.code).toBe("subscription_failed");
+  expect(parsed.error.message).toContain("损坏");
+  expect(parsed.error.guidance.context.catalogPath).toBe(catalogPath);
+
+  const activated = await proxy(box, ["subscription", "activate", "--id", "whatever"]);
+  expect(activated.exitCode).toBe(5);
+
+  // 那份坏文件**一个字节都没被改**(内核不替你删,也绝不覆盖)。
+  expect(await readFile(catalogPath, "utf8")).toBe("{ 这不是 JSON");
+});
+
+// MARK: - 收编档的边界
+
+test("收编档:订阅激活一律 mihomo_not_managed(别人的实例其配置归它的主人)", async () => {
+  const box = (sandbox = await makeProxySandbox());
+  await startForeignInstance(box, { groups: "PROXY=F1,F2" });
+  await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  await startProxyDaemon(box);
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("SUBA=S1", "v1") }]);
+
+  const result = await proxy(box, ["subscription", "activate", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(5);
+  const parsed = body(result);
+  expect(parsed.error.code).toBe("mihomo_not_managed");
+  const commands = parsed.error.guidance.steps.map((s: { command?: string }) => s.command);
+  expect(commands).toContain("a2 mihomo install --isolated --json");
+  // list 仍然可用(它压根不碰内核)。
+  expect((await proxy(box, ["subscription", "list"])).exitCode).toBe(0);
+}, 30000);

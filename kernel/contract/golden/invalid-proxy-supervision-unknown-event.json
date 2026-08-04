@@ -1,0 +1,14 @@
+{
+  "watching": true,
+  "intervalMs": 5000,
+  "checks": 3,
+  "logPath": "/Users/alice/.a2/log/proxy-supervision.log",
+  "events": [
+    {
+      "at": "2026-08-05T04:00:00.000Z",
+      "kind": "instance_restarted",
+      "controller": "127.0.0.1:9090",
+      "owner": "foreign"
+    }
+  ]
+}

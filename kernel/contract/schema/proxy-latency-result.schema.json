@@ -1,0 +1,81 @@
+{
+  "title": "ProxyLatencyResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "configPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "managed"
+      ],
+      "additionalProperties": false
+    },
+    "group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timeout": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node",
+          "timeout"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "endpoint",
+    "group",
+    "url",
+    "timeoutMs",
+    "results"
+  ],
+  "additionalProperties": false
+}

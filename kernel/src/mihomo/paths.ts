@@ -18,18 +18,27 @@ export interface MihomoLayout {
   binDir: string;
   /** `<home>/mihomo/bin/mihomo` —— 下载的真文件,或指向既有二进制的符号链接。 */
   binaryPath: string;
-  /** `<home>/mihomo/config.yaml` —— a2 自管配置(07 票在此之上长配置面)。 */
+  /** `<home>/mihomo/config.yaml` —— a2 自管配置(07 票的配置面就长在它上面)。 */
   configPath: string;
+  /** `<home>/mihomo/settings.json` —— a2 自管配置里那几个**可调项**的落点(07 票)。 */
+  settingsPath: string;
+  /** `<home>/mihomo/subscriptions` —— 订阅清单与物化配置的落点(07 票)。 */
+  subscriptionsDir: string;
+  /** `<home>/mihomo/subscriptions/catalog.json` */
+  catalogPath: string;
+  /** `<home>/mihomo/subscriptions/configs` —— 每条订阅拉到的原始字节(`<id>.conf`)。 */
+  subscriptionConfigDir: string;
   /** a2 自管实例的 external-controller(恒回环)。 */
   controller: string;
-  /** a2 自管实例的混合入站端口(07 票会把它接到系统代理上)。 */
-  mixedPort: number;
 }
 
 /**
  * a2 自管实例的默认端口。**有意避开 mihomo 自己的默认值**(9090 / 7890):
  * 那两个端口正是用户自装实例最可能占着的,选开一点就少一类"两份 mihomo 抢端口"的事故。
- * 07 票要把端口做成可配置项时,把这两个常量换成配置读取即可。
+ *
+ * 混合入站端口从 07 票起是**可调项**(落 `<home>/mihomo/settings.json`,经 `proxy.config.set` 改),
+ * 这里的常量只是"还没设过时用哪个"。控制端口仍是常量:改它等于换一条内核自己的控制通道,
+ * 那是诊断而非日常配置,所以只给环境变量、不进配置文件。
  */
 export const A2_MIHOMO_CONTROLLER_PORT = 9097;
 export const A2_MIHOMO_MIXED_PORT = 7897;
@@ -46,6 +55,11 @@ export const MihomoEnv = {
   secret: "A2_MIHOMO_SECRET",
   /** 覆写 a2 自管实例的 external-controller 端口。 */
   controllerPort: "A2_MIHOMO_CONTROLLER_PORT",
+  /**
+   * 覆写混合入站端口的**默认值**(还没设过 settings.json 时用它)。
+   * 有意只改默认值而不覆盖已存的设置 —— 否则 `proxy.config.set mixedPort` 在有这个变量的环境里会静默失效。
+   */
+  mixedPort: "A2_MIHOMO_MIXED_PORT",
   /** 覆写发布渠道根地址(镜像源;测试用本地夹具)。 */
   releaseBase: "A2_MIHOMO_RELEASE_BASE",
   /** 覆写下载物的期望 SHA-256。仅测试与诊断用(生产走 `pin.ts` 的摘要表)。 */
@@ -65,14 +79,18 @@ export function mihomoLayout(
 ): MihomoLayout {
   const dataDir = path.join(paths.home, "mihomo");
   const binDir = path.join(dataDir, "bin");
+  const subscriptionsDir = path.join(dataDir, "subscriptions");
   const port = Number.parseInt(env[MihomoEnv.controllerPort]?.trim() ?? "", 10);
   return {
     dataDir,
     binDir,
     binaryPath: path.join(binDir, "mihomo"),
     configPath: path.join(dataDir, "config.yaml"),
+    settingsPath: path.join(dataDir, "settings.json"),
+    subscriptionsDir,
+    catalogPath: path.join(subscriptionsDir, "catalog.json"),
+    subscriptionConfigDir: path.join(subscriptionsDir, "configs"),
     controller: `127.0.0.1:${Number.isFinite(port) && port > 0 ? port : A2_MIHOMO_CONTROLLER_PORT}`,
-    mixedPort: A2_MIHOMO_MIXED_PORT,
   };
 }
 
@@ -184,22 +202,4 @@ export function loopbackTarget(address: string): string | undefined {
   return `127.0.0.1:${port}`;
 }
 
-/**
- * a2 自管配置的渲染(确定性:同输入必同字节 —— 幂等判定靠逐字比较)。
- *
- * 只写"让它能跑起来并能被控制"所必需的那几行:入站端口、模式、控制端点与 secret。
- * 节点/规则/订阅是 07 票的面,那时往这份配置上长,而不是在这里预留半成品。
- */
-export function renderManagedConfig(layout: MihomoLayout, secret: string): string {
-  return [
-    "# 由 `a2 mihomo install` 生成并收敛 —— 手改会在下次 install 时被改回。",
-    "# 节点、规则与订阅是 07 票的面,本文件此刻只负责「起得来 + 控得住」。",
-    `mixed-port: ${layout.mixedPort}`,
-    "allow-lan: false",
-    "mode: rule",
-    "log-level: info",
-    `external-controller: ${layout.controller}`,
-    `secret: ${secret}`,
-    "",
-  ].join("\n");
-}
+// a2 自管配置的渲染搬去了 `./config.ts`(07 票:它长出了订阅正文与可调项,不再是几行字面量)。

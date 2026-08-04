@@ -1,0 +1,47 @@
+{
+  "title": "ProxyModeResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "configPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "managed"
+      ],
+      "additionalProperties": false
+    },
+    "mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "set": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "endpoint",
+    "mode"
+  ],
+  "additionalProperties": false
+}

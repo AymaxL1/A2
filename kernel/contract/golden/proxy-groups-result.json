@@ -1,0 +1,20 @@
+{
+  "endpoint": {
+    "owner": "foreign",
+    "controller": "127.0.0.1:9090",
+    "managed": false
+  },
+  "groups": [
+    {
+      "name": "GLOBAL",
+      "type": "Selector",
+      "all": ["DIRECT", "香港 01"]
+    },
+    {
+      "name": "PROXY",
+      "type": "Selector",
+      "now": "香港 01",
+      "all": ["香港 01", "日本 02", "慢节点"]
+    }
+  ]
+}

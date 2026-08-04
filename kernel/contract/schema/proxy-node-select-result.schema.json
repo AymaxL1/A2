@@ -1,0 +1,54 @@
+{
+  "title": "ProxyNodeSelectResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "configPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "managed"
+      ],
+      "additionalProperties": false
+    },
+    "group": {
+      "type": "string",
+      "minLength": 1
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selected": {
+      "type": "boolean",
+      "const": true
+    }
+  },
+  "required": [
+    "endpoint",
+    "group",
+    "node",
+    "selected"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,71 @@
+{
+  "title": "ProxyGroupsResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "configPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "managed"
+      ],
+      "additionalProperties": false
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "now": {
+            "type": "string"
+          },
+          "all": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "all"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "endpoint",
+    "groups"
+  ],
+  "additionalProperties": false
+}

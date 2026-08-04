@@ -1,0 +1,16 @@
+#!/bin/sh
+# 假 networksetup —— **只给测试用**。存在的理由是本票最硬的纪律:门禁绝不碰真的系统代理
+# (用户此刻的网络很可能正靠他自己的代理活着,把系统代理留在坏状态 = 用户断网 = 事故)。
+#
+# 文件名必须叫 `networksetup`:内核经 A2_NETWORKSETUP 指到这个路径。
+# 与 fake-mihomo 同一种形态(sh 壳 + Bun 本体):被测进程的 PATH 在门禁里被钉死成假件目录,
+# 所以 bun 的位置必须由环境显式给出。
+PATH=/usr/bin:/bin
+set -u
+
+if [ -z "${A2_FAKE_BUN:-}" ] || [ -z "${A2_FAKE_NETSETUP_TS:-}" ]; then
+  echo "fake networksetup:需要 A2_FAKE_BUN 与 A2_FAKE_NETSETUP_TS(测试夹具没设好)" >&2
+  exit 127
+fi
+
+exec "$A2_FAKE_BUN" run "$A2_FAKE_NETSETUP_TS" "$@"

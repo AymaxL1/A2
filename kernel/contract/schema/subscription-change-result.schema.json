@@ -1,0 +1,72 @@
+{
+  "title": "SubscriptionChangeResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "added",
+        "replaced",
+        "updated",
+        "activated",
+        "removed"
+      ]
+    },
+    "subscription": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lastUpdatedAt": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "active": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reloaded": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "action",
+    "active",
+    "reloaded"
+  ],
+  "additionalProperties": false
+}

@@ -29,6 +29,10 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
     return startFailureOutcome(error, paths);
   }
 
+  // 存活观测跟着 daemon 起落 —— 它是**只读**观测(见 `proxy/supervision.ts` 文件头),
+  // 停掉它不会碰 mihomo 一根汗毛,也不会动系统代理:数据面不随控制面起落。
+  runtime.supervisor.start();
+
   emitEvent("daemon.listening", {
     socketPath: server.socketPath,
     home: paths.home,
@@ -39,6 +43,7 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
   });
 
   const signal = await shutdown;
+  await runtime.supervisor.stop();
   await server.stop();
   emitEvent("daemon.stopped", { signal, pid: runtime.pid });
   return { exitCode: ExitCode.success };

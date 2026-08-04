@@ -1,0 +1,8 @@
+{
+  "running": false,
+  "apiReachable": false,
+  "systemProxy": {
+    "supported": true,
+    "takenOver": false
+  }
+}

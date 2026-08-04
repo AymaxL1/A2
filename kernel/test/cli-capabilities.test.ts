@@ -36,7 +36,7 @@ afterEach(async () => {
 
 // MARK: - 清单与 manifest
 
-test("list --json:三档能力各一,顺序 = 登记顺序,风险档随 manifest 下发", async () => {
+test("list --json:三档自检样本各一档在前、代理域真能力随后,顺序 = 登记顺序", async () => {
   daemon = await startDaemon(home);
 
   const result = await runCli(["capabilities", "list", "--json"], { home });
@@ -45,8 +45,23 @@ test("list --json:三档能力各一,顺序 = 登记顺序,风险档随 manifest
   const body = parseJsonStdout(result);
   expect(body.ok).toBe(true);
   const capabilities = body.result.capabilities as { id: string; risk: string }[];
-  expect(capabilities.map((c) => c.id)).toEqual(["demo.echo", "demo.note.set", "demo.wipe"]);
-  expect(capabilities.map((c) => c.risk)).toEqual(["safe", "normal", "dangerous"]);
+  // 三档自检样本仍在最前,且档位顺序不变(04 票立的那条断言原样保留)。
+  expect(capabilities.slice(0, 3).map((c) => c.id)).toEqual([
+    "demo.echo",
+    "demo.note.set",
+    "demo.wipe",
+  ]);
+  expect(capabilities.slice(0, 3).map((c) => c.risk)).toEqual(["safe", "normal", "dangerous"]);
+  // 07 票起,真能力(代理域)也在这张表上 —— 它们必须经 daemon,所以只能从这里露出来。
+  const ids = capabilities.map((c) => c.id);
+  expect(ids).toContain("proxy.mode.set");
+  expect(ids).toContain("proxy.system.disable");
+  expect(ids).toContain("proxy.subscription.add");
+  // 风险档随 manifest 下发,且**订阅换源仍是 dangerous**(沿旧 Swift 逐字)。
+  const byId = new Map(capabilities.map((c) => [c.id, c.risk]));
+  expect(byId.get("proxy.status")).toBe("safe");
+  expect(byId.get("proxy.mode.set")).toBe("normal");
+  expect(byId.get("proxy.subscription.add")).toBe("dangerous");
 });
 
 test("describe --json:交回可据以构造调用的参数声明(名/类型/必填/取值域)", async () => {

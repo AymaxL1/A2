@@ -78,11 +78,20 @@ export interface DaemonHandle {
   stdout(): Promise<string>;
 }
 
-/** 前台起一个 daemon 并等到 socket 可连接;失败即抛,绝不留孤儿。 */
-export async function startDaemon(home: string): Promise<DaemonHandle> {
+/**
+ * 前台起一个 daemon 并等到 socket 可连接;失败即抛,绝不留孤儿。
+ *
+ * `env` 是 07 票加的:代理域能力**跑在 daemon 进程里**,所以沙盒的那套注入
+ * (假 supervisor 的 PATH、假 networksetup、mihomo 扫描面……)必须一并喂给它,
+ * 否则 daemon 会拿着真环境去看世界。
+ */
+export async function startDaemon(
+  home: string,
+  env: Record<string, string> = {},
+): Promise<DaemonHandle> {
   const proc = Bun.spawn({
     cmd: [...a2Command(), "daemon", "run"],
-    env: { ...process.env, A2_HOME: home },
+    env: { ...process.env, A2_HOME: home, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });

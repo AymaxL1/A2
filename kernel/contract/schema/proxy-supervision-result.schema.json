@@ -1,0 +1,156 @@
+{
+  "title": "ProxySupervisionResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "watching": {
+      "type": "boolean"
+    },
+    "intervalMs": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "checks": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "a2",
+            "foreign"
+          ]
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "configPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "controller",
+        "managed"
+      ],
+      "additionalProperties": false
+    },
+    "alive": {
+      "type": "boolean"
+    },
+    "lastCheckAt": {
+      "type": "string"
+    },
+    "lastTransitionAt": {
+      "type": "string"
+    },
+    "logPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "watch_started",
+              "instance_up",
+              "instance_down",
+              "target_changed",
+              "watch_stopped"
+            ]
+          },
+          "controller": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "enum": [
+              "a2",
+              "foreign"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "guidance": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "steps": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "description": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "command": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "context": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "summary",
+              "steps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "controller",
+          "owner"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "watching",
+    "intervalMs",
+    "checks",
+    "logPath",
+    "events"
+  ],
+  "additionalProperties": false
+}

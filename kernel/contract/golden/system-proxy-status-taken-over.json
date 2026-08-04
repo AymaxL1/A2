@@ -1,0 +1,16 @@
+{
+  "supported": true,
+  "takenOver": true,
+  "host": "127.0.0.1",
+  "port": 7897,
+  "snapshotPath": "/Users/alice/.a2/system-proxy.json",
+  "takenOverAt": "2026-08-05T04:00:00.000Z",
+  "services": [
+    {
+      "service": "Wi-Fi",
+      "http": { "enabled": true, "host": "127.0.0.1", "port": 7897 },
+      "https": { "enabled": true, "host": "127.0.0.1", "port": 7897 },
+      "socks": { "enabled": true, "host": "127.0.0.1", "port": 7897 }
+    }
+  ]
+}

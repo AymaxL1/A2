@@ -1,0 +1,18 @@
+{
+  "active": "jichang-jia-1a2b3c4d",
+  "subscriptions": [
+    {
+      "id": "jichang-jia-1a2b3c4d",
+      "name": "机场甲",
+      "source": "https://example.invalid/sub.yaml",
+      "lastUpdatedAt": "2026-08-05T04:00:00.000Z",
+      "bytes": 20480
+    },
+    {
+      "id": "5f6e7d8c",
+      "name": "机场乙",
+      "source": "file:///Users/alice/subs/b.yaml"
+    }
+  ],
+  "directory": "/Users/alice/.a2/mihomo/subscriptions"
+}

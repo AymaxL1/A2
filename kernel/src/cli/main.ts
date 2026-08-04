@@ -9,6 +9,7 @@ import { resolvePaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
+import { domainCommand } from "./domain.ts";
 import { mihomoCommand } from "./mihomo.ts";
 import { emitOutcome, type CommandOutcome } from "./outcome.ts";
 import { serviceCommand } from "./service.ts";
@@ -41,6 +42,11 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   }
   if (command === "capabilities") {
     return await capabilitiesCommand(args, resolvePaths());
+  }
+  // 域子命令面(07 票):`a2 proxy on` 等价于 `a2 capabilities call proxy.system.enable`,
+  // 别名表由 daemon 的注册表说了算 —— 这里不写死任何动作名。
+  if (command === "proxy") {
+    return await domainCommand(command, args, resolvePaths());
   }
   if (command === "service") {
     return await serviceCommand(args, resolvePaths());

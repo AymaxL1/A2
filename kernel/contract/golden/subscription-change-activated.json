@@ -1,0 +1,13 @@
+{
+  "id": "jichang-jia-1a2b3c4d",
+  "action": "activated",
+  "subscription": {
+    "id": "jichang-jia-1a2b3c4d",
+    "name": "机场甲",
+    "source": "https://example.invalid/sub.yaml",
+    "lastUpdatedAt": "2026-08-05T04:00:00.000Z",
+    "bytes": 20480
+  },
+  "active": "jichang-jia-1a2b3c4d",
+  "reloaded": true
+}

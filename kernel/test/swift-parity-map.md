@@ -167,6 +167,173 @@
 unit 内容与编排在假件上逐条有断言,真 supervisor 的自愈语义已由 05 票的活体冒烟证过(同一套 plist 键、同一套渲染器)。
 若要补,应与 5 条人工项同批、在干净机器上做。
 
+## 07 票登记:代理控制面(配置+reload / 模式·节点·订阅 / 显式系统代理 / 存活监督)
+
+**记账口径提醒**:旧仓同一条行为常常有三个投影 —— swift-testing 的 `@Test`、`Scripts/check/unit-and-domain.sh`
+里逐字 grep 那个 `@Test` 名的 `assert_contains`、以及 E2E 里的一条独立断言。前两者算**一条**(文件头已成文);
+E2E 那条另算(它验的是真进程/真往返,不是纯逻辑)。下表按旧文件分组,逐条给处置。
+
+### A. `Tests/AAHostTestKitTests/ProxyConformanceTests.swift`(15 条 @Test)
+
+| # | 旧断言(@Test 名节选) | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| P-1 | 假 ProcessPort:拉起后探活为真 | **淘汰** | 内核不再是任何 mihomo 的父进程(06 票「有意的契约变更」11)。「它还在不在」的新形态是 supervisor 视角 + 控制面探针两条独立事实 |
+| P-2 | 终止后探活为假 / 回收调用被记录(反孤儿可核验) | **淘汰** | 同上;新架构没有"回收"这件事可记(mihomo 挂自己的 unit) |
+| P-3 | 外部死亡后探活为假(健康检查基石) | 映射(形态改判) | `cli-supervision.test.ts` ▸ 实例掉了 → instance_down + 指引(判据从"父进程探活"换成"控制面探针 + 结构化报警") |
+| P-4 | REST 解析 /configs → mode / mixed-port;/proxies → 当前节点(跳过空 now 的分组) | 映射 | `cli-proxy.test.ts` ▸ 自管实例在跑(mode/mixedPort/node 三项)+ ▸ groups(GLOBAL 的 `now: ""` **归一成缺省**) |
+| P-5 | status:内核存活 → running=true(并反映 mode/端口/节点/apiReachable) | 映射 | ▸ 自管实例在跑 |
+| P-6 | status:内核死亡 / 无句柄 → running=false(**如实未运行,不报错**) | 映射 | ▸ 本机一个实例都没有 → running=false、退出码 0、**不臆造** mode/端口/节点 |
+| P-7 | status:进程活但 REST 不可达 → running 仍 true、apiReachable=false | 映射 | 契约上钉死:`ProxyStatusResult` 两字段分开 + 金标 `proxy-status-api-unreachable.json`;`ProxyTarget.running` 的判据里保留了"自管档且 supervisor 报了 pid"这半句 |
+| P-8 | 12 条能力的暴露;status/system.enable/system.disable 的风险档与 cliAlias | 映射(条数改判) | `cli-capabilities.test.ts` ▸ list(三档自检样本 + 代理域真能力 + 风险档);条数 12 → **17**,增删见下「07 票能力集对照」 |
+| P-9 | groups.list:分组与候选解析;`GLOBAL now=""` 归一为 nil | 映射 | ▸ groups(逐字断言 `global.now` 缺省) |
+| P-10 | mode.set:构造对的 PATCH /configs(body mode=global) | 映射(判据更强) | ▸ mode set 之后 get 读回来真的变了 —— 断言的是**改后读回**,不是"发出去的报文长什么样" |
+| P-11 | node.select:构造对的 PUT /proxies/PROXY(body name=NODE-B) | 映射(判据更强) | ▸ node 选中之后 groups 与 status 两处读回都变了 |
+| P-12 | latency:逐节点延迟;超时节点 delayMs=nil + timeout=true | 映射 | ▸ ping 逐节点延迟对齐候选清单,缺席的如实标注超时(**SLOW 没有 delayMs 这个键**) |
+| P-13 | 能力暴露:groups.list=safe cliAlias[proxy,groups];latency.test=safe cliAlias[proxy,ping] | 映射 | `cli-proxy.test.ts` ▸ 域子命令 ≡ 能力调用(别名真的被解析到)+ ▸ list 的风险档断言 |
+| P-14 | 能力暴露:mode.set=normal + allowedValues[rule,global,direct];node.select=normal 两参必填 | 映射 | ▸ mode 非法取值被校验层拦下(**大小写敏感**,RULE 被拒)+ ▸ 用法错(node 缺参) |
+| P-15 | 防呆:超大有限 timeout(1e300)→ invalid_params(不越界崩宿主) | 映射 | ▸ ping timeout 防呆(CLI 层挡 inf/nan → 退出码 1;内核层挡 1e300 → 退出码 6,**且 daemon 还活着**) |
+
+### B. `Tests/AAHostTestKitTests/SubscriptionConformanceTests.swift`(17 条 @Test)
+
+| # | 旧断言 | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| S-1 | id:同名(大小写不敏感)同 id;两个非 ASCII 名不碰撞;空名 → nil | 映射 | `cli-subscriptions.test.ts` ▸ id 由名字确定性派生(FNV-1a 32 位,与旧实现同一个算法) |
+| S-2 | add:空名 → invalidParams,且**先于任何 I/O** 拒绝 | **顺延 08** | `add` 是 dangerous,本票无确认器 → handler 一次都进不去。空名分支的代码在(`subscriptionAdd` 开头),但**没有活体断言**,08 票补 |
+| S-3 | list:空清单 → active=null、条目为空 | 映射 | ▸ list 空清单 |
+| S-4 | add:新增成功、id 带 slug 前缀、**不自动激活** | 顺延 08 | 同 S-2;「不自动激活」在实现里是 `reloaded: false` 且不写 activeId(注释成文),待确认器到位后验 |
+| S-5 | add:同 name 再 add → 同 id、upsert 换源 | 顺延 08 | 同上(`action: "replaced"` 已在契约里) |
+| S-6 | add:拉取失败不留痕 | 顺延 08 | 同上;**同族的**「拉取失败不留痕」在 update 那条上有活体断言(见 S-12) |
+| S-7 | add:空内容 → 业务失败 | 顺延 08(部分映射) | update 侧同族断言:▸ update 内容为空 → 拒绝落盘 |
+| S-8 | activate:激活成功;已是 active 幂等且**不重复重载** | 映射 | ▸ activate 正文渲染进自管配置…… + ▸ activate 幂等(reloaded=false) |
+| S-9 | activate:切换生效;未知 id → 业务失败且 active 不变 | 映射 | ▸ activate 未知 id → subscription_failed + 激活项不变 |
+| S-10 | activate:重载失败后 active 不变(无半态) | 映射(判据更强) | ▸ activate 内核不认那份配置 → 回滚(清单**与磁盘配置**都退回上一态) |
+| S-11 | update:激活项更新成功、带 lastUpdatedAt、触发一次重载;未知 id → 业务失败 | 映射 | ▸ update 重新拉取 file:// 源、激活项重载、分组换成新版本 |
+| S-12 | update:拉取失败什么都没改 | 映射 | ▸ update 拉取失败 → 什么都没改 |
+| S-13 | update:空内容什么都没改 | 映射 | ▸ update 内容为空 → 拒绝落盘 |
+| S-14 | update 回滚:配置回退为旧、saveConfig 序列 [新,旧]、reload 共 2 次 | **合并 + 改判** | 新架构里"物化配置"与"内核跑的配置"是两份(a2 头 + 订阅正文渲染成 `config.yaml`),回滚发生在 `applyManagedConfig` 那一层并**逐字**验证:▸ activate 内核不认那份配置(断言磁盘配置逐字等于回滚前)。旧断言的"reload 调用次数"属实现细节,不再单独计数 |
+| S-15 | F6 回滚自身失败:不再发第二次 reload | **保留实现,无活体断言** | `proxy/config.ts::rollback` 里那条判断在(写回失败即抛,不发第二次 reload),但故障注入需要"让写盘失败"这一层假件,本票没造。如实记为**做不到项**,与 5 条人工项同批考虑 |
+| S-16 | F5 损坏清单:list/add 均 capabilityFailed;**绝不覆盖用户数据** | 映射 | ▸ 清单文件损坏:一切读写都停手 + 指引,且那份坏文件**一个字节都没被改** |
+| S-17 | 能力暴露:add=dangerous 需 name+source;list=safe;activate/update=normal 需 id | 映射 | `cli-capabilities.test.ts` ▸ list(`proxy.subscription.add` = dangerous)+ `cli-subscriptions.test.ts` ▸ add 默拒 |
+
+### C. `Tests/AAHostTestKitTests/SystemProxyConformanceTests.swift`(10 条 @Test)
+
+| # | 旧断言 | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| SP-1 | 快照捕获全部服务,**逐字段**记录第三方代理的开关/host/port | 映射 | `cli-system-proxy.test.ts` ▸ proxy on(断言快照 `services` 逐字段等于接管前 fixture) |
+| SP-2 | 接管:各服务 HTTP/HTTPS/SOCKS 均指向内核端口 | 映射 | ▸ proxy on(两服务 × 三类逐条断言) |
+| SP-3 | 还原:第三方精确复原、原本关的仍是关、终态 == 接管前 | 映射 | ▸ proxy off:终态**逐字段等于接管前**(整棵状态 `toEqual`,不是 grep 子串) |
+| SP-4 | 幂等:重复 enable 不覆盖首次快照;二次 disable → no-op restored=false | 映射 | ▸ 重复接管不覆盖首次快照 + ▸ proxy off 没接管过就是干净的 no-op |
+| SP-5 | 内核端口未就绪 → 业务失败,**net.setCalls 为空**(零写入) | 映射 | ▸ 内核报不出混合端口 → 拒绝接管且**零写入**(断言 networksetup 调用日志一条没多) |
+| SP-6 | 重放漏洞:接管后新增的服务也被纳入,还原回它自己接管前的状态 | 映射 | ▸ 接管之后新出现的网络服务(fixture 里中途插入 iPhone USB + 它自己的第三方代理) |
+| SP-7 | 事务:持久化接管清单失败 → fail-closed、系统代理零写入 | **保留实现,无活体断言** | `system-proxy.ts::writeSnapshot` 失败即抛且在任何写之前(顺序有注释成文),但"让写盘失败"要另造一层假件。**做不到项**,与 S-15 同批 |
+| SP-8 | 事务:接管写到一半失败 → 用完整快照回滚,不留半接管态 | 映射 | ▸ 接管写到一半失败 → 回滚到本次调用前(`A2_FAKE_NETSETUP_FAIL_AT` 故障注入)+ 首次失败时快照标记也清掉 |
+| SP-9 | 重放失败只撤销本次调用,既有接管仍保持启用 | **保留实现,无活体断言** | `takeover` 的 catch 里 `previous` 分支在(失败时写回上一份快照而不是删),但要构造"已接管 + 二次接管中途失败"的时序;**做不到项**,同批 |
+| SP-10 | 回滚也失败 → 保留接管标记供下次启动自愈 | **淘汰(前提没了)** | 「启动自愈」整族随「退出即还原」一起废除(见下 E 组)。新语义:还原写失败时**保留快照**,下次再敲 `a2 proxy off` 重试 —— 由人显式发起,不再有"下次启动时自动补救"这回事 |
+
+### D. `Tests/AAHostTestKitTests/CrashRecoveryConformanceTests.swift`(28 条 @Test)—— **整族淘汰,理由成文**
+
+旧的崩溃自愈是「宿主退出即还原」这条设计的**补丁**:因为还原挂在 GUI 进程的生命周期上,所以进程被 `kill -9`
+时还原就丢了,于是需要下次启动时读持久化标记、判五分支(clean / userChangedProxy / alreadyHealthy /
+recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身份防盲杀、主副标记 + 墓碑……
+
+新架构把**前提**拆了(ADR 0008 / spec:「退出即还原」废除):
+- 还原是**显式命令** `a2 proxy off`,不挂任何进程的生命周期 → 没有"退出时没来得及还原"这个洞;
+- mihomo 挂**自己的** `com.a2.mihomo` unit,内核不是它的父进程 → 没有"上世代孤儿内核"可 reap,
+  自然也就没有"pid 复用盲杀"要防;
+- 接管快照落在磁盘上、只由 `proxy off` 消费 → 内核崩了、机器重启了,那份快照照样是有效的还原依据。
+
+**因此 28 条里没有一条需要在 TS 侧重生**。它们守的性质由**两条更强的断言**接手:
+1. `cli-system-proxy.test.ts` ▸ 内核 daemon 被杀:系统代理与快照纹丝不动;新 daemon 起来后照样能显式还原;
+2. `cli-supervision.test.ts` ▸ 杀掉内核 daemon:mihomo 的 pid 不变、系统代理不变;内核回来后监督恢复。
+
+**一处如实说明**:旧的 `userChangedProxy` 分支(用户在接管期间自己改了代理 → 内核不覆盖)在新架构里
+**没有对位物**:`proxy off` 无条件按快照还原。这是有意的取舍 —— 显式命令的语义就是"照我说的做",
+而"猜用户是不是自己改过"正是旧实现里最难验、最容易误判的一段(旧仓为它写了 6 条断言 + 一条 deferred 保守分支)。
+若将来要恢复这条保护,应作为 `proxy off` 的一个显式开关(`--only-if-mine` 之类)重新立票,而不是让它默认发生。
+
+### E. `Scripts/check/proxy-e2e.sh`(103 条可数断言,按组)
+
+| 组 | 旧断言 | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| P1/P1b/P2 | proxy status 存活/死亡两态;域子命令 ≡ capabilities call **逐字节一致** | 映射(判据微调) | ▸ 自管实例在跑 / ▸ 一个实例都没有 / ▸ 域子命令 ≡ 能力调用。**逐字节 → 逐字段**:新包封带每次现造的相关性 id,断言改成 `result` 完全相等(见「有意的契约变更」14) |
+| B / C | 宿主退出后无孤儿;SIGTERM-忽略型内核被 SIGKILL 兜底回收 | **淘汰(反向)** | 同 06 票 C 组 13:新架构里内核**不该**回收 mihomo。对应断言是「卸掉内核之后 mihomo 的 pid 必须没变」(06 票已立)+ 本票 ▸ 杀掉内核 daemon:mihomo 的 pid 不变 |
+| CP0 | 能力元数据经 wire 下发(risk / cliAlias / allowedValues / 参数声明) | 映射 | `cli-capabilities.test.ts` ▸ list / ▸ describe;`cliAlias` 收回契约(见「有意的契约变更」15) |
+| CP1–CP4 | groups / mode 改后读回 / node 改后读回 / ping 三态 | 映射 | ▸ groups / ▸ mode / ▸ node / ▸ ping(逐条) |
+| CP2b | 非法取值 → invalid_params 退出码 6,**未触达内核**(mode 仍是旧值) | 映射 | ▸ mode 非法取值被校验层拦下(末尾断言 mode 仍是上一步设的 global) |
+| CP5 | `--timeout inf` / `nan` → 退出码 1(CLI 层 isFinite 钳制) | 映射 | ▸ ping timeout 防呆(前半) |
+| CP5b | 宿主侧越界防呆 → 退出码 6 且宿主仍存活 | 映射 | ▸ ping timeout 防呆(后半,断言 daemon 还答话) |
+| CP6 | 域子命令 ≡ capabilities call(第二个样本) | 合并 | 同 P1b 那条(一条足够,两条是旧脚本的重复) |
+| SP0 | system.enable/disable 的 risk 与 cliAlias | 映射 | `cli-capabilities.test.ts` ▸ list + `cli-system-proxy.test.ts` ▸ 域子命令 ≡ 能力调用(proxy off) |
+| SP1–SP3 | proxy on 退出码/报文/接管落项数 6/6/原第三方被覆盖;on ≡ call | 映射 | ▸ proxy on(落项数从 fixture 现算:2 服务 × 3 类)+ ▸ 域子命令 ≡ 能力调用 |
+| SP3b | id 映射与 cliAlias 别名并存(`aa proxy status` 仍通) | 映射 | ▸ 域子命令 ≡ 能力调用(两种写法都跑通)|
+| SP4 | proxy off:restored=true;Ethernet 精确回第三方;**终态 = 接管前快照**(python JSON 全等) | 映射 | ▸ proxy off:终态**逐字段等于接管前**(`toEqual` 整棵状态,语义与 python 全等一致) |
+| SP5 | 宿主正常退出后终态 = 接管前快照(退出即还原) | **淘汰(前提没了)** | 「退出即还原」废除。取而代之的是它的**反面**:▸ 内核 daemon 被杀:系统代理**纹丝不动**(退出**不**还原,还原只由 `a2 proxy off` 发起) |
+| SH 剧本 A–D | 崩溃自愈四剧本(recoverTakeover / restoreSnapshot / userChangedProxy / 主标记损坏) | **淘汰** | 同 D 组:整族的前提被拆掉了 |
+
+### F. `Scripts/check/subscriptions-e2e.sh`(43 条可数断言)
+
+| 组 | 旧断言 | 处置 | 新 TS 测试 |
+|---|---|---|---|
+| 场景 1 | 多订阅存储 + 单一激活 + 切换生效(改后读回 groups.now / mode / active) | 映射 | ▸ activate 正文渲染进自管配置、内核重载、**分组真的换了**(读回判据同源) |
+| 场景 2 | dangerous 两分支(approve → added;deny → 退出码 2 且不留痕) | **拆分**:deny 那半映射,approve 那半顺延 08 | ▸ add 默拒 + 不留痕(码名 `denied` → `confirmation_unavailable`,退出码仍是 2);approve 分支要确认器,归 08 |
+| 场景 2 | F2 确认层可见性(`[confirm]` 行带 name/source) | 顺延 08 | 确认器的呈现面归 08 票 |
+| 场景 3 | update(normal)零 GUI 确认、不挂起 | 映射 | ▸ update 重新拉取…(没有任何确认器在场,命令照常 0 退出 —— 这就是"normal 零确认"的反证) |
+| 场景 4 | 裸 UDS 直连 add 仍 denied(绕过 CLI 躲不过确认) | 合并 | `cli-capabilities.test.ts` ▸ 裸 UDS 直连绕开 CLI:dangerous 仍然默拒(04 票已立;仲裁在 `registry.invoke` 里,与是哪条能力无关) |
+| 场景 5 | http:// 源真路径跑通 | **改判为 file://** | 门禁**不出网**是本仓库的既定纪律(旧脚本起了一个本地 `python3 -m http.server` 绕开)。TS 侧用 `file://` 走同一条 `fetchSubscription` 的分支;http 分支的代码在(含超时、大小上限、`cache: no-store`),**无活体断言**,如实记为做不到项 |
+| 场景 6 | F3 重启后自动重载激活订阅(catalog 与内核不发散) | **淘汰(前提没了)** | 新架构里激活订阅**已经渲染进 `config.yaml`**,而 unit 的 ExecStart 就是 `-f <config.yaml>` —— mihomo 起来读的就是它,不需要内核在启动时补一次 reload。对应断言是 ▸ activate 之后读 `config.yaml` 里有订阅正文 |
+
+### G. `Scripts/check/flagship-e2e.sh` 与 `mihomo-real-e2e.sh` 的代理相关段
+
+| 旧断言 | 处置 | 说明 |
+|---|---|---|
+| FS1 旗舰链四步(on → 切模式 → 选节点 → 更新订阅)在**同一宿主实例**上成功 | **顺延 10** | 旗舰 e2e 对 `a2` 重写是 10 票的面(spec 测试决策第 4 条);本票把四步各自的单元/CLI 缝断言都建好了,10 票把它们串成一条链 |
+| FS2 全链零 GUI 打断的三条证据(确认档位 / 无 `[confirm]` 行 / 无 pending) | 顺延 08 + 10 | 「确认档位」需要确认器在场才有意义 |
+| FS3 反向对照:dangerous 换源确实触发确认且 deny 挡住 | 顺延 08 | 同上 |
+| FS4 全链只经 `aa`:argv 逐行核对 + UDS 流量对账 | 顺延 10 | 属旗舰链的审计面 |
+| FS5 `aa docs agents-md` 提到的能力 id 都真实存在 | 顺延 13 | agent 指引物随分发工件走(04 票已标) |
+| MK2「真核状态 E2E **未修改**系统代理后端」(`cmp -s` 逐字节) | 映射(更强) | ▸ 观测是只读的:整场没有对系统代理发过**任何**调用(`networkCalls` 为空数组,比"文件没变"更强 —— 连读都没有) |
+
+### H. 07 票能力集对照(旧 12 条 → 新 17 条)
+
+| 旧 id | 新 id | 变化 |
+|---|---|---|
+| `proxy.status` | `proxy.status` | 保留;output 加 `endpoint`(跟谁说话)与 `systemProxy` 摘要 |
+| `proxy.license` | — | **顺延 13**:GPL 义务面收缩为「调用外部程序」,落点改为 `a2 about` 子命令 + 随包静态文本(ADR 0007 修订版) |
+| `proxy.system.enable` / `.disable` | 同名 | 保留(risk / cliAlias 逐字不变) |
+| — | `proxy.system.status` | **新增**:接管快照与系统实况可查(旧实现只能从 `proxy.status` 间接看出来) |
+| `proxy.groups.list` | 同名 | 保留 |
+| `proxy.latency.test` | 同名 | 保留(默认 URL、默认 5000ms、钳制 1..600000 逐字不变) |
+| `proxy.mode.set` | 同名 | 保留 |
+| — | `proxy.mode.get` | **新增**(票面要求 mode get/set) |
+| `proxy.node.select` | 同名 | 保留 |
+| `proxy.subscription.list` / `.activate` / `.update` / `.add` | 同名 | 保留(risk 逐字不变:list=safe、activate/update=normal、add=**dangerous**) |
+| — | `proxy.subscription.remove` | **新增**(票面要求 remove)。定为 **dangerous**:它抹掉的是用户自己攒的东西且**不可逆**,而 normal 档的定义是"可逆写"。旧系统没有这条命令,故无对等约束 |
+| — | `proxy.config.get` / `.set` | **新增**:自管配置的可调项(mixedPort / allowLan / logLevel / mode)。旧实现的配置是**随包静态 YAML**,没有可调项这回事(06 票留的「mixedPort 做成配置项」归本票) |
+| — | `proxy.supervision.get` | **新增**:存活观测(旧实现没有常驻监督,只有 `proxy.status` 被调用时的一次性探活) |
+
+### I. 07 票自己的新账(供 08/10 票对照)
+
+| # | 行为 | 断言落点 |
+|---|---|---|
+| 1 | **收编档的写面到配置为止**:改模式/选节点可以,换配置文件类(config.set / 订阅激活)一律 `mihomo_not_managed` | `cli-proxy.test.ts` ▸ 收编档 + `cli-subscriptions.test.ts` ▸ 收编档 |
+| 2 | a2 拥有配置头部:订阅正文里撞名的顶层键被摘除,控制端点与 secret 保住 | ▸ activate(断言配置里没有订阅那份 external-controller / secret / mixed-port) |
+| 3 | 配置收敛是**逐字比较**的幂等:同样的设置再来一次 `actions` 为空、不打扰内核 | ▸ proxy config(末段) |
+| 4 | 重载失败即回滚,磁盘配置**逐字**回到上一份 | ▸ config set 内核不认新配置 / ▸ activate 内核不认那份配置 |
+| 5 | 系统代理接管**先落快照再动系统**;失败回滚且首次失败连快照标记一起清 | ▸ 接管写到一半失败 |
+| 6 | 系统代理还原**不要求内核可达**(善后动作最需要它能跑通的时候恰恰是内核没了的时候) | ▸ 内核 daemon 被杀…新 daemon 起来后照样能显式还原 |
+| 7 | 存活观测**只读**:整场零 networksetup 调用、零改状态的 supervisor 命令 | `cli-supervision.test.ts` ▸ 观测是只读的 / ▸ 实例掉了(断言 supervisor 只有 print 与 install 那几条) |
+| 8 | 报警自带「人类如何完成」,且收编档明说「生命周期归原托管方」 | ▸ 实例掉了 / ▸ 被收编的实例死了 |
+| 9 | 事件落 NDJSON 日志且**跨 daemon 世代追加**(不是每次重来) | ▸ 杀掉内核 daemon…(断言两条 `watch_started` + 一条 `watch_stopped`) |
+| 10 | 域子命令是 argv 门面而非第二条通路 | ▸ 域子命令 ≡ 能力调用(proxy 与 system 各一条) |
+| 11 | 红线:整场对 networksetup 说过的话只有内核认得的那几条子命令、只针对沙盒里的服务 | `cli-system-proxy.test.ts` ▸ 红线 |
+
+**三处做不到项(如实记账,与 5 条人工项同批考虑)**:
+1. **写盘失败类的故障注入**(S-15 回滚写失败不再发第二次 reload、SP-7 持久化失败即 fail-closed):
+   要一层"让某次写盘失败"的假文件系统,本票没造。相关判断在代码里且有注释成文。
+2. **重放接管失败只撤销本次调用**(SP-9):要构造"已接管 + 二次接管中途失败"的时序,同批。
+3. **订阅源的 http(s) 分支无活体断言**:门禁不出网是既定纪律,TS 侧只验 `file://` 那条分支
+   (两条分支在 `fetchSubscription` 里共用同一段大小/空内容校验)。真机拉一次真订阅应与人工项同批。
+
 ## 有意的契约变更(不是丢失,是改判 —— 逐条有出处)
 
 1. **`--json` 输出一律是包封**。旧 `aa` 的 list/describe/call 直接打裸 payload(`{"capabilities":[…]}`、
@@ -213,3 +380,19 @@ unit 内容与编排在假件上逐条有断言,真 supervisor 的自愈语义�
    `BUILTIN_CAPABILITIES` 上加",那指的是 07 票的代理能力(`proxy.mode.set` 之类,必须经 daemon)。
    而"本机 mihomo 是个什么现状"问的是文件系统、supervisor 与 external-controller,**daemon 没跑时更要能答话**,
    所以它与 `a2 service` 一样不进注册表、不经 UDS,只是机读面完全一致(agent 看不出区别)。
+14. **「域子命令 ≡ 能力调用」的判据从「逐字节一致」放宽为「`result` 逐字段相同」**(07 票)。旧 `aa` 的两种写法
+   打出来的是同一串裸 payload,所以 `diff` 得动;新包封每条都带一个**每次现造的相关性 id**(`ResponseEnvelope.id`),
+   逐字节必不相同。断言因此改成「两条命令的 `result` 完全相等」——它守的是同一件事(同一条路、同一个仲裁点),
+   而且更精确:它排除了"两边都错成一样"之外的所有分叉。旧断言在 `proxy-e2e.sh` P1b/CP6/SP3 三处,合并成一条。
+15. **`cliAlias` 收回契约**(第 5 条的部分撤销)。04 票把它与 `schemaSummary` 一起淘汰,05 票改标顺延 07;
+   本票把域子命令面(`a2 proxy on`)建起来了,而**别名表必须由内核说了算** —— 11 票起插件也会往注册表里加能力,
+   客户端存一份别名表就一定漂。所以 `CapabilityDescriptor.cliAlias` 回到 manifest(可选字段,不带即"这条能力
+   只能用 `capabilities call` 调")。`schemaSummary` **仍然淘汰**(它是可由 `parameters` 派生的展示串)。
+16. **`CapabilityFailedError` 可带 `code` 与 `guidance`**(07 票)。04 票的业务失败一律 `capability_failed`;
+   代理域的失败大多有明确细因(连不上 / 不归我管 / 组不存在 / 订阅拉不到)与一条人类可执行的下一步,
+   全塞进同一个码等于让 agent 去 grep 中文 message。故允许能力自带已登记的 `ErrorCode` 与 guidance;
+   **退出码仍由 `exitCodeForErrorCode` 统一裁**(能力决定不了自己的退出码),不带这两样时行为与 04 票逐字相同。
+17. **旧 `denied` 在订阅面的那一半也归 `confirmation_unavailable`**(第 2 条的延伸)。`subscriptions-e2e.sh`
+   场景 2 的 deny 分支断言的是 `"code":"denied"` + 退出码 2;本票产出的是 `confirmation_unavailable` + 退出码 2
+   (**因为本票根本没有确认器,不存在"用户点了拒绝"**)。08 票补 `confirmation_denied` 之后,那条旧断言才有
+   真正的对位物。退出码不变,旧的退出码判据不受影响。

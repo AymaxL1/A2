@@ -17,6 +17,8 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
 子命令:
   status               查询 daemon 运行态(经 UDS 往返)
   capabilities …       能力面:list / describe <id> / call <id>(见 a2 capabilities --help)
+  proxy …              代理控制面:on / off / status / mode / node / groups / ping / config /
+                       subscription … / supervision(见 a2 proxy --help)
   service …            常驻服务:install / uninstall / status(见 a2 service --help)
   mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
@@ -115,6 +117,42 @@ export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据�
 
 退出码:0 成功 / 1 用法错 / 5 事没办成(不可达、不达地板、不归 a2 管、下载校验失败)/ 6 本平台无已支持的 supervisor`;
 
+export const PROXY_USAGE = `a2 proxy —— 代理控制面(域子命令 = 能力调用的另一种 argv 写法)
+
+用法:
+  a2 [--json] proxy status                        代理实况:实例在不在、控制面通不通、模式/端口/节点(safe)
+  a2 [--json] proxy on                            接管系统代理,指向 mihomo 的混合入站端口(normal)
+  a2 [--json] proxy off                           **还原**系统代理到接管前(normal;「退出即还原」废除后唯一的还原入口)
+  a2 [--json] proxy system                        系统代理实况:逐服务逐类型的当前设置 + 有没有接管快照(safe)
+  a2 [--json] proxy mode get                      读当前模式(safe)
+  a2 [--json] proxy mode --mode rule|global|direct 切模式(normal)
+  a2 [--json] proxy groups                        列分组与候选节点(safe)
+  a2 [--json] proxy node --group G --node N       按组选节点(normal)
+  a2 [--json] proxy ping --group G [--timeout ms] [--url URL]   按组测速(safe)
+  a2 [--json] proxy config                        读自管配置的可调项(safe)
+  a2 [--json] proxy config set [--mixedPort N] [--allowLan true|false]
+                                [--logLevel …] [--mode …]        改可调项并重载(normal)
+  a2 [--json] proxy subscription list             列订阅与激活项(safe)
+  a2 [--json] proxy subscription add --name N --source S    新增/换源(**dangerous**,无确认器时默拒)
+  a2 [--json] proxy subscription update --id ID   重新拉取(normal;激活项会重载,失败自动回滚)
+  a2 [--json] proxy subscription activate --id ID 让它生效(normal)
+  a2 [--json] proxy subscription remove --id ID   删除(**dangerous**:不可逆)
+  a2 [--json] proxy supervision                   读 daemon 的存活观测与最近事件(safe)
+
+同一件事的两种写法:
+  a2 proxy on   ≡   a2 capabilities call proxy.system.enable
+两者走的是**同一个** registry.invoke —— 仲裁、参数校验、dangerous 默拒完全一致(有断言把守)。
+
+跟哪个 mihomo 说话:与 a2 mihomo status 报的 result.instance 是同一个答案(自管档 = a2 自己那份,
+收编档 = 你自己那个实例)。**收编档的写面到配置为止**:改模式、选节点可以;换配置文件类的动作
+(改可调项、激活/更新订阅)一律 mihomo_not_managed —— 别人的实例其配置归它的主人。
+
+系统代理:接管与还原都是**显式命令**,不挂任何客户端的生命周期。接管前的完整状态(逐网络服务 ×
+逐类型 × 逐字段)落在 <A2_HOME>/system-proxy.json;有它在,a2 proxy off 永远能精确还原
+(含你原本就有的第三方代理),哪怕中间内核崩过、机器重启过。V1 只支持 macOS。
+
+退出码:0 成功 / 1 用法错 / 2 dangerous 被拒 / 4 daemon 不可达 / 5 事没办成 / 6 参数或平台不成立`;
+
 /** 帮助 = 一条成功包封(机读面无例外)+ 人类面原文。 */
 export function helpOutcome(usage: string): CommandOutcome {
   return {
@@ -166,6 +204,20 @@ export function serviceUsageOutcome(message: string): CommandOutcome {
     steps: [
       { description: "打印服务面用法", command: "a2 service --help" },
       { description: "查当前安装态与运行态", command: "a2 service status --json" },
+    ],
+  });
+}
+
+/**
+ * 域子命令面的用法错。指引里除了帮助之外,**把这个域实际有哪些写法逐条列出来** ——
+ * 别名表是内核说了算的(插件也会往里加),所以这里给的是刚刚从 daemon 拿到的那一份,不是写死的散文。
+ */
+export function domainUsageOutcome(message: string, hints: string[]): CommandOutcome {
+  return usageOutcome(message, {
+    usage: hints.length > 0 ? `${PROXY_USAGE}\n\n本内核当前实际登记的写法:\n  ${hints.join("\n  ")}` : PROXY_USAGE,
+    steps: [
+      { description: "打印代理面用法", command: "a2 proxy --help" },
+      { description: "列出本内核实际提供的能力(含风险档与参数)", command: "a2 capabilities list --json" },
     ],
   });
 }

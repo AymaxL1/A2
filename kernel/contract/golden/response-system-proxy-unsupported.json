@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "b71f2b6a-0c5d-4f2e-8a31-6d9e0c4b7f12",
+  "ok": false,
+  "error": {
+    "code": "system_proxy_unsupported",
+    "message": "本平台没有已支持的系统代理接管路径。",
+    "detail": "平台 linux 没有 networksetup(系统代理接管 V1 只支持 macOS;Linux 上请按你的桌面环境/代理链自行配置,内核不猜)。",
+    "guidance": {
+      "summary": "系统代理接管 V1 只支持 macOS。Linux 上请按你的桌面环境/代理链自行指向 mihomo 的混合端口。",
+      "steps": [
+        { "description": "看 mihomo 正在听哪个混合端口", "command": "a2 proxy status --json" },
+        { "description": "然后按你的环境自行设置(例如)", "command": "export ALL_PROXY=http://127.0.0.1:<mixedPort>" }
+      ]
+    }
+  }
+}
