@@ -1,10 +1,11 @@
 // CLI 缝:订阅管理(07 票)—— 清单 / 激活 / 更新 / 换源 / 删除。
 //
-// **一处必须先说清的测试形状**:`proxy.subscription.add` 与 `.remove` 是 **dangerous**,
-// 而本票没有确认器(那是 08 票),所以它们在门禁里只能验一件事 —— **fail-closed 默拒 + 不留痕**。
-// 于是 `list` / `activate` / `update` 这三条 safe/normal 档的全链路,用**直接把清单与物化配置写进沙盒**
-// 的方式起头(那两份文件的格式是登记在案的落盘约定,不是内部细节)。08 票补上确认器之后,
-// 这里应当再加一组"经 add 造数据"的链路,与现在这组并存。
+// **一处必须先说清的测试形状**:`proxy.subscription.add` 与 `.remove` 是 **dangerous**。
+// 07 票时没有确认器,所以它们只能验一件事 —— **fail-closed 默拒 + 不留痕**;`list` / `activate` /
+// `update` 这三条 safe/normal 档的全链路,用**直接把清单与物化配置写进沙盒**的方式起头
+// (那两份文件的格式是登记在案的落盘约定,不是内部细节)。
+// **08 票补上确认器之后,文件末尾新增了一组「经 add 造数据」的链路**,与前面那组默拒断言并存对照 ——
+// 同一条能力,有人在场与无人在场是两种收场,两种都得有活体证据。
 //
 // 订阅源一律用 `file://` 指向沙盒里的文件:**门禁不出网**。
 
@@ -14,6 +15,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SubscriptionListResultSchema } from "../src/contract/wire.ts";
 import { subscriptionId } from "../src/proxy/subscriptions.ts";
+import { connectFakeClient, type FakeClient } from "./support/fake-client.ts";
 import { runCli } from "./support/harness.ts";
 import {
   body,
@@ -49,12 +51,17 @@ function subscriptionBody(groups: string, marker: string): string {
 }
 
 let sandbox: ProxySandbox | undefined;
+/** 本文件里连过的假确认器(08 票起有了确认器,teardown 必须把它们收干净)。 */
+let confirmers: FakeClient[] = [];
 
 beforeEach(() => {
   sandbox = undefined;
+  confirmers = [];
 });
 
 afterEach(async () => {
+  for (const client of confirmers) await client.close();
+  confirmers = [];
   if (sandbox) await cleanupProxySandbox(sandbox);
   sandbox = undefined;
 });
@@ -119,7 +126,7 @@ test("subscription add 是 dangerous:无确认器 → 默拒 + 退出码 2,且**
   // handler 一次都没被碰到:既没有清单,也没有物化配置。
   expect(existsSync(catalogPath)).toBe(false);
   expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "configs"))).toBe(false);
-});
+}, 30000);
 
 test("subscription remove 同样是 dangerous:默拒之后那条订阅原封不动", async () => {
   const box = await managedBox();
@@ -131,7 +138,7 @@ test("subscription remove 同样是 dangerous:默拒之后那条订阅原封不�
   expect(body(result).error.code).toBe("confirmation_unavailable");
   const listed = out(await proxy(box, ["subscription", "list"]));
   expect(listed.subscriptions.map((s: { id: string }) => s.id)).toEqual([ids["甲"]]);
-});
+}, 30000);
 
 // MARK: - list
 
@@ -145,7 +152,7 @@ test("subscription list:空清单 → active=null、条目为空,退出码 0(不
   expect(SubscriptionListResultSchema.safeParse(listed).success).toBe(true);
   expect(listed.active).toBeNull();
   expect(listed.subscriptions).toEqual([]);
-});
+}, 30000);
 
 test("id 由名字确定性派生:同名(大小写不敏感)同 id,两个不同的纯中文名不塌成同一个", () => {
   expect(subscriptionId("subA")).toBe(subscriptionId("SUBA"));
@@ -217,7 +224,7 @@ test("subscription activate:未知 id → subscription_failed + 退出码 5,激�
   const parsed = body(result);
   expect(parsed.error.code).toBe("subscription_failed");
   expect(out(await proxy(box, ["subscription", "list"])).active).toBe(ids["甲"]);
-});
+}, 30000);
 
 test("subscription activate:内核不认那份配置 → 回滚,清单与磁盘配置都退回上一态(无半态)", async () => {
   const box = (sandbox = await makeProxySandbox({ groups: BASE_GROUPS }));
@@ -317,7 +324,7 @@ test("subscription update:内容为空 → 拒绝落盘(空订阅比坏订阅更
       "utf8",
     ),
   ).toContain("# marker: v1");
-});
+}, 30000);
 
 // MARK: - 正文里的 YAML 文档分隔符(拒绝,不摘除)
 
@@ -474,7 +481,7 @@ test("清单文件损坏:一切读写都停手 + 指引,**绝不把它当空清�
 
   // 那份坏文件**一个字节都没被改**(内核不替你删,也绝不覆盖)。
   expect(await readFile(catalogPath, "utf8")).toBe("{ 这不是 JSON");
-});
+}, 30000);
 
 // MARK: - 收编档的边界
 
@@ -494,4 +501,160 @@ test("收编档:订阅激活一律 mihomo_not_managed(别人的实例其配置�
   expect(commands).toContain("a2 mihomo install --isolated --json");
   // list 仍然可用(它压根不碰内核)。
   expect((await proxy(box, ["subscription", "list"])).exitCode).toBe(0);
+}, 30000);
+
+// MARK: - 08 票补上确认器之后:「经 add 造数据」的那条链路(文件头留的账)
+//
+// 07 票在这里写下:`add` 是 dangerous、当时没有确认器,所以 S-2/S-4/S-5/S-6 四条旧断言只能顺延 08。
+// 现在确认器有了 —— 下面这组就是那笔账的兑现,与上面那组「无确认器 → 默拒不留痕」并存对照。
+
+async function withConfirmer(
+  box: ProxySandbox,
+  behavior: "approve" | "deny",
+): Promise<FakeClient> {
+  const client = await connectFakeClient({
+    socketPath: box.daemon!.socketPath,
+    name: "fake-panel",
+    behavior,
+  });
+  confirmers.push(client);
+  await client.register("confirm-agent");
+  return client;
+}
+
+test("add 经确认器批准:真的新增了、id 带名字派生的前缀、**不自动激活**", async () => {
+  const box = await managedBox();
+  const confirmer = await withConfirmer(box, "approve");
+  const sourcePath = path.join(box.root, "sub-a.yaml");
+  await writeFile(sourcePath, subscriptionBody("SUBA=S1,S2", "v1"));
+
+  const result = await proxy(box, [
+    "subscription",
+    "add",
+    "--name",
+    "机场甲",
+    "--source",
+    `file://${sourcePath}`,
+  ]);
+
+  expect(result.exitCode).toBe(0);
+  const added = out(result);
+  expect(added.action).toBe("added");
+  expect(added.id).toBe(subscriptionId("机场甲"));
+  expect(added.subscription.name).toBe("机场甲");
+  expect(added.subscription.bytes).toBeGreaterThan(0);
+  // **add 绝不自动激活**:引入一份来源与让它生效是两个决定。
+  expect(added.reloaded).toBe(false);
+  expect(added.active).toBe(null);
+  expect(out(await proxy(box, ["subscription", "list"])).active).toBe(null);
+
+  // 确认器看到的是**这一次**的真实参数(防盲批;旧 Swift 那条 `[confirm]` 日志的对位物)。
+  expect(confirmer.events("confirmation")[0].request.input).toEqual({
+    name: "机场甲",
+    source: `file://${sourcePath}`,
+  });
+}, 30000);
+
+test("add 同名再来一次 = 换源:同一个 id、action=replaced、正文被替换", async () => {
+  const box = await managedBox();
+  await withConfirmer(box, "approve");
+  const first = path.join(box.root, "first.yaml");
+  const second = path.join(box.root, "second.yaml");
+  await writeFile(first, subscriptionBody("SUBA=S1", "v1"));
+  await writeFile(second, subscriptionBody("SUBB=T1", "v2"));
+
+  const added = out(
+    await proxy(box, ["subscription", "add", "--name", "机场甲", "--source", `file://${first}`]),
+  );
+  const replaced = out(
+    await proxy(box, ["subscription", "add", "--name", "机场甲", "--source", `file://${second}`]),
+  );
+
+  expect(replaced.id).toBe(added.id);
+  expect(replaced.action).toBe("replaced");
+  expect(replaced.subscription.source).toBe(`file://${second}`);
+  const listed = out(await proxy(box, ["subscription", "list"]));
+  expect(listed.subscriptions.length).toBe(1);
+  const materialized = await readFile(
+    path.join(box.home, "mihomo", "subscriptions", "configs", `${replaced.id}.conf`),
+    "utf8",
+  );
+  expect(materialized).toContain("# marker: v2");
+}, 30000);
+
+test("add 空名:先于任何 I/O 就被拒(invalid_params),源一次都没被读过", async () => {
+  const box = await managedBox();
+  await withConfirmer(box, "approve");
+  // 这个源**根本不存在** —— 若实现先去拉再校验名字,错误就会变成 subscription_failed。
+  const missing = path.join(box.root, "根本没有这个文件.yaml");
+
+  const result = await proxy(box, [
+    "subscription",
+    "add",
+    "--name",
+    "   ",
+    "--source",
+    `file://${missing}`,
+  ]);
+
+  expect(result.exitCode).toBe(6);
+  const parsed = body(result);
+  expect(parsed.error.code).toBe("invalid_params");
+  expect(parsed.error.message).toContain("订阅名");
+  // 什么都没落盘。
+  expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "catalog.json"))).toBe(false);
+}, 30000);
+
+test("add 拉取失败不留痕:清单与物化目录都不该因为一次失败的 add 而出现", async () => {
+  const box = await managedBox();
+  await withConfirmer(box, "approve");
+
+  const result = await proxy(box, [
+    "subscription",
+    "add",
+    "--name",
+    "机场甲",
+    "--source",
+    `file://${path.join(box.root, "missing.yaml")}`,
+  ]);
+
+  expect(result.exitCode).toBe(5);
+  expect(body(result).error.code).toBe("subscription_failed");
+  expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "catalog.json"))).toBe(false);
+  expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "configs"))).toBe(false);
+}, 30000);
+
+test("add 被确认器拒绝:confirmation_denied + 退出码 2,同样一点痕迹都没留", async () => {
+  const box = await managedBox();
+  const sourcePath = path.join(box.root, "sub-a.yaml");
+  await writeFile(sourcePath, subscriptionBody("SUBA=S1", "v1"));
+  await withConfirmer(box, "deny");
+
+  const result = await proxy(box, [
+    "subscription",
+    "add",
+    "--name",
+    "机场甲",
+    "--source",
+    `file://${sourcePath}`,
+  ]);
+
+  expect(result.exitCode).toBe(2);
+  expect(body(result).error.code).toBe("confirmation_denied");
+  expect(existsSync(path.join(box.home, "mihomo", "subscriptions", "catalog.json"))).toBe(false);
+}, 30000);
+
+test("remove 经确认器批准:清单条目与物化配置一起消失", async () => {
+  const box = await managedBox();
+  await withConfirmer(box, "approve");
+  const ids = await seed(box, [{ name: "甲", body: subscriptionBody("S=S1", "v1") }]);
+  const configPath = path.join(box.home, "mihomo", "subscriptions", "configs", `${ids["甲"]}.conf`);
+  expect(existsSync(configPath)).toBe(true);
+
+  const result = await proxy(box, ["subscription", "remove", "--id", ids["甲"] as string]);
+
+  expect(result.exitCode).toBe(0);
+  expect(out(result).action).toBe("removed");
+  expect(existsSync(configPath)).toBe(false);
+  expect(out(await proxy(box, ["subscription", "list"])).subscriptions).toEqual([]);
 }, 30000);

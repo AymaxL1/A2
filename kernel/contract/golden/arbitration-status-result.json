@@ -1,0 +1,19 @@
+{
+  "state": {
+    "confirmerPresent": false,
+    "confirmers": 0,
+    "subscribers": 0,
+    "timeoutMs": 120000,
+    "pending": []
+  },
+  "logPath": "/Users/alice/.a2/log/arbitration.log",
+  "events": [
+    {
+      "at": "2026-08-05T04:11:00.000Z",
+      "action": "unavailable",
+      "capability": "demo.wipe",
+      "confirmation": "018f3b1c-2222-7c3e-9f2b-1d4e5f6a7b8d",
+      "detail": "无确认器在场,fail-closed 默拒(ADR 0005 第 4 条第①层)。"
+    }
+  ]
+}

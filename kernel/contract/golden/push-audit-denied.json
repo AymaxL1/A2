@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "018f3b1c-6666-7c3e-9f2b-1d4e5f6a7b8d",
+  "push": true,
+  "event": {
+    "kind": "audit",
+    "at": "2026-08-05T04:10:20.000Z",
+    "audit": {
+      "at": "2026-08-05T04:10:20.000Z",
+      "action": "denied",
+      "capability": "proxy.subscription.add",
+      "confirmation": "018f3b1c-1111-7c3e-9f2b-1d4e5f6a7b8d",
+      "client": { "role": "confirm-agent", "name": "a2-panel", "uid": 501 },
+      "detail": "这个源我不认识"
+    }
+  }
+}

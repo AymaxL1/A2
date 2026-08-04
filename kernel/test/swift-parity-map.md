@@ -25,11 +25,11 @@
 | 3 | describe:未知返回 nil;echo 交回可构造调用的 parameters | 映射 | ▸ describe --json:交回可据以构造调用的参数声明 / ▸ describe 未知能力:unknown_capability + 退出码 6 |
 | 4 | invoke 校验层:未知能力 / 缺必填 / 类型不符 各自收敛到对的 code | 映射 | ▸ call 参数校验:缺必填 / 类型不符 / 取值不在 allowedValues 内 |
 | 5 | invoke 执行层:safe 回显 / 业务失败 / normal 零 GUI 直执行 | 映射 | ▸ call safe / ▸ call normal:直通执行、零确认打断 / ▸ 业务失败 → capability_failed + 退出码 5 |
-| 6 | 假 confirm=true 时 handler 恰执行一次 | 顺延 08 | 本票无确认通道(确认器是 08 票) |
-| 7 | dangerous + 假 confirm=false → denied,handler 绝不执行 | 顺延 08 | 「用户点了拒绝」需要确认器在场,归 08(届时新增 `confirmation_denied`) |
+| 6 | 假 confirm=true 时 handler 恰执行一次 | **映射(08)** | `cli-arbitration.test.ts` ▸ 确认器在场 + 批准 → 照常执行(断言 output = `{wiped:true,target:"disk9"}`,即 handler 恰跑了一次) |
+| 7 | dangerous + 假 confirm=false → denied,handler 绝不执行 | **映射(08)** | ▸ 确认器在场 + 拒绝 → confirmation_denied + 退出码 2(码名见「有意的契约变更」2;stdout 里没有 `wiped`) |
 | 8 | **confirm=nil 时 handler 绝不执行(fail-closed 保底)** | 映射 | ▸ call dangerous:无确认器 → confirmation_unavailable + 退出码 2,且 handler 一次都没执行 |
-| 9 | dangerous 确认回调确实收到本次请求的 input | 顺延 08 | 同 6/7 |
-| 10 | 延迟确认不占住调用请求:invoke 立即 pending + `capabilities.result` 查询 | 顺延 08 | `pending` 态与 `capabilities.result` op 本票不做(见下「有意的契约变更」6) |
+| 9 | dangerous 确认回调确实收到本次请求的 input | **映射(08,判据更强)** | ▸ 确认器在场 + 批准(断言 `request.input` 逐字段等于本次调用的入参)。旧断言验的是「回调收到了」,新断言验的是**协议字段**:input 是推给确认器那条报文的一部分;另有一条反证守着「订阅者收不到它」 |
+| 10 | 延迟确认不占住调用请求:invoke 立即 pending + `capabilities.result` 查询 | **淘汰(08 改判)** | 旧的 pending + 轮询是为「GUI 模态框占住宿主主线程、而客户端只等 5s」设计的补丁。新架构改用**自描述的等待**:内核先推一帧 `confirmation-pending`(带它承诺的窗口),客户端据此延长自己的截止时间 —— 一次往返、零轮询(spec 壳契约「零轮询」)。理由与代价见「有意的契约变更」6 改写版 |
 | 11 | allowedValues 非法取值 → invalid_params(退出码 6) | 映射 | ▸ call 参数校验(第三段:scope=bogus) |
 | 12 | allowedValues 合法取值放行执行 | 映射 | ▸ call 参数校验(第四段:scope=persistent) |
 | 13 | 未声明 allowedValues 的参数不约束取值 | 合并 | ▸ call safe(message 取任意字符串照常执行) |
@@ -40,10 +40,10 @@
 
 | 旧断言 | 处置 | 新 TS 测试 |
 |---|---|---|
-| 0–6 七个码的数值被钉死 | 合并 | 数值仍钉在 `src/contract/exit-codes.ts`;CLI 缝断言的是真实退出码(见 A15)。**3(超时)本版无产出面**,见「有意的契约变更」8 |
+| 0–6 七个码的数值被钉死 | 合并 | 数值仍钉在 `src/contract/exit-codes.ts`;CLI 缝断言的是真实退出码(见 A15)。**3(超时)自 08 票起有唯一产出面** `confirmation_timeout`,见「有意的契约变更」8 |
 | semantics 恰好覆盖 0…6 且顺序连续 | 淘汰 | 旧断言守的是「帮助表由 semantics 生成」这条实现细节;TS 侧帮助是手写文本,退出码表只出现一次(`usage.ts`) |
 | capability_failed → 5 | 映射 | `cli-capabilities.test.ts` ▸ 业务失败 → 退出码 5 |
-| denied → 2 | 映射 | ▸ call dangerous → 退出码 2(码名换成 `confirmation_unavailable`,见「有意的契约变更」2) |
+| denied → 2 | 映射 | ▸ call dangerous → 退出码 2(码名换成 `confirmation_unavailable`);08 票起 `confirmation_denied` 与 `peer_rejected` 也映射到 2,见「有意的契约变更」2 |
 | 协议/校验层 8 码 → 6 | 映射 | ▸ call 参数校验(三码)/ ▸ describe 未知能力(unknown_capability) |
 | 未登记的错误码保守归 6,绝不吞成成功 | 映射 | `cli-basics.test.ts` ▸ 退出码契约:未登记的 error.code 保守归 6 |
 
@@ -61,10 +61,10 @@
 | 2k2 call 缺 id → 退出码 1 | 映射 | ▸ 用法错(用例 `capabilities call`) |
 | 2L / 2L2 / 2L2b–d / 2L3 / 2L4 域子命令(`aa demo echo --message hi`)与 call 同底座 | 顺延 07(05 票改标,见下) | 域子命令面(`cliAlias` 解析、按声明类型强转 argv)本票不做 |
 | 2M 未知**域子命令** → `unknown_command` 退出码 1(对照 2i 的 6) | 映射 | ▸ 用法错(未知动作 → `usage` 码 + 退出码 1)与 ▸ describe 未知能力(6)两条一起守住这个区分 |
-| D1 / D1b `AA_CONFIRM_AUTO=deny` → 退出码 2 + 无 `wiped` | 顺延 08 | 「用户点拒绝」需确认器;本票守的是**无确认器**那条(A8) |
-| D2 `AA_CONFIRM_AUTO=approve` → 退出码 0 + `wiped:true` | 顺延 08 | 同上 |
+| D1 / D1b `AA_CONFIRM_AUTO=deny` → 退出码 2 + 无 `wiped` | **映射(08)** | `cli-arbitration.test.ts` ▸ 确认器在场 + 拒绝(码名 `denied` → `confirmation_denied`,退出码仍是 2)。**口径差别要记下**:旧的 `AA_CONFIRM_AUTO` 是宿主里一个 `#if AA_TESTING` 的环境开关(生产构建不可达);新架构里「拒绝」是**假确认器经真协议**回的一个决定 —— 内核里没有任何测试专用的确认旁路 |
+| D2 `AA_CONFIRM_AUTO=approve` → 退出码 0 + `wiped:true` | **映射(08)** | ▸ 确认器在场 + 批准 → 退出码 0 且 output 含 `wiped: true`(同上:走真协议,不是编译期开关) |
 | **D3 裸 UDS 直连仍被拒、响应绝不含 `wiped`** | 映射 | ▸ 裸 UDS 直连绕开 CLI:dangerous 仍然默拒(拒因从"未确认"变成"无确认器",绕不过仲裁这一点不变) |
-| 2'' 假监听器不回应 + `AA_TIMEOUT_SECONDS=1` → 退出码 3 | 顺延 08 | 见「有意的契约变更」8 |
+| 2'' 假监听器不回应 + `AA_TIMEOUT_SECONDS=1` → 退出码 3 | **映射(08,语义改判)** | ▸ 确认器在场但没人应答 → confirmation_timeout + 退出码 3。**语义换了**:旧的 3 是「客户端等 socket 等腻了」,新的 3 是「**人**没在窗口内做决定」—— 前者已并入 4(这条路走不通),后者才值得单独一个码(见「有意的契约变更」8 改写版) |
 | `aa --help` 打全 7 条退出码语义 | 合并 | `usage.ts` 的 USAGE 里仍有整行退出码表;`cli-basics.test.ts` ▸ help --json 断言帮助可机读 |
 | `aa docs agents-md` 含 capabilities/dangerous/exit code | 顺延 13 | agent 指引物随分发工件走 |
 
@@ -198,12 +198,12 @@ E2E 那条另算(它验的是真进程/真往返,不是纯逻辑)。下表按旧
 | # | 旧断言 | 处置 | 新 TS 测试 |
 |---|---|---|---|
 | S-1 | id:同名(大小写不敏感)同 id;两个非 ASCII 名不碰撞;空名 → nil | 映射 | `cli-subscriptions.test.ts` ▸ id 由名字确定性派生(FNV-1a 32 位,与旧实现同一个算法) |
-| S-2 | add:空名 → invalidParams,且**先于任何 I/O** 拒绝 | **顺延 08** | `add` 是 dangerous,本票无确认器 → handler 一次都进不去。空名分支的代码在(`subscriptionAdd` 开头),但**没有活体断言**,08 票补 |
+| S-2 | add:空名 → invalidParams,且**先于任何 I/O** 拒绝 | **映射(08)** | `cli-subscriptions.test.ts` ▸ add 空名:先于任何 I/O 就被拒(源指向一个**根本不存在的文件** —— 若实现先拉再校验名字,错误码会变成 `subscription_failed` 而不是 `invalid_params`) |
 | S-3 | list:空清单 → active=null、条目为空 | 映射 | ▸ list 空清单 |
-| S-4 | add:新增成功、id 带 slug 前缀、**不自动激活** | 顺延 08 | 同 S-2;「不自动激活」在实现里是 `reloaded: false` 且不写 activeId(注释成文),待确认器到位后验 |
-| S-5 | add:同 name 再 add → 同 id、upsert 换源 | 顺延 08 | 同上(`action: "replaced"` 已在契约里) |
-| S-6 | add:拉取失败不留痕 | 顺延 08 | 同上;**同族的**「拉取失败不留痕」在 update 那条上有活体断言(见 S-12) |
-| S-7 | add:空内容 → 业务失败 | 顺延 08(部分映射) | update 侧同族断言:▸ update 内容为空 → 拒绝落盘 |
+| S-4 | add:新增成功、id 带 slug 前缀、**不自动激活** | **映射(08)** | ▸ add 经确认器批准:真的新增了、id = `subscriptionId(名字)`、`reloaded:false` 且 `active` 仍是 null(再查一次 list 复核) |
+| S-5 | add:同 name 再 add → 同 id、upsert 换源 | **映射(08)** | ▸ add 同名再来一次 = 换源:同一个 id、`action: "replaced"`、清单仍只有一条、物化配置的 marker 换成新版 |
+| S-6 | add:拉取失败不留痕 | **映射(08)** | ▸ add 拉取失败不留痕:清单与物化目录都不该因为一次失败的 add 而出现 |
+| S-7 | add:空内容 → 业务失败 | 合并 | 空内容与拉取失败共用 `assertUsableBody` 那一段;两个入口各有一条活体断言(▸ update 内容为空 → 拒绝落盘、▸ add 拉取失败不留痕) |
 | S-8 | activate:激活成功;已是 active 幂等且**不重复重载** | 映射 | ▸ activate 正文渲染进自管配置…… + ▸ activate 幂等(reloaded=false) |
 | S-9 | activate:切换生效;未知 id → 业务失败且 active 不变 | 映射 | ▸ activate 未知 id → subscription_failed + 激活项不变 |
 | S-10 | activate:重载失败后 active 不变(无半态) | 映射(判据更强) | ▸ activate 内核不认那份配置 → 回滚(清单**与磁盘配置**都退回上一态) |
@@ -280,8 +280,8 @@ recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身
 | 组 | 旧断言 | 处置 | 新 TS 测试 |
 |---|---|---|---|
 | 场景 1 | 多订阅存储 + 单一激活 + 切换生效(改后读回 groups.now / mode / active) | 映射 | ▸ activate 正文渲染进自管配置、内核重载、**分组真的换了**(读回判据同源) |
-| 场景 2 | dangerous 两分支(approve → added;deny → 退出码 2 且不留痕) | **拆分**:deny 那半映射,approve 那半顺延 08 | ▸ add 默拒 + 不留痕(码名 `denied` → `confirmation_unavailable`,退出码仍是 2);approve 分支要确认器,归 08 |
-| 场景 2 | F2 确认层可见性(`[confirm]` 行带 name/source) | 顺延 08 | 确认器的呈现面归 08 票 |
+| 场景 2 | dangerous 两分支(approve → added;deny → 退出码 2 且不留痕) | **映射(08 补齐 approve 那半)** | 三条并存:▸ add 默拒 + 不留痕(无确认器 → `confirmation_unavailable`)/ ▸ add 经确认器批准:真的新增了 / ▸ add 被确认器拒绝:`confirmation_denied` + 退出码 2 + 不留痕。旧的一条 deny 分支现在有两种对位物 —— 新模型里「没人能确认」与「有人不同意」是两件事 |
+| 场景 2 | F2 确认层可见性(`[confirm]` 行带 name/source) | **映射(08:从日志升成协议字段)** | 旧实现把入参渲染成宿主日志里的一行 `[confirm] <id> key=value`,E2E 靠 grep 它证明「input 到达确认层、没有盲批」。新架构把这件事**升成协议**:`ConfirmationRequest.input` 是推给确认器的报文字段,确认器必须原样呈现。断言:▸ add 经确认器批准(`request.input` 逐字段 = `{name, source}`)+ `cli-arbitration.test.ts` ▸ 确认器在场 + 批准。**还多守了一条旧断言守不住的**:▸ 确认内容不外泄 —— 那份 input **只**发给 confirm-agent,订阅者一帧都收不到 |
 | 场景 3 | update(normal)零 GUI 确认、不挂起 | 映射 | ▸ update 重新拉取…(没有任何确认器在场,命令照常 0 退出 —— 这就是"normal 零确认"的反证) |
 | 场景 4 | 裸 UDS 直连 add 仍 denied(绕过 CLI 躲不过确认) | 合并 | `cli-capabilities.test.ts` ▸ 裸 UDS 直连绕开 CLI:dangerous 仍然默拒(04 票已立;仲裁在 `registry.invoke` 里,与是哪条能力无关) |
 | 场景 5 | http:// 源真路径跑通 | 映射(**CR 补**) | 起一个**回环**上的 `Bun.serve` 当订阅源(与旧脚本那个本地 `python3 -m http.server`、与假 mihomo 是同一种姿势 —— 「门禁不出网」说的是不连外网,不是不许有 HTTP 往返)。`cli-subscriptions.test.ts` ▸ update:http:// 源走真 HTTP 往返 + ▸ http 源返回 404 → 什么都没改。CR 前误记为做不到项,**已证伪并补齐** |
@@ -292,8 +292,8 @@ recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身
 | 旧断言 | 处置 | 说明 |
 |---|---|---|
 | FS1 旗舰链四步(on → 切模式 → 选节点 → 更新订阅)在**同一宿主实例**上成功 | **顺延 10** | 旗舰 e2e 对 `a2` 重写是 10 票的面(spec 测试决策第 4 条);本票把四步各自的单元/CLI 缝断言都建好了,10 票把它们串成一条链 |
-| FS2 全链零 GUI 打断的三条证据(确认档位 / 无 `[confirm]` 行 / 无 pending) | 顺延 08 + 10 | 「确认档位」需要确认器在场才有意义 |
-| FS3 反向对照:dangerous 换源确实触发确认且 deny 挡住 | 顺延 08 | 同上 |
+| FS2 全链零 GUI 打断的三条证据(确认档位 / 无 `[confirm]` 行 / 无 pending) | **部分映射(08)+ 顺延 10** | 「确认档位」的对位物已就位:旗舰链四步全是 safe/normal,`cli-arbitration.test.ts` ▸ 零轮询…… 断言 **safe 档一条事件都不产**、normal 档直通 0 退出;「无 pending」的对位物是 `arbitration.status` 的 `state.pending` 为空。**串成一条链**仍归 10 票 |
+| FS3 反向对照:dangerous 换源确实触发确认且 deny 挡住 | **映射(08)** | ▸ add 被确认器拒绝:`confirmation_denied` + 退出码 2 + 清单没出现(串进旗舰链仍归 10) |
 | FS4 全链只经 `aa`:argv 逐行核对 + UDS 流量对账 | 顺延 10 | 属旗舰链的审计面 |
 | FS5 `aa docs agents-md` 提到的能力 id 都真实存在 | 顺延 13 | agent 指引物随分发工件走(04 票已标) |
 | MK2「真核状态 E2E **未修改**系统代理后端」(`cmp -s` 逐字节) | 映射(更强) | ▸ 观测是只读的:整场没有对系统代理发过**任何**调用(`networkCalls` 为空数组,比"文件没变"更强 —— 连读都没有) |
@@ -344,14 +344,54 @@ recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身
 前者用 `A2_FAKE_NETSETUP_FAIL_AT` 的写次计数就能命中,后者起一个回环 `Bun.serve` 即可,
 都不需要新造基建。记账时把"我没做"写成"做不到"是本票 CR 抓到的一处不实,记此备查。
 
+---
+
+## 08 票登记:三层仲裁完全体 + 角色注册 + 订阅推送
+
+本票没有"新的一族旧断言"要搬 —— 它兑现的是**前面几票欠下的账**:04 票 A 组 6/7/9(确认器在场的三条)、
+C 组 D1/D1b/D2/2''、07 票 B 组 S-2/S-4/S-5/S-6、F 组场景 2 与 F2、G 组 FS3。上面各处已就地改判,
+本节只登记**新建的、旧仓根本没有对位物**的那部分,以及一处如实的做不到项。
+
+### A. 新建行为(旧 Swift 无对位物 —— 新架构才有的东西)
+
+| # | 新行为 | 断言 | 为什么旧仓没有 |
+|---|---|---|---|
+| N-1 | 角色注册:长连接上注册 confirm-agent / subscriber,一条连接可两者兼有,重复注册幂等 | `cli-arbitration.test.ts` ▸ 注册即全量快照 / ▸ 一条连接可以既是确认器又是订阅者 | 旧架构里"确认"是宿主进程内的一个**函数回调**,不是协议;宿主与内核是同一个进程,没有"在不在场"这回事 |
+| N-2 | **在场 = 长连接**:确认器断线即离场,在途请求立即降回默拒(不等超时) | ▸ 在途挂起时确认器断线 → 立即降回默拒 / ▸ 确认器走了之后:下一条 dangerous 立刻回到第①层 | 同上:进程内回调不会"断线" |
+| N-3 | 全量快照 + 增量推送、**零轮询** | ▸ 注册即全量快照 / ▸ 零轮询:注册之后一条请求都不再发…… / `cli-supervision.test.ts` ▸ 事件同时推给订阅者 | 旧壳与宿主同进程,状态靠直接读;推送面是新架构才需要的 |
+| N-4 | **确认内容不外泄**:input 只发给 confirm-agent,订阅者只看得到在途请求的坐标 | ▸ 确认内容不外泄 | 旧实现里 input 只在宿主进程内部流转,不存在"发给谁"的问题 |
+| N-5 | 对端 UID 校验(`getpeereid` / `SO_PEERCRED`),非同 UID 连接当场被拒 + 留痕 | ▸ 对端 UID 与内核不符:连接当场被拒 + 留痕 | 旧 UDS 面没有任何对端校验(03 票只做了文件权限两道门) |
+| N-6 | 仲裁审计:请求/批准/拒绝/超时/降级/角色进出/被拒对端,NDJSON 落盘 + 可查询 + 推送 | ▸ 审计留痕:请求与收场配对可查 / ▸ 无确认器的默拒也留痕 | 旧实现只有宿主的自由文本日志(`hostLog`),不是结构化审计,也无从查询 |
+| N-7 | 协议面的三条拒绝:未注册角色就做决定 / 决定一条不存在的确认 / 注册未知角色 | ▸ 角色是连接的属性 / ▸ 协议面的两条拒绝 | 新协议面才有的错误族 |
+| N-8 | **活体拒绝报文 ≡ 金标**(除 id、路径类字段与超时窗口值) | ▸ 活体默拒/拒绝/超时报文 ≡ 金标(三条) | 04 票 CR 的建议;旧仓的 E2E 只 grep 关键字,不做整份报文对照 |
+| N-9 | 全命令面无 `--yes`;内核里没有任何读 stdin / 认 TTY 的代码 | ▸ `--yes` 旁路在**每一条**命令面上都不存在(7 条命令面逐条)/ ▸ 永不交互阻塞(结构性断言,扫 `src/**/*.ts`) | 旧仓只在能力面验过一次 `--yes`;"内核里根本没有这类代码"是结构性承诺,旧仓没立过 |
+| N-10 | **Linux 形态由构造保证**:角色协议与仲裁层没有任何平台分支 | ▸ Linux 形态由构造保证(扫 6 个文件,并反证平台差异只住在 `peer.ts`) | 旧仓是 mac-only,没有这条承诺 |
+
+### B. 一处做不到项(如实记账)
+
+**Linux 上的 `SO_PEERCRED` 未在真 Linux 上实测**。`daemon/peer.ts` 里那条分支的代码与 macOS 分支同构
+(同一个 fd、换一个 `dlopen` 符号),但本机只有 macOS。与仓库既有 Linux 口径一致:代码路径进门禁
+(tsc 覆盖,且「协议层无平台分支」这条有活体断言守着 —— 平台差异只住在 `peer.ts` 那一处),
+**实机验收随 5 条人工项顺延**。
+macOS 分支是**实测**的(见下"一处对研究文档的更正")。
+
+### C. 一处对研究文档的更正(实测)
+
+`docs/research/ts-kernel-runtime-bun.md` §4.4 记的是:「`Bun.listen` 的 Socket 不暴露 fd,得改走 `node:net`
+兼容层的 `socket._handle.fd`」。**本票在 Bun 1.3.14 上实测:`Bun.listen` 的 Socket 原型链上就有 `fd` 取值器**,
+`getpeereid(socket.fd)` 直接返回真实 UID/GID(501/20,与 `id -u`/`id -g` 吻合)。所以内核**不必**为了取凭据
+而换掉 `Bun.listen`(那会牵动每连接状态 `socket.data` 的整套写法)。`_handle?.fd` 仍留作兜底。
+
 ## 有意的契约变更(不是丢失,是改判 —— 逐条有出处)
 
 1. **`--json` 输出一律是包封**。旧 `aa` 的 list/describe/call 直接打裸 payload(`{"capabilities":[…]}`、
    裸 descriptor、裸 output),失败时才打信封;新内核成功失败**同一形状**,agent 一次 `JSON.parse` 就能分支
    (ADR 0008 第 2 条)。代价:旧的 `assert_contains '"id":"demo.echo"'` 这类 grep 仍成立,但取值路径多一层 `result.`。
-2. **`denied` 拆成两码**。旧实现里「无确认通道」与「用户点了拒绝」共用 `denied`,只靠 detail 文案区分。
-   新内核按 ADR 0005 修订后的三层仲裁分开:本票只产 `confirmation_unavailable`(第①层),
-   08 票补 `confirmation_denied` / `confirmation_timeout`(第③层)。**退出码都是 2**,旧的退出码断言不受影响。
+2. **`denied` 拆成三码(08 票补齐)**。旧实现里「无确认通道」与「用户点了拒绝」共用 `denied`,只靠 detail
+   文案区分。新内核按 ADR 0005 修订后的三层仲裁分开:`confirmation_unavailable`(第①层:**没人能替你确认**,
+   含「在途时确认器全断」的降级)、`confirmation_denied`(第③层:**有人看了,他不同意**)、
+   `confirmation_timeout`(第③层:**有人在场但没人做决定**)。前两者退出码仍是 **2**,旧的退出码断言不受影响;
+   超时归 **3**(见第 8 条)。08 票另加一个同样映射到 2 的 `peer_rejected`(对端 UID 不符,连接当场被拒)。
 3. **`WireError` 加 `message`(必填)与 `guidance`(可选)**。旧只有 `{code, detail}`,没有任何机器可读的
    「人类如何完成」;「拒绝即指引」(ADR 0005 第 4 条第②层)要求拒绝自带精确命令,故加字段。
 4. **参数类型词汇 `bool` → `boolean`**。旧 Swift 用 `bool`;新契约取 JSON Schema 的词,少一层翻译
@@ -359,14 +399,23 @@ recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身
 5. **`schemaSummary` 与 `cliAlias` 淘汰**。前者是可由 `parameters` 派生的展示串,不进契约(旧 E2E 只断言过
    这个键存在);后者属域子命令面(`aa proxy on`),随该面一起**顺延 07**(05 票改标,理由见 05 票登记 B 段),
    届时如仍需要再进 manifest。
-6. **`pending` / `requestID` / `capabilities.result` op 不进本票**。旧实现的异步确认态是为 GUI 模态框设计的;
-   新架构的确认器协议归 08 票,届时按「可选字段追加不算不兼容」加。顺带解掉旧的一处名字不一致
-   (线协议 `requestID` vs CLI 输出 `requestId`)——新契约里只会有一个拼法。
+6. **`pending` 态与 `capabilities.result` op 整体淘汰(08 票裁定,不是顺延)**。旧实现之所以要「立即返回
+   pending + 客户端拿 requestID 轮询」,是因为 GUI 模态框会占住宿主主线程、而客户端只肯等 5 秒 ——
+   pending 是那个约束的补丁。新架构里同一个问题换了解法:**内核先推一帧 `confirmation-pending`**,
+   写明「我把这条转给人了、最多等 timeoutMs」,客户端据此把自己的截止时间往后推。于是一次调用仍是
+   **一次往返**、**零轮询**(spec 壳契约明写「零轮询」);而「确认窗口是内核的配置、超时判定发生在客户端」
+   这个两处共享配置的隐患也一并消失 —— 一致性由**协议**保证,不靠两个进程读同一个环境变量。
+   **代价(已知限制)**:等确认期间那条连接是占着的(不能复用它并发别的请求)。对 CLI 一次一命令的形态无影响;
+   将来若有客户端要在一条连接上并发多请求,再按「可选字段追加」补一条异步态。顺带解掉旧的一处名字不一致
+   (线协议 `requestID` vs CLI 输出 `requestId`)——新契约里只有 `confirmation` 一个拼法。
 7. **重复能力 id 从"静默后者覆盖前者"改为"启动即抛"**。旧 `Registry.init` 的字典覆盖是已记账的债;
    能力 id 是 agent 的调用坐标,重名必须在启动时炸,而不是在调用时给出一个"看起来成了"的结果。
-8. **超时退出码 3 目前无产出面**。旧 `aa` 有 `AA_TIMEOUT_SECONDS` + `SO_RCVTIMEO` → 退出码 3;
-   新客户端把"等不到响应"一律归为 daemon 不可达(退出码 4)——对调用方是同一件事:这条路走不通。
-   08 票改长连接时会重新出现真正的「确认超时」语义,那时再决定 3 的归属。
+8. **退出码 3 的语义被改判:从「socket 等腻了」变成「人没做决定」(08 票裁定)**。旧 `aa` 的 3 来自
+   `AA_TIMEOUT_SECONDS` + `SO_RCVTIMEO`——那是**传输层**超时。新客户端把「等不到响应」一律归为
+   daemon 不可达(**4**):对调用方而言「对面卡死」与「对面不在」是同一件事,这条路走不通。
+   3 现在只有一个产出面 —— **`confirmation_timeout`**:确认请求送到了、确认器也在场,但没有人在窗口内做决定。
+   这才值得单独一个退出码,因为 agent 据此该做的事(提醒用户去点)与 4(引导安装服务)完全不同。
+   旧断言 2''(假监听器不回应 → 3)的对位物见 C 组同名行。
 9. **`demo.note.set` 多一个 `scope` 参数**(`allowedValues: [session, persistent]`,旧 Swift 同名能力无此参数)。
    理由:`allowedValues` 是 manifest 的一部分(07 票的 `proxy.mode.set`、11 票的插件都要用),但内置能力里
    没有任何一条用得上它 —— **写了却没有活体断言的校验代码是负债**。挂在 normal 档样本上,正反两条路径
@@ -403,6 +452,7 @@ recoverTakeover / restoreSnapshot)、reap 上世代孤儿内核、核验 pid 身
    全塞进同一个码等于让 agent 去 grep 中文 message。故允许能力自带已登记的 `ErrorCode` 与 guidance;
    **退出码仍由 `exitCodeForErrorCode` 统一裁**(能力决定不了自己的退出码),不带这两样时行为与 04 票逐字相同。
 17. **旧 `denied` 在订阅面的那一半也归 `confirmation_unavailable`**(第 2 条的延伸)。`subscriptions-e2e.sh`
-   场景 2 的 deny 分支断言的是 `"code":"denied"` + 退出码 2;本票产出的是 `confirmation_unavailable` + 退出码 2
-   (**因为本票根本没有确认器,不存在"用户点了拒绝"**)。08 票补 `confirmation_denied` 之后,那条旧断言才有
-   真正的对位物。退出码不变,旧的退出码判据不受影响。
+   场景 2 的 deny 分支断言的是 `"code":"denied"` + 退出码 2;07 票产出的是 `confirmation_unavailable` + 退出码 2
+   (**因为那时根本没有确认器,不存在「用户点了拒绝」**)。**08 票补上 `confirmation_denied` 之后,那条旧断言
+   有了真正的对位物**(▸ add 被确认器拒绝),两条并存:同一条能力,无人在场与有人不同意是两种收场,
+   各有各的报文与指引。退出码不变,旧的退出码判据不受影响。

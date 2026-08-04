@@ -45,7 +45,8 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   }
   // 域子命令面(07 票):`a2 proxy on` 等价于 `a2 capabilities call proxy.system.enable`,
   // 别名表由 daemon 的注册表说了算 —— 这里不写死任何动作名。
-  if (command === "proxy") {
+  // 08 票加了 `arbitration`(仲裁面只读查询),走的是同一个解析器。
+  if (command === "proxy" || command === "arbitration") {
     return await domainCommand(command, args, resolvePaths());
   }
   if (command === "service") {

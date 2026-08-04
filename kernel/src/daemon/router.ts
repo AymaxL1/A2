@@ -4,29 +4,38 @@
 // 客户端拿到的永远是「一种形状」,这是 agent 面能一次 JSON.parse 就分支的前提。
 //
 // handler 只说 op 层的成败(`OpOutcome`),包封由本文件统一裹 —— 各 op 不手搓包封、不靠异常表达失败。
+//
+// 08 票起 handler 多拿一个 `connection`:角色是**连接的属性**,所以 `roles.register` 与
+// `confirmations.resolve` 必须知道"这句话是哪条连接说的"。一问一答的 op 照旧不看它。
 
 import {
   CapabilityCallParamsSchema,
   CapabilityDescribeParamsSchema,
+  ConfirmationResolveParamsSchema,
   ErrorCode,
   Op,
   RequestEnvelopeSchema,
+  RoleRegisterParamsSchema,
   encodeFrame,
   failureResponse,
   opFailure,
   opSuccess,
+  pushEnvelope,
   successResponse,
+  type JsonValue,
   type OpOutcome,
   type RequestEnvelope,
 } from "../contract/wire.ts";
+import type { ClientConnection } from "./hub.ts";
 import { statusSnapshot, type KernelRuntime } from "./runtime.ts";
 
 type OpHandler = (
   request: RequestEnvelope,
   runtime: KernelRuntime,
+  connection: ClientConnection,
 ) => OpOutcome | Promise<OpOutcome>;
 
-/** op → handler。08 票的角色注册也往这张表上挂。 */
+/** op → handler。 */
 const HANDLERS: Record<string, OpHandler> = {
   [Op.statusGet]: (_request, runtime) => opSuccess(statusSnapshot(runtime)),
 
@@ -42,19 +51,114 @@ const HANDLERS: Record<string, OpHandler> = {
     return opSuccess({ descriptor });
   },
 
-  [Op.capabilitiesCall]: async (request, runtime) => {
+  [Op.capabilitiesCall]: async (request, runtime, connection) => {
     const params = CapabilityCallParamsSchema.safeParse(request.params ?? {});
     if (!params.success) return invalidParams("capabilities.call", params.error.message);
 
     // 仲裁与校验全在 registry.invoke 里 —— 裸 UDS 直连走的也是这一条路,绕不过去。
     const outcome = await runtime.registry.invoke(params.data.capability, params.data.input ?? {}, {
-      confirmerPresent: runtime.confirmerPresent(),
-      paths: runtime.paths,
+      confirmerPresent: () => runtime.confirmerPresent(),
+      refuseWithoutConfirmer: (descriptor) => runtime.arbiter.refuseWithoutConfirmer(descriptor),
+      // 「我把你这条转给人了,最多等这么久」—— 只发给**发起方那条连接**,别的订阅者与此无关。
+      confirm: (descriptor, input) =>
+        runtime.arbiter.confirm(descriptor, input, (pending, timeoutMs) => {
+          connection.send(
+            encodeFrame(
+              pushEnvelope({
+                kind: "confirmation-pending",
+                at: new Date().toISOString(),
+                requestId: request.id,
+                timeoutMs,
+                confirmation: pending,
+              }),
+            ),
+          );
+        }),
     });
+    if (!outcome.ok) return outcome;
+
+    // 状态变了就广播一次:订阅者据此直接投影,不必回头再查(零轮询)。
+    // **只对 normal / dangerous 发** —— safe 是只读,发了是噪音。
+    const risk = runtime.registry.describe(params.data.capability)?.risk;
+    if (risk === "normal" || risk === "dangerous") {
+      runtime.hub.broadcast({
+        kind: "capability",
+        at: new Date().toISOString(),
+        capability: { capability: params.data.capability, risk, output: outcome.result },
+      });
+    }
     // 注册表只管"能力吐了什么"(output),线上的 result 形状由 op 层拼(带上 capability 便于对号)。
-    return outcome.ok
-      ? opSuccess({ capability: params.data.capability, output: outcome.result })
-      : outcome;
+    return opSuccess({ capability: params.data.capability, output: outcome.result });
+  },
+
+  [Op.rolesRegister]: (request, runtime, connection) => {
+    const params = RoleRegisterParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return invalidParams("roles.register", params.error.message);
+
+    const added = runtime.hub.register(connection, params.data.role, params.data.identity);
+    if (added) {
+      runtime.audit.record({
+        action: params.data.role === "confirm-agent" ? "confirmer_joined" : "subscriber_joined",
+        client: {
+          role: params.data.role,
+          name: params.data.identity.name,
+          ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+        },
+        detail: `连接 ${connection.id} 注册为 ${params.data.role}。V1 不校验身份声明(已知边界:同 UID 冒充)。`,
+      });
+      // 确认器进场 = dangerous 从"走不通"变成"要等人点头",这条事实要让全体订阅者知道。
+      runtime.arbiter.rosterChanged();
+    }
+
+    return opSuccess({
+      role: params.data.role,
+      connection: connection.id,
+      ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+      roles: [...connection.roles],
+      // **注册与首帧快照是同一次往返** —— 没有"注册成功了但还没拿到状态"的中间态。
+      snapshot: runtime.snapshot(),
+    } as unknown as JsonValue);
+  },
+
+  [Op.confirmationsResolve]: (request, runtime, connection) => {
+    const params = ConfirmationResolveParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return invalidParams("confirmations.resolve", params.error.message);
+
+    // **角色是连接的属性,不是报文里的一句自称**:没注册 confirm-agent 就没有替人做决定的资格。
+    if (!connection.roles.has("confirm-agent")) {
+      return opFailure({
+        code: ErrorCode.roleNotRegistered,
+        message: "这条连接没有注册 confirm-agent 角色,不能替人做确认决定。",
+        detail:
+          "确认器必须先在本连接上 `roles.register`(role=confirm-agent)并保持连接;" +
+          "断线即离场,重连后要重新注册。",
+        guidance: {
+          summary: "先在同一条长连接上注册确认器角色,再回应确认请求。",
+          steps: [
+            { description: "在这条连接上发 roles.register(role=confirm-agent)" },
+            { description: "收到 confirmation 事件后,用它的 id 发 confirmations.resolve" },
+          ],
+          context: { connection: connection.id },
+        },
+      });
+    }
+
+    const refusal = runtime.arbiter.resolve(
+      params.data.confirmation,
+      params.data.decision,
+      {
+        connection: connection.id,
+        ...(connection.identity?.name === undefined ? {} : { name: connection.identity.name }),
+        ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+      },
+      params.data.reason,
+    );
+    if (refusal) return opFailure(refusal);
+    return opSuccess({
+      confirmation: params.data.confirmation,
+      decision: params.data.decision,
+      settled: true,
+    });
   },
 };
 
@@ -70,11 +174,19 @@ function invalidParams(op: string, detail: string): OpOutcome {
 const KNOWN_OPS = Object.keys(HANDLERS).sort();
 
 /** 处理一行请求,返回一帧响应(含换行)。 */
-export async function handleLine(line: string, runtime: KernelRuntime): Promise<string> {
-  return encodeFrame(await handleRequestLine(line, runtime));
+export async function handleLine(
+  line: string,
+  runtime: KernelRuntime,
+  connection: ClientConnection,
+): Promise<string> {
+  return encodeFrame(await handleRequestLine(line, runtime, connection));
 }
 
-async function handleRequestLine(line: string, runtime: KernelRuntime) {
+async function handleRequestLine(
+  line: string,
+  runtime: KernelRuntime,
+  connection: ClientConnection,
+) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -105,7 +217,7 @@ async function handleRequestLine(line: string, runtime: KernelRuntime) {
   }
 
   try {
-    const outcome = await handler(envelope.data, runtime);
+    const outcome = await handler(envelope.data, runtime, connection);
     return outcome.ok
       ? successResponse(envelope.data.id, outcome.result)
       : failureResponse(envelope.data.id, outcome.error);

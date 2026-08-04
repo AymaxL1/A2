@@ -1,0 +1,9 @@
+{
+  "capability": "proxy.mode.set",
+  "risk": "normal",
+  "output": {
+    "endpoint": { "owner": "a2", "controller": "127.0.0.1:9097", "managed": true },
+    "mode": "global",
+    "set": true
+  }
+}

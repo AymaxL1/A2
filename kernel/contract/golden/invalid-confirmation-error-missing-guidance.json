@@ -1,0 +1,5 @@
+{
+  "code": "confirmation_denied",
+  "message": "demo.wipe 的确认被拒绝,未执行。",
+  "detail": "没有 guidance —— 仲裁三码必须带「人类如何完成」,这条应当被 schema 拒掉"
+}

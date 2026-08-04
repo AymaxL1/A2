@@ -55,6 +55,11 @@ export function supervisionLogPath(paths: KernelPaths): string {
 export function createProxySupervisor(
   paths: KernelPaths,
   env: Record<string, string | undefined> = process.env,
+  /**
+   * 每记一条事件就叫一次(08 票接的推送面)。07 票留的话在这里兑现:**载荷形状一字未改** ——
+   * 08 票只是在落盘与入内存之外多了一个去处,不需要为推送另造一份事件。
+   */
+  onEvent: (event: ProxySupervisionEvent) => void = () => {},
 ): ProxySupervisor {
   const parsed = Number.parseInt(env[WATCH_INTERVAL_ENV]?.trim() ?? "", 10);
   const intervalMs = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_WATCH_INTERVAL_MS;
@@ -75,6 +80,12 @@ export function createProxySupervisor(
     events.push(event);
     if (events.length > RECENT_EVENTS) events.splice(0, events.length - RECENT_EVENTS);
     lastTransitionAt = event.at;
+    // 推送先于落盘:订阅者不该为了一次磁盘写而多等(而且日志写失败也不该让推送丢)。
+    try {
+      onEvent(event);
+    } catch {
+      // 推送失败(对端刚断之类)同样不该让观测停摆。
+    }
     try {
       await mkdir(path.dirname(logPath), { recursive: true, mode: LOG_DIR_MODE });
       await appendFile(logPath, `${JSON.stringify(event)}\n`);

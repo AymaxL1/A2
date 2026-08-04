@@ -24,10 +24,12 @@ import {
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { outcomeFromEnvelope, type CommandOutcome } from "./outcome.ts";
-import { domainUsageOutcome, helpOutcome, PROXY_USAGE } from "./usage.ts";
+import { DOMAIN_USAGE, domainUsageOutcome, helpOutcome, USAGE } from "./usage.ts";
 
 /**
- * 跑一条域子命令。`domain` 是第一个 token(如 `proxy`),`args` 是它后面的全部 token。
+ * 跑一条域子命令。`domain` 是第一个 token(如 `proxy`、`arbitration`),`args` 是它后面的全部 token。
+ * 本函数**对域名无知**:它只认 manifest 里的 `cliAlias`,新域只需在 `main.ts` 放行 + 在
+ * `DOMAIN_USAGE` 登记一段帮助,解析逻辑一行不改。
  */
 export async function domainCommand(
   domain: string,
@@ -35,7 +37,7 @@ export async function domainCommand(
   paths: KernelPaths,
 ): Promise<CommandOutcome> {
   if (args[0] === "help" || args[0] === "-h" || args[0] === "--help") {
-    return helpOutcome(PROXY_USAGE);
+    return helpOutcome(DOMAIN_USAGE[domain] ?? USAGE);
   }
 
   const listed = await callKernel(paths, Op.capabilitiesList);
@@ -52,6 +54,7 @@ export async function domainCommand(
   const matched = matchAlias(parsed.data.capabilities, tokens);
   if (!matched) {
     return domainUsageOutcome(
+      domain,
       args.length === 0
         ? `${domain} 需要一个动作。`
         : `未知的 ${domain} 动作:${args.join(" ")}`,
@@ -61,7 +64,7 @@ export async function domainCommand(
 
   const input = parseFlags(matched.descriptor, matched.rest);
   if ("error" in input) {
-    return domainUsageOutcome(input.error, aliasHints(parsed.data.capabilities, domain));
+    return domainUsageOutcome(domain, input.error, aliasHints(parsed.data.capabilities, domain));
   }
 
   const params: Record<string, JsonValue> =

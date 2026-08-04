@@ -1,0 +1,63 @@
+{
+  "title": "AuditEvent",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "requested",
+        "approved",
+        "denied",
+        "timed_out",
+        "unavailable",
+        "downgraded",
+        "confirmer_joined",
+        "confirmer_left",
+        "subscriber_joined",
+        "subscriber_left",
+        "peer_rejected"
+      ]
+    },
+    "capability": {
+      "type": "string"
+    },
+    "confirmation": {
+      "type": "string"
+    },
+    "client": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "confirm-agent",
+            "subscriber"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "detail": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "at",
+    "action"
+  ],
+  "additionalProperties": false
+}

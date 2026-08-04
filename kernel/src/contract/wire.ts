@@ -59,7 +59,12 @@ export type Guidance = z.infer<typeof GuidanceSchema>;
 
 /**
  * 统一错误载荷。`code` 供机器分支(取值见 `ErrorCode`),`message` 给人/agent 读,
- * `detail` 放原始细节(异常文本等),`guidance` 在「这条路走不通」时必填。
+ * `detail` 放原始细节(异常文本等)。
+ *
+ * **`guidance` 在包封这一层是可选的,这是真话**(08 票纠正了 03 票注释里"必填"的说法):
+ * 「你敲错了」类错误(`unknown_op`、`bad_request`)本来就没有"人类如何完成"可言,硬填等于编。
+ * 真正必须带指引的是**「这条路走不通」**那一族 —— 它们由更窄的 schema 各自强制,而不是靠一句注释:
+ * 见本文件的 `ConfirmationErrorSchema`(仲裁三码,`guidance` 必填,有金标样本 + 活体对照断言)。
  */
 export const WireErrorSchema = z.object({
   code: z.string().min(1),
@@ -99,10 +104,40 @@ export const ErrorCode = {
   /**
    * dangerous 能力被调用,但**没有任何确认器在场** —— fail-closed 默拒(ADR 0005 第 4 条第①层)。
    * 这不是功能缺失,是无 GUI 形态的设计行为;拒绝报文必带 guidance(第②层「拒绝即指引」)。
-   * 08 票补第③层(确认器在场时带外确认),届时新增 `confirmation_denied` / `confirmation_timeout`,
-   * **本码的含义与形状不变** —— 客户端对"没人能替你确认"的分支不必跟着改。
+   *
+   * **08 票补齐第③层后本码的含义与形状一字未改**(04 票承诺兑现):除了"一个确认器都没有",
+   * 还有一种情况归到这一码 —— **在途挂起时确认器全部断线**(降级)。理由:对发起方而言这两件事
+   * 是同一件事(此刻没人能替你确认),客户端不该为"它是什么时候消失的"多写一个分支。
    */
   confirmationUnavailable: "confirmation_unavailable",
+
+  // MARK: 仲裁第③层(08 票)—— 确认器在场时的两种收场
+
+  /**
+   * 确认器在场,人类**明确点了拒绝**。与 `confirmation_unavailable` 是两件事:
+   * 那条说"没人能替你确认",这条说"有人看了,他不同意"。退出码同为 2(都是 denied 档)。
+   */
+  confirmationDenied: "confirmation_denied",
+  /**
+   * 确认器在场、请求也送到了,但在超时窗口内**没人做决定**。退出码 3(超时档,本码是它的首个产出面)。
+   * 超时即拒绝(fail-closed):内核绝不因为没人应答就放行。
+   */
+  confirmationTimeout: "confirmation_timeout",
+
+  // MARK: 长连接与角色协议(08 票)
+
+  /**
+   * 对端不是同一个 UID —— 连接当场被拒(内核经 `getpeereid`/`SO_PEERCRED` 校验,见 `daemon/peer.ts`)。
+   * 这是纵深的第三道门(前两道是 `run/` 0700 与 socket 0600,由 OS 强制)。
+   */
+  peerRejected: "peer_rejected",
+  /** `confirmations.resolve` 指向的确认请求不存在,或已经收场了(超时/被别的确认器先决定了)。 */
+  confirmationUnknown: "confirmation_unknown",
+  /**
+   * 这条连接没有注册所需的角色就来干这个角色的活(如未注册 confirm-agent 就想替人做决定)。
+   * **角色是连接的属性,不是报文里的一句自称** —— 所以这条错误只可能出现在长连接面上。
+   */
+  roleNotRegistered: "role_not_registered",
 
   // MARK: 服务面(05 票)—— 系统托管常驻的安装/卸载
 
@@ -198,6 +233,13 @@ export const Op = {
   capabilitiesDescribe: "capabilities.describe",
   /** 调用一个能力。 */
   capabilitiesCall: "capabilities.call",
+  /**
+   * 在**当前这条长连接**上注册一个角色(confirm-agent / subscriber),08 票。
+   * 注册是连接级的事实:连接在 = 角色在,连接断 = 角色立刻消失(无心跳、无 TTL、无陈旧窗口)。
+   */
+  rolesRegister: "roles.register",
+  /** 确认器对一条待确认请求做决定(批准/拒绝)。**只有注册过 confirm-agent 的连接能发**。 */
+  confirmationsResolve: "confirmations.resolve",
 } as const;
 export type Op = (typeof Op)[keyof typeof Op];
 
@@ -849,6 +891,315 @@ export const ProxySupervisionResultSchema = z.object({
 });
 export type ProxySupervisionResult = z.infer<typeof ProxySupervisionResultSchema>;
 
+// MARK: - 角色注册、订阅推送与三层仲裁(08 票)
+//
+// 这一节是本效应安全模型的落点。三件事一起长出来,因为它们其实是同一件事的三个面:
+//   * **角色**:长连接上注册 confirm-agent(确认器)或 subscriber(订阅者)。**在场 = 长连接**
+//     (ADR 0005 修订后第 4 条):连接在即在场,断线即离场,无心跳、无 TTL、无陈旧状态窗口。
+//   * **推送**:注册即回全量快照,此后增量推送。**零轮询**是壳侧(10 票)的硬要求。
+//   * **仲裁**:无确认器 → `confirmation_unavailable`(第①层,形状不变);有确认器 → 带外确认,
+//     三种收场(批准 / `confirmation_denied` / `confirmation_timeout`);在途时确认器全断
+//     → **立即降回第①层**(同一条 `confirmation_unavailable`)。
+//
+// **V1 不做身份校验,这是已知边界,如实记在契约里**(06 票裁定、ADR 0008 第 5 条):
+// 注册报文的 `identity` 字段一律**原样收下、不验签**,同 UID 的恶意代码可以冒充确认器。
+// 仲裁保护的是「受认可路径上的 AI agent 不能自批」,不对抗已经拿到该用户身份的任意本机代码 ——
+// 那种攻击者可以直接替换 `a2` 这个二进制,任何协议层校验都拦不住。真正被**验证过**的身份事实
+// 只有一条:对端 UID(`getpeereid`/`SO_PEERCRED`,见 `daemon/peer.ts`),它进审计、进快照。
+
+/**
+ * 长连接上可注册的角色。取值即契约,**逐字取自 spec 与 ADR 0005/0008**(`confirm-agent` / `subscriber`):
+ *   * `confirm-agent` —— 确认器:替人类出面呈现 dangerous 确认并安全回传决定;
+ *   * `subscriber` —— 订阅者:只收状态投影,不参与仲裁。
+ *
+ * 一条连接可以两个角色都注册(菜单栏壳就是这样:既确认也投影);重复注册同一角色是幂等的。
+ */
+export const ClientRoleSchema = z.enum(["confirm-agent", "subscriber"]);
+export type ClientRole = z.infer<typeof ClientRoleSchema>;
+
+/**
+ * 注册时客户端自报的身份。**V1 全部字段只用于展示与审计,内核一个都不校验**。
+ *
+ * 后两个字段是给将来的身份强化留的插槽(ADR 0008 第 5 条「注册协议预留身份强化字段」):
+ * 届时内核会用 `getpeereid` 拿到的 pid 反查可执行文件并核对 cdhash/团队 ID。**现在没有做**,
+ * 所以此刻填什么都不改变任何判断 —— 客户端填了不会更可信,不填也不会被拒。
+ */
+export const ClientIdentitySchema = z.object({
+  /** 客户端自报的名字(如 `a2-panel`)。**不构成身份**,只是审计与人读的标签。 */
+  name: z.string().min(1),
+  version: z.string().min(1).optional(),
+  /** 预留:代码签名摘要(cdhash)。**V1 不校验**。 */
+  codeDirectoryHash: z.string().min(1).optional(),
+  /** 预留:团队标识(Apple Team ID 等)。**V1 不校验**。 */
+  teamIdentifier: z.string().min(1).optional(),
+});
+export type ClientIdentity = z.infer<typeof ClientIdentitySchema>;
+
+/** `roles.register` 的 params。 */
+export const RoleRegisterParamsSchema = z.object({
+  role: ClientRoleSchema,
+  identity: ClientIdentitySchema,
+});
+
+/** 确认器能给的两种决定。**没有第三种** —— 「不理」不是决定,那是超时(内核自己裁)。 */
+export const ConfirmationDecisionSchema = z.enum(["approve", "deny"]);
+export type ConfirmationDecision = z.infer<typeof ConfirmationDecisionSchema>;
+
+/** `confirmations.resolve` 的 params。 */
+export const ConfirmationResolveParamsSchema = z.object({
+  /** 要决定的那条确认请求的 id(来自推给确认器的 `confirmation` 事件)。 */
+  confirmation: z.string().min(1),
+  decision: ConfirmationDecisionSchema,
+  /** 人类给的理由(可选,进审计日志)。 */
+  reason: z.string().min(1).optional(),
+});
+
+/**
+ * 一条在途的待确认请求 —— **只有坐标,没有 input**。
+ *
+ * 这不是省字段,是边界:快照与仲裁事件发给**所有**订阅者,而 input 是"人类要亲眼核对的东西"
+ * (防社工话术的关键),它只出现在推给 **confirm-agent** 的 `ConfirmationRequest` 里。有断言守这条。
+ */
+export const PendingConfirmationSchema = z.object({
+  id: z.string().min(1),
+  capability: z.string().min(1),
+  /** 恒为 `dangerous`(只有这一档会进仲裁);写出来是免得客户端去猜。 */
+  risk: RiskLevelSchema,
+  requestedAt: z.string().min(1),
+  /** 超过这个时刻还没人决定就算超时(内核自己算好,客户端不必再拿 timeoutMs 去加)。 */
+  expiresAt: z.string().min(1),
+});
+export type PendingConfirmation = z.infer<typeof PendingConfirmationSchema>;
+
+/** 仲裁面此刻的状态。快照里有一份,变化时也整份推一次(它只有几个标量,增量没有意义)。 */
+export const ArbitrationStateSchema = z.object({
+  /**
+   * 有没有确认器在场。**这就是 dangerous 能不能走通的那条运行时事实**
+   * (ADR 0008 Consequences:「dangerous 的可用性变成一条可观测的运行时事实」)。
+   */
+  confirmerPresent: z.boolean(),
+  confirmers: z.number().int().nonnegative(),
+  subscribers: z.number().int().nonnegative(),
+  /** 确认超时窗口(毫秒)。 */
+  timeoutMs: z.number().int().positive(),
+  pending: z.array(PendingConfirmationSchema),
+});
+export type ArbitrationState = z.infer<typeof ArbitrationStateSchema>;
+
+/**
+ * 推给**确认器**的待确认请求全文。
+ *
+ * `descriptor` 与 `input` 都在:确认器必须能原样展示"这是哪条能力、这次到底要干什么"——
+ * 旧 Swift 宿主那条 `[confirm] <id> key=value` 日志与确认框里的「本次请求参数」就是这件事,
+ * 新架构把它从"日志里的一行"升成了**协议字段**(对等映射见 `test/swift-parity-map.md`)。
+ */
+export const ConfirmationRequestSchema = z.object({
+  id: z.string().min(1),
+  capability: z.string().min(1),
+  /** 完整 manifest —— 确认器不该自己存一份会漂的副本。 */
+  descriptor: CapabilityDescriptorSchema,
+  /** 本次调用的**真实入参**。确认器必须原样呈现(防「agent 替用户点确认」的社工话术)。 */
+  input: z.record(z.string(), JsonValueSchema),
+  requestedAt: z.string().min(1),
+  expiresAt: z.string().min(1),
+});
+export type ConfirmationRequest = z.infer<typeof ConfirmationRequestSchema>;
+
+/**
+ * 审计动作(词表封闭,值即契约)。dangerous 的**每一次**仲裁在这里都留得下痕迹,
+ * 角色进出也留痕 —— 「确认器什么时候在、什么时候走的」是事后复盘 dangerous 可用性的唯一依据。
+ */
+export const AuditActionSchema = z.enum([
+  /** dangerous 调用进了仲裁(此刻还不知道会怎么收场)。 */
+  "requested",
+  /** 确认器批准 —— 只有这一条之后 handler 才会被执行。 */
+  "approved",
+  /** 确认器明确拒绝。 */
+  "denied",
+  /** 等确认超时(fail-closed,超时即拒)。 */
+  "timed_out",
+  /** 无确认器在场,直接默拒(第①层)。 */
+  "unavailable",
+  /** **在途时确认器全部断线** → 立即降回默拒(第③层塌回第①层)。 */
+  "downgraded",
+  "confirmer_joined",
+  "confirmer_left",
+  "subscriber_joined",
+  "subscriber_left",
+  /**
+   * 对端 UID 与内核不符,连接被拒。**留痕的意义在这条上最大** ——
+   * 它是"有别的用户在敲这个 socket"的唯一记录。
+   */
+  "peer_rejected",
+]);
+export type AuditAction = z.infer<typeof AuditActionSchema>;
+
+/** 审计事件里的客户端事实。`uid` 是**唯一被验证过的**那一个,`name` 只是自称。 */
+export const AuditClientSchema = z.object({
+  role: ClientRoleSchema.optional(),
+  /** 自报的名字(不构成身份)。角色事件必带;`peer_rejected` 时还没注册,缺省。 */
+  name: z.string().min(1).optional(),
+  /** 内核校验到的对端 uid。取不到凭据时缺省(见 `daemon/peer.ts` 的口径)。 */
+  uid: z.number().int().nonnegative().optional(),
+});
+export type AuditClient = z.infer<typeof AuditClientSchema>;
+
+/** 一条审计事件(NDJSON 落 `<A2_HOME>/log/arbitration.log`,同时推给订阅者与确认器)。 */
+export const AuditEventSchema = z.object({
+  at: z.string().min(1),
+  action: AuditActionSchema,
+  /** 涉及的能力(角色进出与 `peer_rejected` 缺省)。 */
+  capability: z.string().optional(),
+  /** 确认请求 id(第①层默拒也有一个,好让"请求—收场"能配对)。 */
+  confirmation: z.string().optional(),
+  client: AuditClientSchema.optional(),
+  detail: z.string().optional(),
+});
+export type AuditEvent = z.infer<typeof AuditEventSchema>;
+
+/**
+ * 「有人改了状态」事件 —— **只对 `normal` / `dangerous` 两档发**(`safe` 是只读,发了是噪音)。
+ *
+ * 它带着能力自己的 `output`,所以订阅者可以**直接投影**、不必回头再查一次 —— 那正是「零轮询」
+ * 的实质(壳收到 `proxy.mode.set` 的 output 就知道新模式是什么,不用再发一条 `proxy.status`)。
+ */
+export const CapabilityEventSchema = z.object({
+  capability: z.string().min(1),
+  risk: RiskLevelSchema,
+  output: JsonValueSchema,
+});
+export type CapabilityEvent = z.infer<typeof CapabilityEventSchema>;
+
+/**
+ * 注册那一刻回给客户端的**全量快照**。之后的变化一律走增量推送(`KernelEvent`)。
+ *
+ * 为什么快照就是这五样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求、
+ * 不读一次外部进程 —— 快照必须是廉价且瞬时一致的,否则"注册即快照"会变成一次慢启动。
+ * (代理的实时模式/节点不在此列:那要问 external-controller。壳按需调 `proxy.status` 能力,
+ * 此后靠 `capability` 事件跟进变化 —— 仍然零轮询。)
+ */
+export const KernelSnapshotSchema = z.object({
+  status: StatusResultSchema,
+  /** 能力全集(11 票插件装上后这张表会变,届时随 `capabilities` 事件推增量)。 */
+  capabilities: z.array(CapabilityDescriptorSchema),
+  arbitration: ArbitrationStateSchema,
+  /** 存活监督的当下观测 + 最近事件(07 票的形状原样复用)。 */
+  supervision: ProxySupervisionResultSchema,
+  /** 最近若干条审计事件(全量在 `arbitration.log` 里)。 */
+  audit: z.array(AuditEventSchema),
+});
+export type KernelSnapshot = z.infer<typeof KernelSnapshotSchema>;
+
+/**
+ * 增量推送的事件族(按 `kind` 判别)。**推送对象各不相同**,这是协议的一部分:
+ *   * `confirmation` —— **只推给 confirm-agent**(带 input);
+ *   * `confirmation-pending` —— **只推给发起那次调用的那条连接**(告诉它"我转给人了,最多等这么久");
+ *   * 其余 —— 推给全体已注册连接(确认器 + 订阅者)。
+ */
+export const KernelEventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("arbitration"),
+    at: z.string().min(1),
+    state: ArbitrationStateSchema,
+  }),
+  z.object({
+    kind: z.literal("confirmation"),
+    at: z.string().min(1),
+    request: ConfirmationRequestSchema,
+  }),
+  z.object({
+    kind: z.literal("confirmation-pending"),
+    at: z.string().min(1),
+    /** 对应的请求包封 id —— 客户端据此认出"说的是我这条"。 */
+    requestId: z.string().min(1),
+    /** 内核承诺在此毫秒数内给出最终响应(客户端据此延长等待,**不必与内核共享环境变量**)。 */
+    timeoutMs: z.number().int().positive(),
+    confirmation: PendingConfirmationSchema,
+  }),
+  z.object({ kind: z.literal("audit"), at: z.string().min(1), audit: AuditEventSchema }),
+  z.object({
+    kind: z.literal("supervision"),
+    at: z.string().min(1),
+    supervision: ProxySupervisionEventSchema,
+  }),
+  z.object({
+    kind: z.literal("capability"),
+    at: z.string().min(1),
+    capability: CapabilityEventSchema,
+  }),
+]);
+export type KernelEvent = z.infer<typeof KernelEventSchema>;
+
+/**
+ * 推送帧。与响应包封的判别方式是**结构性的**:响应有 `ok`,推送有 `push`,两者永不同时出现 ——
+ * 客户端一次 `JSON.parse` 就能分流,不必先猜再试。
+ *
+ * `id` 是这条推送自己的 id(不对应任何请求)。唯一的例外语义在 `confirmation-pending` 事件里:
+ * 它自带 `requestId` 指回那条正在等的请求。
+ */
+export const PushEnvelopeSchema = z.object({
+  v: z.literal(PROTOCOL_VERSION),
+  id: z.string().min(1),
+  push: z.literal(true),
+  event: KernelEventSchema,
+});
+export type PushEnvelope = z.infer<typeof PushEnvelopeSchema>;
+
+/** 服务端可能写到连接上的一切:响应 | 推送。长连接客户端按这个解。 */
+export const ServerFrameSchema = z.union([ResponseEnvelopeSchema, PushEnvelopeSchema]);
+export type ServerFrame = z.infer<typeof ServerFrameSchema>;
+
+/** `roles.register` 的 result:确认注册了什么 + 全量快照(**注册与首帧快照是同一次往返**)。 */
+export const RoleRegisterResultSchema = z.object({
+  role: ClientRoleSchema,
+  /** 这条连接在本内核里的 id(进审计,便于把日志与连接对上)。 */
+  connection: z.string().min(1),
+  /**
+   * 内核校验到的对端 uid。**缺省 = 这台机器上取不到 peer credential**(FFI 不可用等)——
+   * 此时连接照常可用,把关的是 `run/` 0700 与 socket 0600 那两道 OS 强制的门(见 `daemon/peer.ts`)。
+   */
+  uid: z.number().int().nonnegative().optional(),
+  /** 本次注册后已持有的全部角色(重复注册幂等,这里能看出连接的真实身份组合)。 */
+  roles: z.array(ClientRoleSchema),
+  snapshot: KernelSnapshotSchema,
+});
+export type RoleRegisterResult = z.infer<typeof RoleRegisterResultSchema>;
+
+/** `confirmations.resolve` 的 result。 */
+export const ConfirmationResolveResultSchema = z.object({
+  confirmation: z.string().min(1),
+  decision: ConfirmationDecisionSchema,
+  /** 恒 true —— 决定没被采纳的情形一律走失败包封(`confirmation_unknown` / `role_not_registered`)。 */
+  settled: z.literal(true),
+});
+export type ConfirmationResolveResult = z.infer<typeof ConfirmationResolveResultSchema>;
+
+/** `arbitration.status` 能力的 output:仲裁面现状 + 审计落点 + 最近事件(「可查询」那一半)。 */
+export const ArbitrationStatusResultSchema = z.object({
+  state: ArbitrationStateSchema,
+  /** 审计事件全量落这儿(NDJSON,一行一条)。 */
+  logPath: z.string().min(1),
+  /** 最近若干条(新的在后);要全量请读 `logPath`。 */
+  events: z.array(AuditEventSchema),
+});
+export type ArbitrationStatusResult = z.infer<typeof ArbitrationStatusResultSchema>;
+
+/**
+ * **仲裁三码的错误载荷** —— `WireError` 的收窄版:`code` 限定在这三个,且 **`guidance` 必填**。
+ *
+ * 它的存在就是为了让「拒绝即指引」不再只是一句注释(04 票 CR 抓到的那处口径不实):
+ * 契约在这里强制,金标样本按这个 schema 登记,活体报文有"除 id/路径外逐字段等于金标"的对照断言。
+ */
+export const ConfirmationErrorSchema = WireErrorSchema.extend({
+  code: z.enum([
+    ErrorCode.confirmationUnavailable,
+    ErrorCode.confirmationDenied,
+    ErrorCode.confirmationTimeout,
+  ]),
+  guidance: GuidanceSchema,
+});
+export type ConfirmationError = z.infer<typeof ConfirmationErrorSchema>;
+
 /** `capabilities.describe` 的 params。 */
 export const CapabilityDescribeParamsSchema = z.object({
   capability: z.string().min(1),
@@ -890,7 +1241,12 @@ export function request(op: string, params?: Record<string, JsonValue>): Request
     : { v: PROTOCOL_VERSION, id: crypto.randomUUID(), op, params };
 }
 
+/** 推送帧(08 票)。`id` 现造 —— 它不对应任何请求。 */
+export function pushEnvelope(event: KernelEvent): PushEnvelope {
+  return { v: PROTOCOL_VERSION, id: crypto.randomUUID(), push: true, event };
+}
+
 /** 编码成一帧(带换行)。 */
-export function encodeFrame(message: RequestEnvelope | ResponseEnvelope): string {
+export function encodeFrame(message: RequestEnvelope | ResponseEnvelope | PushEnvelope): string {
   return `${JSON.stringify(message)}\n`;
 }

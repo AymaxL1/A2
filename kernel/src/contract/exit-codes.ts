@@ -9,7 +9,9 @@
 //            05 票补上「本平台没有已支持的 supervisor」;
 //   2/5   —— 04 票(dangerous 默拒 = 2、能力业务失败 = 5);05 票把 5 的口径从「能力业务失败」放宽成
 //            **「路走通了、事没办成」**(service 操作失败同档:装了没跑起来、supervisor 命令非零退出);
-//   3     —— 尚无产出面(客户端超时目前按 daemon 不可达归 4;确认超时归 08 票)。
+//            08 票给 2 补上另外两个来源:确认器明确拒绝、对端 UID 不符;
+//   3     —— **08 票起有唯一产出面:`confirmation_timeout`**(确认器在场却没人做决定)。
+//            客户端等不到响应仍归 4 —— "没人点"与"这条路走不通"是两件事。
 
 import { ErrorCode } from "./wire.ts";
 
@@ -43,9 +45,16 @@ export function exitCodeForErrorCode(code: string): number {
     // 「已经在跑」不是能力失败也不是协议错,而是"你这条命令这会儿不该发" —— 与用法错同一档。
     case ErrorCode.daemonAlreadyRunning:
       return ExitCode.usage;
-    // dangerous 被拒(本版唯一的来源是"无确认器"的 fail-closed 默拒;08 票的用户拒绝/超时也归这档)。
+    // dangerous 被拒的两种:没人能替你确认(第①层默拒 / 在途降级)、有人看了但不同意(第③层)。
     case ErrorCode.confirmationUnavailable:
+    case ErrorCode.confirmationDenied:
+    // 对端 UID 不符 = 这条连接被**拒绝**,与 dangerous 被拒同一档(都是"不许",不是"你敲错了")。
+    case ErrorCode.peerRejected:
       return ExitCode.denied;
+    // 3 的首个也是唯一的产出面(08 票裁定):**确认器在场但没人做决定**。
+    // 客户端连不上/等不到响应仍归 4(那是"这条路走不通"),与"人没点"是两件事。
+    case ErrorCode.confirmationTimeout:
+      return ExitCode.timeout;
     // 能力执行了但业务失败 —— 与"没执行成"分开,agent 据此决定要不要改参数重试。
     case ErrorCode.capabilityFailed:
     // service 操作同理:unit 写了、命令发了,但事没办成(supervisor 报错 / 装完没跑起来)。
@@ -75,6 +84,9 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.serviceUnsupportedPlatform:
     // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
     case ErrorCode.systemProxyUnsupported:
+    // 长连接协议面的两条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活。
+    case ErrorCode.confirmationUnknown:
+    case ErrorCode.roleNotRegistered:
       return ExitCode.protocolError;
     default:
       return ExitCode.protocolError;

@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "id": "018f3b1c-0a5a-7c3e-9f2b-1d4e5f6a7b8e",
+  "ok": false,
+  "error": {
+    "code": "confirmation_denied",
+    "message": "demo.wipe 的确认被拒绝,未执行。",
+    "detail": "拒绝理由:这台机器上不许 wipe。决定由带外的确认器做出,内核不复议、也不提供任何旁路。",
+    "guidance": {
+      "summary": "这次 dangerous 调用被人类拒绝了 —— 请把这条原样转告用户,由用户决定要不要再来一次。",
+      "steps": [
+        { "description": "确认这确实是用户想做的事(核对下面 context 里的能力与参数)" },
+        {
+          "description": "如果确实要做,请由用户重新发起,并在确认器上亲自点「允许」",
+          "command": "a2 capabilities describe demo.wipe --json"
+        }
+      ],
+      "context": {
+        "capability": "demo.wipe",
+        "risk": "dangerous",
+        "home": "/Users/alice/.a2",
+        "socketPath": "/Users/alice/.a2/run/kernel.sock",
+        "reason": "这台机器上不许 wipe"
+      }
+    }
+  }
+}

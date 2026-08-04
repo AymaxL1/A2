@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "id": "018f3b1c-7777-7c3e-9f2b-1d4e5f6a7b8d",
+  "push": true,
+  "event": {
+    "kind": "supervision",
+    "at": "2026-08-05T04:03:15.000Z",
+    "supervision": {
+      "at": "2026-08-05T04:03:15.000Z",
+      "kind": "instance_down",
+      "controller": "127.0.0.1:9090",
+      "owner": "foreign",
+      "detail": "GET http://127.0.0.1:9090/version 失败:ConnectionRefused"
+    }
+  }
+}

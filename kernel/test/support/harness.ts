@@ -167,11 +167,16 @@ export async function waitForSocket(socketPath: string, timeoutMs = 5000): Promi
 }
 
 /**
- * 直连 UDS 发一行 JSON、读一行响应 —— 用于 UDS 协议面(绕开 CLI)的断言。
+ * 直连 UDS 发一行 JSON、读回**属于这条请求的那一行响应** —— 用于 UDS 协议面(绕开 CLI)的断言。
  *
  * **有意不复用 `src/contract/ndjson.ts` 与 `src/client/uds-client.ts`**:这是测试对线协议的**独立实现**。
  * 若拆行或帧格式在实现侧写歪了,用被测代码去读被测代码的输出只会一起歪、测试照绿;这里手写一遍,
- * 才能让"实现改了行为"与"契约变了"吵起来。08 票把 UDS 改成长连接时,这份夹具应当**独立地**跟着改。
+ * 才能让"实现改了行为"与"契约变了"吵起来。
+ *
+ * **08 票的长连接改造在这里是独立做的**(04 票交接单的要求):连接上现在可能先来若干**推送帧**
+ * (`{"push":true,…}`),响应才在后面。判据是**结构性的**:有 `ok` 的是响应,有 `push` 的是推送。
+ * 这里刻意手写这条判据,而不是 import 契约里的 `ServerFrameSchema` —— 判别方式若被实现悄悄改了,
+ * 这份夹具要能吵起来。推送帧一律丢弃(要收推送请用 `fake-client.ts`)。
  */
 export async function sendRawLine(socketPath: string, line: string, timeoutMs = 5000): Promise<string> {
   let resolveResponse: (value: string) => void;
@@ -186,8 +191,16 @@ export async function sendRawLine(socketPath: string, line: string, timeoutMs = 
     socket: {
       data(_socket, chunk) {
         buffer += chunk.toString();
-        const newline = buffer.indexOf("\n");
-        if (newline >= 0) resolveResponse(buffer.slice(0, newline));
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const frame = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (frame.trim().length > 0 && !isPushFrame(frame)) {
+            resolveResponse(frame);
+            return;
+          }
+          newline = buffer.indexOf("\n");
+        }
       },
       error(_socket, error) {
         rejectResponse(error as Error);
@@ -204,5 +217,15 @@ export async function sendRawLine(socketPath: string, line: string, timeoutMs = 
   } finally {
     clearTimeout(timer);
     socket.end();
+  }
+}
+
+/** 一帧是不是推送(而不是响应)。手写判据,见 `sendRawLine` 文件内注释的理由。 */
+function isPushFrame(frame: string): boolean {
+  try {
+    const parsed = JSON.parse(frame);
+    return parsed !== null && typeof parsed === "object" && (parsed as { push?: unknown }).push === true;
+  } catch {
+    return false;
   }
 }

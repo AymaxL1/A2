@@ -1,0 +1,64 @@
+{
+  "status": {
+    "state": "running",
+    "version": "0.1.0",
+    "protocol": 1,
+    "pid": 4242,
+    "startedAt": "2026-08-05T04:00:00.000Z",
+    "uptimeMs": 600000,
+    "home": "/Users/alice/.a2",
+    "socketPath": "/Users/alice/.a2/run/kernel.sock"
+  },
+  "capabilities": [
+    {
+      "id": "proxy.status",
+      "risk": "safe",
+      "summary": "报告代理控制面实况(只读)",
+      "parameters": [],
+      "cliAlias": ["proxy", "status"]
+    },
+    {
+      "id": "proxy.subscription.add",
+      "risk": "dangerous",
+      "summary": "新增或替换订阅源(dangerous)",
+      "parameters": [
+        { "name": "name", "type": "string", "required": true, "description": "订阅展示名" },
+        { "name": "source", "type": "string", "required": true, "description": "订阅源" }
+      ],
+      "cliAlias": ["proxy", "subscription", "add"]
+    }
+  ],
+  "arbitration": {
+    "confirmerPresent": true,
+    "confirmers": 1,
+    "subscribers": 1,
+    "timeoutMs": 120000,
+    "pending": []
+  },
+  "supervision": {
+    "watching": true,
+    "intervalMs": 5000,
+    "checks": 120,
+    "target": { "owner": "a2", "controller": "127.0.0.1:9097", "managed": true },
+    "alive": true,
+    "lastCheckAt": "2026-08-05T04:09:55.000Z",
+    "lastTransitionAt": "2026-08-05T04:00:00.000Z",
+    "logPath": "/Users/alice/.a2/log/proxy-supervision.log",
+    "events": [
+      {
+        "at": "2026-08-05T04:00:00.000Z",
+        "kind": "watch_started",
+        "controller": "127.0.0.1:9097",
+        "owner": "a2"
+      }
+    ]
+  },
+  "audit": [
+    {
+      "at": "2026-08-05T04:09:00.000Z",
+      "action": "confirmer_joined",
+      "client": { "role": "confirm-agent", "name": "a2-panel", "uid": 501 },
+      "detail": "连接注册为 confirm-agent。V1 不校验身份声明(已知边界:同 UID 冒充)。"
+    }
+  ]
+}

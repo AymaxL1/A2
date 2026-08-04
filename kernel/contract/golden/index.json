@@ -373,6 +373,144 @@
       "schema": "ProxyLatencyResult",
       "kind": "invalid",
       "why": "延迟不可能是负数(负延迟只能来自解析出错)"
+    },
+    {
+      "file": "role-register-params.json",
+      "schema": "RoleRegisterParams",
+      "kind": "valid",
+      "why": "角色注册请求:加固字段(cdhash/团队 ID)**V1 收下但不校验**,同 UID 冒充是已知边界"
+    },
+    {
+      "file": "invalid-role-register-params-unknown-role.json",
+      "schema": "RoleRegisterParams",
+      "kind": "invalid",
+      "why": "角色词表封闭:只有 confirm-agent 与 subscriber,没有 `admin` 这种东西"
+    },
+    {
+      "file": "confirmation-resolve-params.json",
+      "schema": "ConfirmationResolveParams",
+      "kind": "valid",
+      "why": "确认器回一个决定:只有 approve/deny 两种,「不理」不是决定(那是超时,内核自己裁)"
+    },
+    {
+      "file": "confirmation-resolve-result.json",
+      "schema": "ConfirmationResolveResult",
+      "kind": "valid",
+      "why": "决定被采纳:settled 恒 true —— 没被采纳的情形一律走失败包封"
+    },
+    {
+      "file": "pending-confirmation.json",
+      "schema": "PendingConfirmation",
+      "kind": "valid",
+      "why": "在途确认的**坐标**:只有 id/能力/风险/时刻,**没有 input**(订阅者看得到这一份)"
+    },
+    {
+      "file": "confirmation-request.json",
+      "schema": "ConfirmationRequest",
+      "kind": "valid",
+      "why": "推给确认器的**全文**:含 manifest 与本次真实入参(确认器必须原样呈现,防社工话术)"
+    },
+    {
+      "file": "arbitration-state.json",
+      "schema": "ArbitrationState",
+      "kind": "valid",
+      "why": "仲裁面状态:确认器在不在场 = dangerous 能不能走通,是一条可观测的运行时事实"
+    },
+    {
+      "file": "audit-event-approved.json",
+      "schema": "AuditEvent",
+      "kind": "valid",
+      "why": "审计一条:自称的 name 与验过的 uid **分开记**,事后复盘不会把自称当事实"
+    },
+    {
+      "file": "invalid-audit-event-unknown-action.json",
+      "schema": "AuditEvent",
+      "kind": "invalid",
+      "why": "审计动作词表封闭:`auto_approved` 不存在 —— 内核没有任何自动批准的路径"
+    },
+    {
+      "file": "capability-event.json",
+      "schema": "CapabilityEvent",
+      "kind": "valid",
+      "why": "状态变化事件带着能力自己的 output —— 订阅者据此直接投影(零轮询的实质)"
+    },
+    {
+      "file": "kernel-snapshot.json",
+      "schema": "KernelSnapshot",
+      "kind": "valid",
+      "why": "注册那一刻回的全量快照:状态 / 能力全集 / 仲裁面 / 存活监督 / 审计,一次往返全给"
+    },
+    {
+      "file": "arbitration-status-result.json",
+      "schema": "ArbitrationStatusResult",
+      "kind": "valid",
+      "why": "`arbitration.status` 的 output:仲裁面现状 + 审计落点 + 最近事件(「可查询」那一半)"
+    },
+    {
+      "file": "push-confirmation.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧(只发给 confirm-agent):待确认请求全文。判别是结构性的 —— 有 push、无 ok"
+    },
+    {
+      "file": "push-confirmation-pending.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧(只发给发起方):「转给人了,最多等 timeoutMs」—— 客户端据此延长等待,不共享环境变量"
+    },
+    {
+      "file": "push-arbitration.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧:确认器进出即整份推一次仲裁面状态(它只有几个标量,增量没有意义)"
+    },
+    {
+      "file": "push-audit-denied.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧:审计增量。dangerous 的每一次收场都推得出去,壳据此显示「刚刚发生了什么」"
+    },
+    {
+      "file": "push-supervision-down.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧:存活监督事件(07 票的载荷形状**一字未改**,08 票只是多了一个去处)"
+    },
+    {
+      "file": "push-capability.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧:normal/dangerous 档调用成功后的状态变化(safe 只读不发,免得成噪音)"
+    },
+    {
+      "file": "invalid-push-envelope-unknown-event.json",
+      "schema": "PushEnvelope",
+      "kind": "invalid",
+      "why": "事件 kind 词表封闭:`gossip` 不是已登记事件"
+    },
+    {
+      "file": "response-confirmation-denied.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "第③层的一种收场:**人看过了,他不同意**(与「没人能替你确认」是两件事);退出码 2"
+    },
+    {
+      "file": "response-confirmation-timeout.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "第③层的另一种收场:确认器在场但没人做决定 —— 沉默不构成同意;退出码 3 的唯一产出面"
+    },
+    {
+      "file": "confirmation-error-unavailable.json",
+      "schema": "ConfirmationError",
+      "kind": "valid",
+      "why": "仲裁三码的收窄契约:code 限三选一,且 **guidance 必填**(「拒绝即指引」由 schema 强制,不是靠注释)"
+    },
+    {
+      "file": "invalid-confirmation-error-missing-guidance.json",
+      "schema": "ConfirmationError",
+      "kind": "invalid",
+      "why": "仲裁类拒绝**不带 guidance 就是违约** —— 这条样本是 04 票 CR 那处「注释说必填、schema 说可选」的了结"
     }
   ]
 }

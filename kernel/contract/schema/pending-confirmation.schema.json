@@ -1,0 +1,39 @@
+{
+  "title": "PendingConfirmation",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "normal",
+        "dangerous"
+      ]
+    },
+    "requestedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expiresAt": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "id",
+    "capability",
+    "risk",
+    "requestedAt",
+    "expiresAt"
+  ],
+  "additionalProperties": false
+}

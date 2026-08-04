@@ -1,0 +1,8 @@
+{
+  "at": "2026-08-05T04:10:07.000Z",
+  "action": "approved",
+  "capability": "proxy.subscription.add",
+  "confirmation": "018f3b1c-1111-7c3e-9f2b-1d4e5f6a7b8d",
+  "client": { "role": "confirm-agent", "name": "a2-panel", "uid": 501 },
+  "detail": "确认器批准"
+}

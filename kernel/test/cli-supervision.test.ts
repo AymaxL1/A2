@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { ProxySupervisionResultSchema } from "../src/contract/wire.ts";
+import { connectFakeClient } from "./support/fake-client.ts";
 import { runCli, stopDaemon } from "./support/harness.ts";
 import {
   cleanupProxySandbox,
@@ -197,3 +198,41 @@ test("观测是只读的:整场没有对系统代理发过任何写调用", asyn
   expect(await networkCalls(box)).toEqual([]);
   expect(await networkState(box)).toEqual(INITIAL_NETWORK_STATE);
 }, 30000);
+
+// MARK: - 08 票:同一份事件推给订阅者(07 票留的账)
+//
+// 07 票在 `proxy/supervision.ts` 文件头写下:「本票产出的 ProxySupervisionEvent **就是**将来要推的
+// 那份载荷,形状不变 —— 08 票只需把它发出去」。下面这条就是那句话的活体证据:
+// 订阅者收到的 `supervision` 事件与 `proxy supervision` 查到的那一条**逐字段相等**。
+
+test("supervision:事件同时推给订阅者,载荷与查询到的那一条逐字段相等(零轮询)", async () => {
+  const box = (sandbox = await makeProxySandbox({ groups: GROUPS }));
+  await provisionManaged(box);
+  await startProxyDaemon(box);
+
+  const subscriber = await connectFakeClient({
+    socketPath: box.daemon!.socketPath,
+    name: "fake-shell",
+  });
+  try {
+    await subscriber.register("subscriber");
+
+    // 让实例掉下去 —— 这是"状态真的变了"的那一刻。
+    const pid = await managedPid(box);
+    process.kill(pid, "SIGKILL");
+    await waitFor("mihomo 进程真的没了", () => !isAlive(pid));
+
+    const pushed = await subscriber.waitForEvent(
+      (event) => event.kind === "supervision" && event.supervision.kind === "instance_down",
+      10000,
+    );
+    const queried = await waitForEvent(box, "instance_down");
+
+    // **同一份载荷**:07 票的形状一字未改,08 票只是多了一个去处。
+    expect(pushed.supervision).toEqual(queried);
+    // 订阅者除了那一次注册,一条请求都没发过。
+    expect(subscriber.sent).toEqual(["roles.register"]);
+  } finally {
+    await subscriber.close();
+  }
+}, 40000);

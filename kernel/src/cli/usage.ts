@@ -19,6 +19,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   capabilities …       能力面:list / describe <id> / call <id>(见 a2 capabilities --help)
   proxy …              代理控制面:on / off / status / mode / node / groups / ping / config /
                        subscription … / supervision(见 a2 proxy --help)
+  arbitration status   dangerous 三层仲裁面:确认器在不在场、在途确认、审计事件(见 a2 arbitration --help)
   service …            常驻服务:install / uninstall / status(见 a2 service --help)
   mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
@@ -153,6 +154,38 @@ export const PROXY_USAGE = `a2 proxy —— 代理控制面(域子命令 = 能�
 
 退出码:0 成功 / 1 用法错 / 2 dangerous 被拒 / 4 daemon 不可达 / 5 事没办成 / 6 参数或平台不成立`;
 
+export const ARBITRATION_USAGE = `a2 arbitration —— dangerous 三层仲裁面(只读查询)
+
+用法:
+  a2 [--json] arbitration status   看确认器在不在场、有没有在途确认、最近的审计事件(safe)
+
+三层仲裁(ADR 0005 修订后第 4 条):
+  ① 无确认器在场    → confirmation_unavailable(fail-closed 默拒,退出码 2)
+  ② 拒绝即指引      → 每条拒绝都带机器可读的「人类如何完成」精确命令(agent 只转告)
+  ③ 有确认器在场    → 带外确认,三种收场:
+                       批准     → 照常执行(退出码 0)
+                       拒绝     → confirmation_denied(退出码 2)
+                       无人应答 → confirmation_timeout(退出码 3;沉默不构成同意)
+
+在场 = 长连接:确认器在 UDS 上注册 confirm-agent 角色并保持连接;**断线即离场**,
+在途的 dangerous 请求立即降回 ①(confirmation_unavailable)。无心跳、无 TTL、无陈旧窗口。
+
+永远没有的东西:--yes 类旁路、TTY 交互确认(isatty 不构成人类证明)、经 AI agent 之手的确认。
+
+审计:每一次仲裁与每一次角色进出都落 <A2_HOME>/log/arbitration.log(NDJSON,一行一条),
+同时推给在场的长连接;最近若干条经本命令可查。
+
+环境变量:
+  A2_CONFIRM_TIMEOUT_MS  覆写确认超时窗口(默认 120000)。仅测试与诊断用
+
+退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 6 参数不合契约`;
+
+/** 域名 → 该域的用法文本。域子命令面统一从这里取(没登记的域退回顶层帮助)。 */
+export const DOMAIN_USAGE: Record<string, string> = {
+  proxy: PROXY_USAGE,
+  arbitration: ARBITRATION_USAGE,
+};
+
 /** 帮助 = 一条成功包封(机读面无例外)+ 人类面原文。 */
 export function helpOutcome(usage: string): CommandOutcome {
   return {
@@ -212,11 +245,16 @@ export function serviceUsageOutcome(message: string): CommandOutcome {
  * 域子命令面的用法错。指引里除了帮助之外,**把这个域实际有哪些写法逐条列出来** ——
  * 别名表是内核说了算的(插件也会往里加),所以这里给的是刚刚从 daemon 拿到的那一份,不是写死的散文。
  */
-export function domainUsageOutcome(message: string, hints: string[]): CommandOutcome {
+export function domainUsageOutcome(
+  domain: string,
+  message: string,
+  hints: string[],
+): CommandOutcome {
+  const base = DOMAIN_USAGE[domain] ?? USAGE;
   return usageOutcome(message, {
-    usage: hints.length > 0 ? `${PROXY_USAGE}\n\n本内核当前实际登记的写法:\n  ${hints.join("\n  ")}` : PROXY_USAGE,
+    usage: hints.length > 0 ? `${base}\n\n本内核当前实际登记的写法:\n  ${hints.join("\n  ")}` : base,
     steps: [
-      { description: "打印代理面用法", command: "a2 proxy --help" },
+      { description: `打印 ${domain} 面用法`, command: `a2 ${domain} --help` },
       { description: "列出本内核实际提供的能力(含风险档与参数)", command: "a2 capabilities list --json" },
     ],
   });

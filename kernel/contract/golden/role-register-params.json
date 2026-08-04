@@ -1,0 +1,9 @@
+{
+  "role": "confirm-agent",
+  "identity": {
+    "name": "a2-panel",
+    "version": "1.0.0",
+    "codeDirectoryHash": "预留字段:V1 内核收下但不校验",
+    "teamIdentifier": "预留字段:V1 内核收下但不校验"
+  }
+}

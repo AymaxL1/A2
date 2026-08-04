@@ -1,0 +1,436 @@
+{
+  "title": "KernelSnapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "const": "running"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol": {
+          "type": "number",
+          "const": 1
+        },
+        "pid": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "startedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uptimeMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "home": {
+          "type": "string",
+          "minLength": 1
+        },
+        "socketPath": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "state",
+        "version",
+        "protocol",
+        "pid",
+        "startedAt",
+        "uptimeMs",
+        "home",
+        "socketPath"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "safe",
+              "normal",
+              "dangerous"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "object",
+                    "array"
+                  ]
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "allowedValues": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "required",
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "cliAlias": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "id",
+          "risk",
+          "summary",
+          "parameters"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "arbitration": {
+      "type": "object",
+      "properties": {
+        "confirmerPresent": {
+          "type": "boolean"
+        },
+        "confirmers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "subscribers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "capability": {
+                "type": "string",
+                "minLength": 1
+              },
+              "risk": {
+                "type": "string",
+                "enum": [
+                  "safe",
+                  "normal",
+                  "dangerous"
+                ]
+              },
+              "requestedAt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expiresAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "capability",
+              "risk",
+              "requestedAt",
+              "expiresAt"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "confirmerPresent",
+        "confirmers",
+        "subscribers",
+        "timeoutMs",
+        "pending"
+      ],
+      "additionalProperties": false
+    },
+    "supervision": {
+      "type": "object",
+      "properties": {
+        "watching": {
+          "type": "boolean"
+        },
+        "intervalMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "checks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "enum": [
+                "a2",
+                "foreign"
+              ]
+            },
+            "controller": {
+              "type": "string",
+              "minLength": 1
+            },
+            "managed": {
+              "type": "boolean"
+            },
+            "configPath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "controller",
+            "managed"
+          ],
+          "additionalProperties": false
+        },
+        "alive": {
+          "type": "boolean"
+        },
+        "lastCheckAt": {
+          "type": "string"
+        },
+        "lastTransitionAt": {
+          "type": "string"
+        },
+        "logPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "watch_started",
+                  "instance_up",
+                  "instance_down",
+                  "target_changed",
+                  "watch_stopped"
+                ]
+              },
+              "controller": {
+                "type": "string",
+                "minLength": 1
+              },
+              "owner": {
+                "type": "string",
+                "enum": [
+                  "a2",
+                  "foreign"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              },
+              "guidance": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "steps": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "command": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "context": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "summary",
+                  "steps"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "at",
+              "kind",
+              "controller",
+              "owner"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "watching",
+        "intervalMs",
+        "checks",
+        "logPath",
+        "events"
+      ],
+      "additionalProperties": false
+    },
+    "audit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "approved",
+              "denied",
+              "timed_out",
+              "unavailable",
+              "downgraded",
+              "confirmer_joined",
+              "confirmer_left",
+              "subscriber_joined",
+              "subscriber_left",
+              "peer_rejected"
+            ]
+          },
+          "capability": {
+            "type": "string"
+          },
+          "confirmation": {
+            "type": "string"
+          },
+          "client": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "confirm-agent",
+                  "subscriber"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uid": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status",
+    "capabilities",
+    "arbitration",
+    "supervision",
+    "audit"
+  ],
+  "additionalProperties": false
+}

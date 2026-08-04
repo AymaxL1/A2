@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "id": "018f3b1c-0a5a-7c3e-9f2b-1d4e5f6a7b8f",
+  "ok": false,
+  "error": {
+    "code": "confirmation_timeout",
+    "message": "demo.wipe 等待确认超时(120000ms),按 fail-closed 拒绝执行。",
+    "detail": "确认请求已送达确认器,但在超时窗口内没有人做决定。沉默不构成同意。",
+    "guidance": {
+      "summary": "确认器在场但没人应答 —— 请用户到确认器上处理,然后重新发起这次调用。",
+      "steps": [
+        { "description": "回到菜单栏图标,看有没有一个待处理的确认框(可能被别的窗口挡住了)" },
+        {
+          "description": "处理完之后重新发起这次调用",
+          "command": "a2 capabilities describe demo.wipe --json"
+        }
+      ],
+      "context": {
+        "capability": "demo.wipe",
+        "risk": "dangerous",
+        "timeoutMs": "120000",
+        "home": "/Users/alice/.a2",
+        "socketPath": "/Users/alice/.a2/run/kernel.sock"
+      }
+    }
+  }
+}

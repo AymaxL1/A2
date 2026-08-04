@@ -1,0 +1,28 @@
+{
+  "title": "ConfirmationResolveResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confirmation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "deny"
+      ]
+    },
+    "settled": {
+      "type": "boolean",
+      "const": true
+    }
+  },
+  "required": [
+    "confirmation",
+    "decision",
+    "settled"
+  ],
+  "additionalProperties": false
+}

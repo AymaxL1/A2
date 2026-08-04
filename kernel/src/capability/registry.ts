@@ -60,13 +60,23 @@ export class CapabilityFailedError extends Error {
 }
 
 /**
- * 仲裁上下文。`confirmerPresent` 是**运行时事实**(08 票:确认器长连接在场即 true,断线即 false),
- * 04 票恒 false —— 内核此时还没有任何确认通道,dangerous 一律走第①层默拒。
+ * 仲裁上下文 —— 注册表与「谁能替人做决定」之间**唯一的缝**(08 票把 04 票留的那个布尔缝长成了它)。
+ *
+ * 三个成员对应 ADR 0005 修订后第 4 条的三层,顺序即安全语义:
+ *   * `confirmerPresent()` —— **运行时事实**:注册了 confirm-agent 角色的长连接数 > 0。
+ *     「在场 = 长连接」,所以它每次现问,绝不缓存。
+ *   * `refuseWithoutConfirmer()` —— 第①层 fail-closed 默拒的报文(顺带留痕)。
+ *   * `confirm()` —— 第③层带外确认。放行返回 `undefined`;三种拒绝各返回一条 `WireError`。
+ *
+ * 注册表**只认这三件事**:它不知道确认器是菜单栏壳还是别的什么,也不知道确认是怎么送到人眼前的。
  */
 export interface ArbitrationContext {
-  confirmerPresent: boolean;
-  /** 只用于把展开后的路径写进 guidance.context(agent 免猜)。 */
-  paths: KernelPaths;
+  confirmerPresent(): boolean;
+  refuseWithoutConfirmer(descriptor: CapabilityDescriptor): WireError;
+  confirm(
+    descriptor: CapabilityDescriptor,
+    input: CapabilityInput,
+  ): Promise<WireError | undefined>;
 }
 
 export class DuplicateCapabilityError extends Error {
@@ -119,6 +129,9 @@ export class CapabilityRegistry {
    * 调用一个能力。四步,顺序即安全语义:
    *   ①认得这个 id 吗 → ②参数合不合声明 → ③这一档准不准调(dangerous 仲裁)→ ④执行。
    * ③ 在 ④ 之前:被拒时 handler **一次都不会被碰到**(有"响应里绝不含 handler 产物"的反证断言)。
+   *
+   * 第③步内部又是三层(ADR 0005 修订后第 4 条),这里是它在代码里的全貌:
+   * 没有确认器就默拒;有确认器就把这次调用交出去等一个带外的决定;拒绝与超时各有各的报文。
    */
   async invoke(
     id: string,
@@ -131,8 +144,15 @@ export class CapabilityRegistry {
     const invalid = validateInput(capability.descriptor, input);
     if (invalid) return opFailure(invalid);
 
-    if (capability.descriptor.risk === "dangerous" && !context.confirmerPresent) {
-      return opFailure(confirmationUnavailableError(capability.descriptor, context.paths));
+    if (capability.descriptor.risk === "dangerous") {
+      // 第①层:一个确认器都没有 → fail-closed。**先问再等**,顺序不能反 ——
+      // 反了就成了"先把请求挂起、再发现没人能确认",那正是 spec 拒绝的"超时猜谜"。
+      if (!context.confirmerPresent()) {
+        return opFailure(context.refuseWithoutConfirmer(capability.descriptor));
+      }
+      // 第③层:带外确认。放行才往下走;拒绝/超时/在途降级各自带一条报文回去。
+      const refusal = await context.confirm(capability.descriptor, input);
+      if (refusal) return opFailure(refusal);
     }
 
     try {
@@ -155,10 +175,17 @@ export class CapabilityRegistry {
   }
 }
 
+// MARK: - 仲裁三层各自的拒绝报文
+//
+// 三条放在一起,是为了让「三层仲裁」在代码里也能一眼读全:没人能确认 / 有人不同意 / 有人但没人应答。
+// 三条**都必带 guidance**(第②层「拒绝即指引」是无条件的),契约上由 `ConfirmationErrorSchema` 强制。
+
 /**
  * dangerous + 无确认器 = **默拒**(ADR 0005 第 4 条第①层),报文自带「人类如何完成」(第②层)。
  *
- * 这条报文的形状对 08 票是**稳定契约**:届时确认器在场会走带外确认,不在场时仍然原样返回这一条。
+ * 这条报文的形状对 08 票是**稳定契约,已兑现:一字未改**。08 票新增的是 `confirmation_denied` /
+ * `confirmation_timeout`,并把**在途降级**(挂起中确认器全断)也归到本条 —— 对发起方而言,
+ * 「一个确认器都没有」与「刚才有、现在没了」是同一件事:此刻没人能替你确认。
  * 指引里的 `open -a "A2 Panel"` 指向 10 票才交付的壳 —— 与 `a2 service install`(05 票)同一种处置:
  * 指引说的是**这条路怎么走通**,不是"现在就能走通"。
  */
@@ -184,6 +211,77 @@ export function confirmationUnavailableError(
       context: {
         capability: descriptor.id,
         risk: descriptor.risk,
+        home: paths.home,
+        socketPath: paths.socketPath,
+      },
+    },
+  };
+}
+
+/**
+ * dangerous + 确认器**明确点了拒绝** = 第③层的一种收场。
+ *
+ * 与默拒的分别值得写下来:默拒说的是"这条路此刻走不通",而这一条说的是**"人看过了,他不同意"** ——
+ * agent 收到它就该停手并把理由转告,而不是去想办法把确认器弄起来(那是默拒的指引)。
+ */
+export function confirmationDeniedError(
+  descriptor: CapabilityDescriptor,
+  paths: KernelPaths,
+  reason?: string,
+): WireError {
+  return {
+    code: ErrorCode.confirmationDenied,
+    message: `${descriptor.id} 的确认被拒绝,未执行。`,
+    detail:
+      (reason ? `拒绝理由:${reason}。` : "确认器未给出理由。") +
+      "决定由带外的确认器做出,内核不复议、也不提供任何旁路。",
+    guidance: {
+      summary: "这次 dangerous 调用被人类拒绝了 —— 请把这条原样转告用户,由用户决定要不要再来一次。",
+      steps: [
+        { description: "确认这确实是用户想做的事(核对下面 context 里的能力与参数)" },
+        {
+          description: "如果确实要做,请由用户重新发起,并在确认器上亲自点「允许」",
+          command: `a2 capabilities describe ${descriptor.id} --json`,
+        },
+      ],
+      context: {
+        capability: descriptor.id,
+        risk: descriptor.risk,
+        home: paths.home,
+        socketPath: paths.socketPath,
+        ...(reason === undefined ? {} : { reason }),
+      },
+    },
+  };
+}
+
+/**
+ * dangerous + 确认器在场、请求也送到了,但**没人在窗口内做决定** = 第③层的另一种收场。
+ *
+ * 超时即拒绝(fail-closed):内核绝不因为"没人反对"就放行 —— 沉默不是同意。
+ */
+export function confirmationTimeoutError(
+  descriptor: CapabilityDescriptor,
+  paths: KernelPaths,
+  timeoutMs: number,
+): WireError {
+  return {
+    code: ErrorCode.confirmationTimeout,
+    message: `${descriptor.id} 等待确认超时(${timeoutMs}ms),按 fail-closed 拒绝执行。`,
+    detail: "确认请求已送达确认器,但在超时窗口内没有人做决定。沉默不构成同意。",
+    guidance: {
+      summary: "确认器在场但没人应答 —— 请用户到确认器上处理,然后重新发起这次调用。",
+      steps: [
+        { description: "回到菜单栏图标,看有没有一个待处理的确认框(可能被别的窗口挡住了)" },
+        {
+          description: "处理完之后重新发起这次调用",
+          command: `a2 capabilities describe ${descriptor.id} --json`,
+        },
+      ],
+      context: {
+        capability: descriptor.id,
+        risk: descriptor.risk,
+        timeoutMs: String(timeoutMs),
         home: paths.home,
         socketPath: paths.socketPath,
       },

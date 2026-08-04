@@ -1,0 +1,184 @@
+// 测试夹具:一个**长连接客户端**(假确认器 / 假订阅者)。
+//
+// 它是 08 票协议面的被测缝:注册角色、收全量快照、收增量推送、回一个确认决定。
+// 门禁里没有真的菜单栏壳(那是 10 票),但协议不该等壳出来才有活体验证 —— 这个夹具就是那个替身。
+//
+// **有意不复用 `src/` 里的任何一行**(与 `harness.ts` 同一条纪律,04 票 CR 尾款 f 定的口径):
+// 拆行、帧判别、请求-响应相关性,这里全部手写一遍。用被测代码去读被测代码的输出,写歪了会一起歪。
+// 判别帧的规则也刻意手写成"有 ok 的是响应、有 push 的是推送",这样契约若改了判别方式,这里会吵。
+
+import { setTimeout as delay } from "node:timers/promises";
+
+/** 收到确认请求时这个假确认器怎么办。`ignore` 是给超时那条断言用的(沉默不构成同意)。 */
+export type ConfirmBehavior = "approve" | "deny" | "ignore";
+
+export interface FakeClientOptions {
+  socketPath: string;
+  /** 自报的名字(**不构成身份**;内核只把它记进审计)。 */
+  name?: string;
+  /** 注册报文里的加固字段。V1 内核不校验 —— 有断言证明"填了也不会被当真"。 */
+  codeDirectoryHash?: string;
+  teamIdentifier?: string;
+  /** 只对确认器有意义。 */
+  behavior?: ConfirmBehavior;
+  /** 拒绝时给的理由(进审计与拒绝报文)。 */
+  reason?: string;
+}
+
+export interface FakeClient {
+  /** 在这条连接上注册一个角色,返回内核回的 result(含全量快照)。 */
+  register(role: "confirm-agent" | "subscriber"): Promise<any>;
+  /** 在这条连接上发一条普通请求,拿它的响应包封。 */
+  request(op: string, params?: Record<string, unknown>): Promise<any>;
+  /** 至今收到的全部推送事件(按到达顺序)。 */
+  events(kind?: string): any[];
+  /** 等一个满足条件的推送事件(默认 5s)。 */
+  waitForEvent(predicate: (event: any) => boolean, timeoutMs?: number): Promise<any>;
+  /** 这个假确认器至今回过的决定(便于断言"它确实被问过")。 */
+  resolved: { confirmation: string; decision: ConfirmBehavior }[];
+  /**
+   * 这个客户端**主动发出去过的每一条 op**。「零轮询」这条断言就靠它:
+   * 订阅者除了那一次 `roles.register` 之外一条请求都不该发,却照样收得到状态变化。
+   */
+  sent: string[];
+  close(): Promise<void>;
+}
+
+export async function connectFakeClient(options: FakeClientOptions): Promise<FakeClient> {
+  const name = options.name ?? "fake-client";
+  const behavior = options.behavior ?? "ignore";
+
+  const pushEvents: any[] = [];
+  const sent: string[] = [];
+  const resolved: { confirmation: string; decision: ConfirmBehavior }[] = [];
+  const waiters: { predicate: (event: any) => boolean; resolve: (event: any) => void }[] = [];
+  const inflight = new Map<string, (envelope: any) => void>();
+  let closed = false;
+  let buffer = "";
+
+  const socket = await Bun.connect({
+    unix: options.socketPath,
+    socket: {
+      data(_socket, chunk) {
+        buffer += chunk.toString();
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (line.trim().length > 0) accept(line);
+          newline = buffer.indexOf("\n");
+        }
+      },
+      close() {
+        closed = true;
+      },
+    },
+  });
+
+  function accept(line: string): void {
+    let frame: any;
+    try {
+      frame = JSON.parse(line);
+    } catch {
+      throw new Error(`假客户端收到不是 JSON 的一帧:${line}`);
+    }
+    // 手写的帧判别:有 push 的是推送,有 ok 的是响应。两者永不同时出现。
+    if (frame.push === true) {
+      pushEvents.push(frame.event);
+      for (let index = waiters.length - 1; index >= 0; index -= 1) {
+        const waiter = waiters[index]!;
+        if (waiter.predicate(frame.event)) {
+          waiters.splice(index, 1);
+          waiter.resolve(frame.event);
+        }
+      }
+      if (frame.event?.kind === "confirmation" && behavior !== "ignore") {
+        void answer(frame.event.request.id);
+      }
+      return;
+    }
+    const settle = inflight.get(frame.id);
+    if (settle) {
+      inflight.delete(frame.id);
+      settle(frame);
+    }
+  }
+
+  function write(op: string, params?: Record<string, unknown>): Promise<any> {
+    sent.push(op);
+    const id = crypto.randomUUID();
+    const message: Record<string, unknown> = { v: 1, id, op };
+    if (params !== undefined) message.params = params;
+    const answered = new Promise<any>((resolve, reject) => {
+      inflight.set(id, resolve);
+      void delay(5000).then(() => {
+        if (inflight.delete(id)) reject(new Error(`假客户端等 ${op} 的响应超时`));
+      });
+    });
+    socket.write(`${JSON.stringify(message)}\n`);
+    return answered;
+  }
+
+  async function answer(confirmation: string): Promise<void> {
+    const decision = behavior === "approve" ? "approve" : "deny";
+    resolved.push({ confirmation, decision: behavior });
+    await write("confirmations.resolve", {
+      confirmation,
+      decision,
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
+    });
+  }
+
+  return {
+    resolved,
+    sent,
+    async register(role) {
+      const response = await write("roles.register", {
+        role,
+        identity: {
+          name,
+          version: "0.0.0-fake",
+          ...(options.codeDirectoryHash === undefined
+            ? {}
+            : { codeDirectoryHash: options.codeDirectoryHash }),
+          ...(options.teamIdentifier === undefined
+            ? {}
+            : { teamIdentifier: options.teamIdentifier }),
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`假客户端注册 ${role} 失败:${JSON.stringify(response.error)}`);
+      }
+      return response.result;
+    },
+    request: write,
+    events: (kind) => (kind ? pushEvents.filter((event) => event.kind === kind) : [...pushEvents]),
+    waitForEvent(predicate, timeoutMs = 5000) {
+      const already = pushEvents.find(predicate);
+      if (already) return Promise.resolve(already);
+      return new Promise((resolve, reject) => {
+        const waiter = { predicate, resolve };
+        waiters.push(waiter);
+        void delay(timeoutMs).then(() => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) {
+            waiters.splice(index, 1);
+            reject(
+              new Error(
+                `假客户端等推送事件超时(${timeoutMs}ms)。至今收到:${JSON.stringify(
+                  pushEvents.map((event) => event.kind),
+                )}`,
+              ),
+            );
+          }
+        });
+      });
+    },
+    async close() {
+      if (closed) return;
+      socket.end();
+      // 让内核那侧真的处理完 close 回调(角色离场、在途确认降级)再往下走。
+      await delay(50);
+    },
+  };
+}

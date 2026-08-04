@@ -13,12 +13,26 @@
 import path from "node:path";
 import { z } from "zod";
 import {
+  ArbitrationStateSchema,
+  ArbitrationStatusResultSchema,
+  AuditEventSchema,
   CapabilityCallResultSchema,
   CapabilityDescribeResultSchema,
   CapabilityDescriptorSchema,
+  CapabilityEventSchema,
   CapabilityListResultSchema,
+  ConfirmationErrorSchema,
+  ConfirmationRequestSchema,
+  ConfirmationResolveParamsSchema,
+  ConfirmationResolveResultSchema,
   GuidanceSchema,
   HelpResultSchema,
+  KernelEventSchema,
+  KernelSnapshotSchema,
+  PendingConfirmationSchema,
+  PushEnvelopeSchema,
+  RoleRegisterParamsSchema,
+  RoleRegisterResultSchema,
   MihomoChangeResultSchema,
   MihomoStatusResultSchema,
   ProxyConfigResultSchema,
@@ -69,6 +83,22 @@ export const CONTRACT_SCHEMAS = {
   SubscriptionListResult: SubscriptionListResultSchema,
   SubscriptionChangeResult: SubscriptionChangeResultSchema,
   ProxySupervisionResult: ProxySupervisionResultSchema,
+  // 08 票:角色注册、订阅推送、三层仲裁。09 票的 Swift 壳既要**读**推送(PushEnvelope/KernelEvent/
+  // KernelSnapshot),也要**写**请求(RoleRegisterParams/ConfirmationResolveParams),两侧都在这张表上。
+  RoleRegisterParams: RoleRegisterParamsSchema,
+  RoleRegisterResult: RoleRegisterResultSchema,
+  ConfirmationResolveParams: ConfirmationResolveParamsSchema,
+  ConfirmationResolveResult: ConfirmationResolveResultSchema,
+  PendingConfirmation: PendingConfirmationSchema,
+  ConfirmationRequest: ConfirmationRequestSchema,
+  ArbitrationState: ArbitrationStateSchema,
+  ArbitrationStatusResult: ArbitrationStatusResultSchema,
+  AuditEvent: AuditEventSchema,
+  CapabilityEvent: CapabilityEventSchema,
+  KernelSnapshot: KernelSnapshotSchema,
+  KernelEvent: KernelEventSchema,
+  PushEnvelope: PushEnvelopeSchema,
+  ConfirmationError: ConfirmationErrorSchema,
 } as const;
 
 export type ContractName = keyof typeof CONTRACT_SCHEMAS;

@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "id": "018f3b1c-8888-7c3e-9f2b-1d4e5f6a7b8d",
+  "push": true,
+  "event": {
+    "kind": "capability",
+    "at": "2026-08-05T04:12:00.000Z",
+    "capability": {
+      "capability": "proxy.mode.set",
+      "risk": "normal",
+      "output": {
+        "endpoint": { "owner": "a2", "controller": "127.0.0.1:9097", "managed": true },
+        "mode": "global",
+        "set": true
+      }
+    }
+  }
+}

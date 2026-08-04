@@ -1,0 +1,17 @@
+{
+  "id": "018f3b1c-1111-7c3e-9f2b-1d4e5f6a7b8d",
+  "capability": "proxy.subscription.add",
+  "descriptor": {
+    "id": "proxy.subscription.add",
+    "risk": "dangerous",
+    "summary": "新增或替换订阅源:拉取并物化配置,同名覆盖=换源。不自动激活",
+    "parameters": [
+      { "name": "name", "type": "string", "required": true, "description": "订阅展示名" },
+      { "name": "source", "type": "string", "required": true, "description": "订阅源 URL 或 file:// 路径" }
+    ],
+    "cliAlias": ["proxy", "subscription", "add"]
+  },
+  "input": { "name": "机场甲", "source": "https://example.invalid/sub.yaml" },
+  "requestedAt": "2026-08-05T04:10:00.000Z",
+  "expiresAt": "2026-08-05T04:12:00.000Z"
+}

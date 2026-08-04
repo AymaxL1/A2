@@ -1,0 +1,73 @@
+{
+  "title": "ArbitrationState",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confirmerPresent": {
+      "type": "boolean"
+    },
+    "confirmers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "subscribers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "pending": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capability": {
+            "type": "string",
+            "minLength": 1
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "safe",
+              "normal",
+              "dangerous"
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expiresAt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "capability",
+          "risk",
+          "requestedAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "confirmerPresent",
+    "confirmers",
+    "subscribers",
+    "timeoutMs",
+    "pending"
+  ],
+  "additionalProperties": false
+}
