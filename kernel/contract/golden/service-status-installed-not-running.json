@@ -1,0 +1,10 @@
+{
+  "state": "installed_not_running",
+  "supervisor": "systemd",
+  "label": "com.a2.kernel",
+  "unitPath": "/home/alice/.config/systemd/user/com.a2.kernel.service",
+  "unitInstalled": true,
+  "registered": true,
+  "home": "/home/alice/.a2",
+  "socketPath": "/home/alice/.a2/run/kernel.sock"
+}

@@ -1,0 +1,95 @@
+#!/bin/sh
+# 假 systemctl --user —— **只给测试用**(Linux 实机验收顺延,spec「Linux 口径」)。同 launchctl 那份:
+# `start` **真的按 unit 里的 ExecStart 起一个内核进程**,所以 install 之后 `a2 status` 真能连上。
+#
+# 行为面按 systemd 文档口径:
+#   * `show` 恒 0 退出,unit 不在时 LoadState=not-found(**不是**报错);
+#   * `enable` 只动开机自启开关,**不拉起进程**;拉起要另外 `start`;
+#   * `stop`/`disable` 对已停/已禁的 unit 也是 0(幂等)。
+# 有意**不**模拟的:Restart=on-failure 自愈(归真 systemd)、ExecStart 里的引号词法(本仓库的临时路径无空格)。
+#
+# 两个事实源:unit 文件本身($A2_FAKE_UNIT,由被测代码真写真删)+ 状态文件($A2_FAKE_STATE,内容 `<enabled> <pid>`)。
+PATH=/usr/bin:/bin
+set -u
+
+printf 'systemctl %s\n' "$*" >> "$A2_FAKE_LOG"
+STATE="$A2_FAKE_STATE"
+UNIT="$A2_FAKE_UNIT"
+
+if [ "${1:-}" != "--user" ]; then
+  printf 'fake systemctl 只接受 --user(内核不碰 system 域)\n' >&2
+  exit 64
+fi
+shift
+verb="${1:-}"
+
+if [ "${A2_FAKE_FAIL:-}" = "$verb" ]; then
+  printf 'Failed to %s com.a2.kernel.service: Access denied\n' "$verb" >&2
+  exit 1
+fi
+
+enabled=0
+pid=0
+if [ -f "$STATE" ]; then
+  enabled=$(cut -d' ' -f1 "$STATE")
+  pid=$(cut -d' ' -f2 "$STATE")
+fi
+kill -0 "$pid" 2>/dev/null || pid=0
+
+save() { printf '%s %s\n' "$1" "$2" > "$STATE"; }
+
+case "$verb" in
+  show)
+    if [ -f "$UNIT" ]; then
+      printf 'LoadState=loaded\n'
+      if [ "$enabled" = "1" ]; then printf 'UnitFileState=enabled\n'; else printf 'UnitFileState=disabled\n'; fi
+      printf 'MainPID=%s\n' "$pid"
+      if [ "$pid" != "0" ]; then printf 'ActiveState=active\n'; else printf 'ActiveState=inactive\n'; fi
+    else
+      printf 'LoadState=not-found\nUnitFileState=\nMainPID=0\nActiveState=inactive\n'
+    fi
+    exit 0
+    ;;
+  daemon-reload)
+    exit 0
+    ;;
+  enable)
+    if [ ! -f "$UNIT" ]; then
+      printf 'Failed to enable unit: Unit file %s does not exist.\n' "$UNIT" >&2
+      exit 1
+    fi
+    save 1 "$pid"
+    exit 0
+    ;;
+  disable)
+    save 0 "$pid"
+    exit 0
+    ;;
+  start)
+    if [ ! -f "$UNIT" ]; then
+      printf 'Failed to start unit: Unit not found.\n' >&2
+      exit 5
+    fi
+    if [ "$pid" = "0" ]; then
+      # ExecStart 未加引号地展开成 argv(假件的已知简化);A2_HOME 从 Environment= 那行取。
+      # exec 前的 sleep 与 launchctl 那份同理:如实模拟"报得出 pid 时 socket 还没 bind"的窗口。
+      a2home=$(sed -n 's/^Environment=A2_HOME=//p' "$UNIT")
+      execstart=$(sed -n 's/^ExecStart=//p' "$UNIT")
+      (
+        sleep "${A2_FAKE_START_DELAY:-0.3}"
+        exec env A2_HOME="$a2home" $execstart
+      ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
+      pid=$!
+    fi
+    save "$enabled" "$pid"
+    exit 0
+    ;;
+  stop)
+    [ "$pid" = "0" ] || kill "$pid" 2>/dev/null
+    save "$enabled" 0
+    exit 0
+    ;;
+esac
+
+printf 'Unknown verb: %s\n' "$verb" >&2
+exit 64

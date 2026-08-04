@@ -103,6 +103,16 @@ export const ErrorCode = {
    * **本码的含义与形状不变** —— 客户端对"没人能替你确认"的分支不必跟着改。
    */
   confirmationUnavailable: "confirmation_unavailable",
+
+  // MARK: 服务面(05 票)—— 系统托管常驻的安装/卸载
+
+  /** 本平台没有已支持的 supervisor(只认 macOS launchd 与 Linux systemd)。 */
+  serviceUnsupportedPlatform: "service_unsupported_platform",
+  /**
+   * 服务操作执行了但没成:写 unit 文件失败、supervisor 命令非零退出、装完了却没跑起来。
+   * 与「参数不对」分开(那是 6),这一档是"路走通了、事没办成",退出码 5。
+   */
+  serviceOperationFailed: "service_operation_failed",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -257,6 +267,76 @@ export const CapabilityCallResultSchema = z.object({
   output: JsonValueSchema,
 });
 export type CapabilityCallResult = z.infer<typeof CapabilityCallResultSchema>;
+
+// MARK: - 服务面 result(05 票)
+//
+// 这三个 result **没有对应的 op**:服务面问的是**系统 supervisor**(launchd/systemd),不是 daemon 自己 ——
+// daemon 没跑的时候这几条命令更要能答话。同 version/help,无 op 不等于无契约。
+
+/**
+ * 服务三态(取值即契约):
+ *   * `not_installed` —— unit 文件不在,supervisor 也不认识它;
+ *   * `installed_not_running` —— 装了(unit 在或已登记),但此刻没有进程;
+ *   * `running` —— supervisor 报了 pid。
+ *
+ * 判据一律取自 **supervisor 的视角**,不掺 UDS 探活:「daemon 活没活着」是 `a2 status` 的问题,
+ * 两条命令各答各的,省得同一件事有两个来源不同的答案。
+ */
+export const ServiceStateSchema = z.enum(["not_installed", "installed_not_running", "running"]);
+export type ServiceState = z.infer<typeof ServiceStateSchema>;
+
+/** 系统 supervisor 种类(macOS = launchd user 域;Linux = systemd user 单元)。 */
+export const SupervisorKindSchema = z.enum(["launchd", "systemd"]);
+export type SupervisorKind = z.infer<typeof SupervisorKindSchema>;
+
+/**
+ * install/uninstall 实际做过的收敛动作。**幂等的可观察面**:已收敛时数组为空(什么都没改),
+ * agent 据此判断"这次是真装了还是本来就装好了",不必比对前后状态。
+ */
+export const ServiceActionSchema = z.enum([
+  /** 写(或覆盖)了 unit 文件。 */
+  "unit_written",
+  /** 删了 unit 文件。 */
+  "unit_removed",
+  /** 向 supervisor 装载并置为开机自启(launchd bootstrap / systemd enable)。 */
+  "supervisor_loaded",
+  /** 从 supervisor 卸下(launchd bootout / systemd stop+disable)。 */
+  "supervisor_unloaded",
+  /** 让 supervisor 重读 unit 目录(systemd daemon-reload;launchd 无此概念,不会出现)。 */
+  "supervisor_reloaded",
+  /** 显式拉起了内核进程(launchd kickstart / systemd start)。 */
+  "kernel_started",
+]);
+export type ServiceAction = z.infer<typeof ServiceActionSchema>;
+
+/** `a2 service status` 的 result。 */
+export const ServiceStatusResultSchema = z.object({
+  state: ServiceStateSchema,
+  supervisor: SupervisorKindSchema,
+  /** unit 名(恒为 `com.a2.kernel`;内核只碰这一个 unit)。 */
+  label: z.string().min(1),
+  /** unit 文件的绝对路径(未安装时也给出:那是 install 会写的位置)。 */
+  unitPath: z.string().min(1),
+  /** unit 文件在不在。 */
+  unitInstalled: z.boolean(),
+  /** supervisor 认不认识这个 unit。 */
+  registered: z.boolean(),
+  /** 运行中才有;supervisor 报的进程号。 */
+  pid: z.number().int().positive().optional(),
+  /** 展开后的 A2_HOME 与 socket 路径(agent 免猜,与 `status.get` 同口径)。 */
+  home: z.string().min(1),
+  socketPath: z.string().min(1),
+});
+export type ServiceStatusResult = z.infer<typeof ServiceStatusResultSchema>;
+
+/** `a2 service install|uninstall` 的 result:收敛后的状态 + 本次真改了什么。 */
+export const ServiceChangeResultSchema = z.object({
+  /** 收敛后的服务状态(与 `a2 service status` 同一形状,免得再问一次)。 */
+  status: ServiceStatusResultSchema,
+  /** 本次实际执行的动作;**空数组 = 本来就是这个样子**(幂等复跑)。 */
+  actions: z.array(ServiceActionSchema),
+});
+export type ServiceChangeResult = z.infer<typeof ServiceChangeResultSchema>;
 
 /** `capabilities.describe` 的 params。 */
 export const CapabilityDescribeParamsSchema = z.object({

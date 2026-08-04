@@ -1,0 +1,84 @@
+{
+  "title": "ServiceChangeResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "not_installed",
+            "installed_not_running",
+            "running"
+          ]
+        },
+        "supervisor": {
+          "type": "string",
+          "enum": [
+            "launchd",
+            "systemd"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unitPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unitInstalled": {
+          "type": "boolean"
+        },
+        "registered": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "home": {
+          "type": "string",
+          "minLength": 1
+        },
+        "socketPath": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "state",
+        "supervisor",
+        "label",
+        "unitPath",
+        "unitInstalled",
+        "registered",
+        "home",
+        "socketPath"
+      ],
+      "additionalProperties": false
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "unit_written",
+          "unit_removed",
+          "supervisor_loaded",
+          "supervisor_unloaded",
+          "supervisor_reloaded",
+          "kernel_started"
+        ]
+      }
+    }
+  },
+  "required": [
+    "status",
+    "actions"
+  ],
+  "additionalProperties": false
+}

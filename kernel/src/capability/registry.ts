@@ -178,6 +178,12 @@ export function confirmationUnavailableError(
 /**
  * 按 manifest 校验入参。只拒三类:缺必填、类型不符、取值不在 allowedValues 内。
  * **多余字段一律放行**(有意):老客户端多带一个字段不该被毙,能力自己看不懂就当没有。
+ *
+ * **`null` 与缺省同义**(有意,成文于此):`{"target": null}` 与不写 `target` 走同一条路 ——
+ * 可选参数按缺省处理、必填参数报 `missing_parameter`。理由:JSON 世界里"我没有这个值"常常就写成 `null`
+ * (很多语言的序列化器会把 `undefined`/`nil` 字段照写成 `null`),把它判成 `type_mismatch`
+ * 等于逼客户端在拼请求前先删字段。代价是 manifest 无法表达"这个参数可以显式取 null"——
+ * 三档参数类型词汇表(string/number/boolean/object/array)本来也没有 null,不构成损失。
  */
 function validateInput(
   descriptor: CapabilityDescriptor,
@@ -218,7 +224,7 @@ function validateInput(
 
 /** 参数类问题一律附「去看这条能力的 manifest」—— agent 自纠所需的下一步,不用翻文档。 */
 function parameterError(
-  code: string,
+  code: ErrorCode,
   message: string,
   descriptor: CapabilityDescriptor,
   spec: ParameterSpec,

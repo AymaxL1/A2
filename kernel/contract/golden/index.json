@@ -93,6 +93,36 @@
       "why": "a2 help --json 的 result:帮助文本本身(机读面也不留散文空洞)"
     },
     {
+      "file": "service-status-not-installed.json",
+      "schema": "ServiceStatusResult",
+      "kind": "valid",
+      "why": "服务三态之一(未安装):unit 文件不在、supervisor 也不认识,且此时仍要给出 install 会写的 unitPath"
+    },
+    {
+      "file": "service-status-installed-not-running.json",
+      "schema": "ServiceStatusResult",
+      "kind": "valid",
+      "why": "服务三态之二(已安装未运行,Linux systemd 口径):registered 为真但没有 pid 字段"
+    },
+    {
+      "file": "service-status-running.json",
+      "schema": "ServiceStatusResult",
+      "kind": "valid",
+      "why": "服务三态之三(运行中,macOS launchd 口径):pid 只在运行中出现"
+    },
+    {
+      "file": "service-change-install.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "install 的 result:收敛后的状态 + 本次做过的动作(写 unit + 装载)"
+    },
+    {
+      "file": "service-change-idempotent.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "幂等的可观察面:重复 install 收敛不炸,actions 为空数组 = 本来就是这个样子"
+    },
+    {
       "file": "invalid-request-missing-op.json",
       "schema": "RequestEnvelope",
       "kind": "invalid",
@@ -139,6 +169,18 @@
       "schema": "VersionResult",
       "kind": "invalid",
       "why": "protocol 不是本版协议号:版本报文自己就得对得上号"
+    },
+    {
+      "file": "invalid-service-status-fourth-state.json",
+      "schema": "ServiceStatusResult",
+      "kind": "invalid",
+      "why": "服务态不在三态内 —— 三态是 agent 的分支依据,不许有第四态"
+    },
+    {
+      "file": "invalid-service-change-unknown-action.json",
+      "schema": "ServiceChangeResult",
+      "kind": "invalid",
+      "why": "收敛动作不在已登记词表内 —— actions 是审计素材,不能是自由文本"
     }
   ]
 }

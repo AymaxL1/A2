@@ -10,6 +10,7 @@ import { KERNEL_VERSION } from "../runtime/version.ts";
 import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
 import { emitOutcome, type CommandOutcome } from "./outcome.ts";
+import { serviceCommand } from "./service.ts";
 import { statusCommand } from "./status.ts";
 import { USAGE, helpOutcome, usageOutcome } from "./usage.ts";
 
@@ -39,6 +40,9 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   }
   if (command === "capabilities") {
     return await capabilitiesCommand(args, resolvePaths());
+  }
+  if (command === "service") {
+    return await serviceCommand(args, resolvePaths());
   }
   if (command === "daemon") {
     if (args[0] !== "run" || args.length > 1) {

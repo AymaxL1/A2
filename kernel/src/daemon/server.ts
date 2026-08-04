@@ -46,9 +46,19 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
         const state = socket.data;
         for (const line of state.lines.push(chunk.toString())) {
           // 串成一条链:上一条应答写完才处理下一条,请求-响应顺序天然对齐(handler 可异步)。
-          state.queue = state.queue.then(async () => {
-            socket.write(await handleLine(line, runtime));
-          });
+          state.queue = state.queue
+            .then(async () => {
+              socket.write(await handleLine(line, runtime));
+            })
+            // `handleLine` 自己永不抛(router 的铁律),所以走到这里只可能是**写回**违约(对端已断、
+            // 编码异常等)。这条连接从此无法保证"请求-响应一一对应",静默留着只会让对方一直等 ——
+            // 落一行日志到 stderr,然后断连,让客户端立刻拿到"连接关闭"而不是超时。
+            .catch((error) => {
+              process.stderr.write(
+                `${JSON.stringify({ event: "connection.aborted", detail: String(error) })}\n`,
+              );
+              socket.end();
+            });
         }
       },
     },

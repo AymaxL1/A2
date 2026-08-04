@@ -6,7 +6,14 @@
 
 import type { z } from "zod";
 import { ExitCode, exitCodeForErrorCode } from "../contract/exit-codes.ts";
-import { ErrorCode, failureResponse, type ResponseEnvelope, type WireError } from "../contract/wire.ts";
+import {
+  ErrorCode,
+  failureResponse,
+  successResponse,
+  type OpOutcome,
+  type ResponseEnvelope,
+  type WireError,
+} from "../contract/wire.ts";
 
 export interface CommandOutcome {
   /** 机读结果。缺省表示该命令自己流式输出过(如 `daemon run` 的事件行),无需再打包封。 */
@@ -23,7 +30,8 @@ export function emitOutcome(outcome: CommandOutcome, json: boolean): void {
     process.stdout.write(`${JSON.stringify(envelope)}\n`);
     return;
   }
-  // 没有包封的命令(help/version/daemon run)在 --json 下也照常走人类面 —— 总比空 stdout 强。
+  // 唯一没有包封的命令是 `daemon run`(它在 stdout 上流式吐 NDJSON 生命周期事件,不再补一条包封);
+  // 它在 --json 下也照常走人类面 —— 总比空 stdout 强。其余命令一律有包封(help/version 也各有 result 契约)。
   if (human === undefined) return;
   const text = `${human}\n`;
   if (outcome.exitCode === 0) process.stdout.write(text);
@@ -68,6 +76,24 @@ export function outcomeFromEnvelope<T>(
   }
 
   return { envelope, human: render(parsed.data), exitCode: ExitCode.success };
+}
+
+/**
+ * **本地**产出的 op 层结果 → 命令结果。包封在这里现拼,之后走的还是 `outcomeFromEnvelope` 那一套
+ * (契约校验 + 退出码 + 人类面)—— 服务面不经 daemon(daemon 没跑时它更要能答话),
+ * 但机读面必须与走 daemon 的命令**一模一样**,agent 不该看得出哪条命令去过 UDS。
+ */
+export function outcomeFromOpOutcome<T>(
+  outcome: OpOutcome,
+  what: string,
+  schema: z.ZodType<T>,
+  render: (result: T) => string,
+): CommandOutcome {
+  const id = crypto.randomUUID();
+  const envelope = outcome.ok
+    ? successResponse(id, outcome.result)
+    : failureResponse(id, outcome.error);
+  return outcomeFromEnvelope(envelope, what, schema, render);
 }
 
 /** 把结构化错误(含指引)渲染成人类面的多行文本 —— 与 JSON 面同源,不另写一套说辞。 */

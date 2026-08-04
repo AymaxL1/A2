@@ -1,0 +1,96 @@
+#!/bin/sh
+# 假 launchctl —— **只给测试用**。它不是打桩:除了"进程调度"这件事之外,它**真的按 unit 文件把内核起起来**
+# (读 plist 里的 ProgramArguments 与 A2_HOME,spawn 一个真进程),所以 CLI 缝上的断言是端到端的:
+# install 之后 `a2 status` 真的能连上那个 daemon。
+#
+# 行为面按本机 macOS 15.7.8 实测口径写死:
+#   * `print` 未登记 → 退出码 113(实测);已登记 → 打印含 `state = running` 的块,进程活着时多一行 `pid = N`;
+#   * `bootstrap` 重复装载 → 37;plist 不存在 → 2;成功则**顺带拉起**(对应 plist 里的 RunAtLoad);
+#   * `bootout` 服务不在 → 3(ESRCH,实测文案 "Boot-out failed: 3: No such process")。
+# 有意**不**模拟的:KeepAlive 自愈与 ThrottleInterval —— 那两条只有真 launchd 说了算,
+# 归 scripts/service-live-smoke.sh 的活体冒烟。
+#
+# 状态就一个文件($A2_FAKE_STATE):存在 = 已登记,内容 = 被拉起进程的 pid(进程死了 = 装了但没跑)。
+#
+# PATH 在下面被钉死成系统目录:被测进程那侧的 PATH 只有本目录(真 launchctl 根本找不到),
+# 这里再自己找回 coreutils —— 双向都不可能误伤真 launchctl。
+PATH=/usr/bin:/bin
+set -u
+
+printf 'launchctl %s\n' "$*" >> "$A2_FAKE_LOG"
+STATE="$A2_FAKE_STATE"
+UNIT="$A2_FAKE_UNIT"
+verb="${1:-}"
+
+# 故障注入:`A2_FAKE_FAIL=<子命令>` 让那一条按真实症状失败(退出码 5 是 macOS Sonoma 起
+# `launchctl bootstrap` 已知的偶发 I/O 错,见 docs/research/kernel-daemon-topology.md §1.6)。
+if [ "${A2_FAKE_FAIL:-}" = "$verb" ]; then
+  printf 'Bootstrap failed: 5: Input/output error\n' >&2
+  exit 5
+fi
+
+# 按 plist 真起一个内核进程。两处刻意为之:
+#   * stdin/stdout/stderr 全部断开 —— 否则子进程会一直攥着 a2 给我们的管道,a2 那边读 stdout 永远读不到 EOF;
+#   * exec 前先 sleep 一下 —— **如实模拟真 supervisor 的时序**:本机实测 launchd 一 exec 就报得出 pid,
+#     而内核还要几百毫秒才 bind socket。这个窗口是真的(活体冒烟抓到过),所以假件也得有,
+#     否则"装完就是能用的"那条断言会因为跑得快而假绿。
+spawn_from_plist() {
+  a2home=$(awk '/<key>A2_HOME<\/key>/{getline; gsub(/.*<string>|<\/string>.*/, ""); print; exit}' "$UNIT")
+  awk '/<key>ProgramArguments<\/key>/{f=1;next} f&&/<\/array>/{exit} f&&/<string>/{gsub(/.*<string>|<\/string>.*/,"");print}' \
+    "$UNIT" > "$STATE.args"
+  set --
+  while IFS= read -r argument; do set -- "$@" "$argument"; done < "$STATE.args"
+  (
+    sleep "${A2_FAKE_START_DELAY:-0.3}"
+    exec env A2_HOME="$a2home" "$@"
+  ) >> "$A2_FAKE_LOG.daemon" 2>&1 < /dev/null &
+  printf '%s\n' "$!" > "$STATE"
+}
+
+case "$verb" in
+  print)
+    if [ -f "$STATE" ]; then
+      pid=$(cat "$STATE")
+      printf '%s = {\n\tactive count = 1\n\tstate = running\n' "${2:-}"
+      if kill -0 "$pid" 2>/dev/null; then printf '\tpid = %s\n' "$pid"; fi
+      printf '}\n'
+      exit 0
+    fi
+    printf 'Could not find service "com.a2.kernel" in domain for user gui\n' >&2
+    exit 113
+    ;;
+  bootstrap)
+    if [ -f "$STATE" ]; then
+      printf 'Bootstrap failed: 37: Operation already in progress\n' >&2
+      exit 37
+    fi
+    if [ ! -f "${3:-}" ]; then
+      printf 'Bootstrap failed: 2: No such file or directory\n' >&2
+      exit 2
+    fi
+    spawn_from_plist
+    exit 0
+    ;;
+  bootout)
+    if [ -f "$STATE" ]; then
+      pid=$(cat "$STATE")
+      kill "$pid" 2>/dev/null
+      rm -f "$STATE" "$STATE.args"
+      exit 0
+    fi
+    printf 'Boot-out failed: 3: No such process\n' >&2
+    exit 3
+    ;;
+  kickstart)
+    if [ ! -f "$STATE" ]; then
+      printf 'Could not find service\n' >&2
+      exit 113
+    fi
+    pid=$(cat "$STATE")
+    kill -0 "$pid" 2>/dev/null || spawn_from_plist
+    exit 0
+    ;;
+esac
+
+printf 'Unrecognized subcommand: %s\n' "$verb" >&2
+exit 64

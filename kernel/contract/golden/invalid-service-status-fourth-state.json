@@ -1,0 +1,10 @@
+{
+  "state": "degraded",
+  "supervisor": "launchd",
+  "label": "com.a2.kernel",
+  "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.kernel.plist",
+  "unitInstalled": true,
+  "registered": true,
+  "home": "/Users/alice/.a2",
+  "socketPath": "/Users/alice/.a2/run/kernel.sock"
+}
