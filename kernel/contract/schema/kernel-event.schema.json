@@ -323,11 +323,14 @@
                 "timed_out",
                 "unavailable",
                 "downgraded",
+                "cancelled",
                 "confirmer_joined",
                 "confirmer_left",
                 "subscriber_joined",
                 "subscriber_left",
-                "peer_rejected"
+                "peer_rejected",
+                "peer_unverified",
+                "backpressure_dropped"
               ]
             },
             "capability": {

@@ -15,6 +15,7 @@
 import {
   ErrorCode,
   ProxySettingsSchema,
+  payload,
   type JsonValue,
   type ProxySettings,
 } from "../contract/wire.ts";
@@ -753,19 +754,6 @@ function supervisionGet(context: ProxyContext): Capability {
 }
 
 // MARK: - 共用
-
-/**
- * 能力返回值 → `JsonValue`。
- *
- * handler 的返回值本质上是"某个已登记 result 的形状"(`ProxyStatusResult` 之类),而 `JsonValue` 是个
- * 递归联合类型 —— TS 不认为一个具名 interface 结构化地属于它(可选字段的 `| undefined` 在联合里对不上),
- * 于是每处都要写一遍 `as unknown as JsonValue`。**运行时什么都没发生**:那些对象本来就只含 JSON 值。
- * 收敛到这一个函数,是为了让"这里有一次类型放行"只需要读一遍、也只有一个地方可以出错。
- * (真正的形状把关在别处:CLI 侧 `outcomeFromEnvelope` 拿 zod schema 校验 daemon 的应答,漂了就红。)
- */
-function payload(value: object): JsonValue {
-  return value as unknown as JsonValue;
-}
 
 async function reachableTarget(context: ProxyContext): Promise<ProxyTarget> {
   const target = await resolveProxyTarget(context.paths, context.env);

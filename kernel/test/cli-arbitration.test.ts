@@ -324,6 +324,74 @@ test("协议面的两条拒绝:决定一条不存在的确认请求 / 注册一�
   expect(bogusRole.error.code).toBe("invalid_params");
 }, 20000);
 
+test("快照即基线:注册响应是本连接的第一帧,且内核不把「自己进场」这条增量推给自己", async () => {
+  daemon = await startDaemon(home);
+  // 先来一个旁观订阅者:它应当收到**别人**进场的那条增量(对它那是真变化)。
+  const watcher = await fakeClient({ name: "先来的" });
+  await watcher.register("subscriber");
+
+  const joiner = await fakeClient({ name: "后来的" });
+  const registered = await joiner.register("subscriber");
+
+  // ① 第一帧必须是自己那条响应 —— 没有"增量先于基线"的窗口。
+  expect(joiner.arrivals[0]).toBe("response");
+  // ② 快照里的计数**已经含它自己**(所以不需要再补一条增量)。
+  expect(registered.snapshot.arbitration.subscribers).toBe(2);
+  // ③ 内核不把它自己的进场事件推给它:严格按「快照 + 增量」记账的客户端不会重复计入。
+  await Bun.sleep(150);
+  expect(joiner.events()).toEqual([]);
+  // ④ 而**别人**照常收到这条增量。
+  const seen = await watcher.waitForEvent(
+    (event) => event.kind === "arbitration" && event.state.subscribers === 2,
+  );
+  expect(seen.state.subscribers).toBe(2);
+  expect(
+    watcher.events("audit").some((event) => event.audit.action === "subscriber_joined"),
+  ).toBe(true);
+}, 20000);
+
+test("发起方断线:在途确认立即取消(留痕 cancelled),确认器再拿旧 id 决定 → confirmation_unknown", async () => {
+  // 超时窗口开得很大:若"取消"没生效,这条只会超时红,不会假绿。
+  daemon = await startDaemon(home, { A2_CONFIRM_TIMEOUT_MS: "60000" });
+  const confirmer = await fakeClient({ behavior: "ignore" });
+  await confirmer.register("confirm-agent");
+
+  // 用一条**裸连接**当发起方,这样我们能精确控制它什么时候断。
+  const requester = await fakeClient({ name: "发起方" });
+  const pending = requester.request("capabilities.call", {
+    capability: "demo.wipe",
+    input: { target: "disk9" },
+  });
+  const event = await confirmer.waitForEvent((e) => e.kind === "confirmation");
+
+  const started = Date.now();
+  await requester.close();
+  pending.catch(() => {}); // 发起方走了,这条响应本来就没有去处
+
+  // 在途那条被取消:确认器看到待办清空 + 一条 cancelled 审计。
+  await confirmer.waitForEvent(
+    (e) => e.kind === "arbitration" && e.state.pending.length === 0,
+    10000,
+  );
+  expect(Date.now() - started).toBeLessThan(10000);
+  const cancelled = await waitForAudit("cancelled");
+  expect(cancelled.capability).toBe("demo.wipe");
+  expect(cancelled.confirmation).toBe(event.request.id);
+
+  // 确认器若仍拿旧 id 来决定,拿到的是"没有这条"——而那条报文早就把"发起方已断开"列为收场原因。
+  const late = await confirmer.request("confirmations.resolve", {
+    confirmation: event.request.id,
+    decision: "approve",
+  });
+  expect(late.ok).toBe(false);
+  expect(late.error.code).toBe("confirmation_unknown");
+  expect(late.error.detail).toContain("发起方已断开");
+
+  // 反证:**handler 一次都没跑** —— 取消之后再批准也不会有副作用。
+  const audit = await auditLines();
+  expect(audit.map((e) => e.action)).not.toContain("approved");
+}, 30000);
+
 // MARK: - 订阅推送(全量快照 + 增量,零轮询)
 
 test("零轮询:订阅者注册之后一条请求都不再发,却照样收到能力变化与审计增量", async () => {
@@ -444,6 +512,16 @@ test("对端 UID 与内核不符:连接当场被拒 + 留痕(a2 自己也连不�
 
   // 「有别的用户在敲这个 socket」是唯一值得留痕的安全信号。
   expect((await waitForAudit("peer_rejected")).client.uid).toBe(uid);
+}, 20000);
+
+test("A2_PEER_EXPECT_UID=0 被拒绝:覆写作废、回落到内核自己的 uid,连接照常可用", async () => {
+  // root 该走 OS 那两道门(run/ 0700 + socket 0600),不该由一个测试开关授权。
+  daemon = await startDaemon(home, { A2_PEER_EXPECT_UID: "0" });
+
+  const result = await runCli(["status", "--json"], { home });
+
+  expect(result.exitCode).toBe(0);
+  expect(parseJsonStdout(result).result.state).toBe("running");
 }, 20000);
 
 // MARK: - 审计:留痕 + 可查询

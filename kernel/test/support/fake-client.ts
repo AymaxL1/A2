@@ -6,6 +6,8 @@
 // **有意不复用 `src/` 里的任何一行**(与 `harness.ts` 同一条纪律,04 票 CR 尾款 f 定的口径):
 // 拆行、帧判别、请求-响应相关性,这里全部手写一遍。用被测代码去读被测代码的输出,写歪了会一起歪。
 // 判别帧的规则也刻意手写成"有 ok 的是响应、有 push 的是推送",这样契约若改了判别方式,这里会吵。
+// 拆行**在字节层面**(整行到齐才 decode):快照报文十几 KB 且全是中文,分片边界切进汉字中间时,
+// 先 `toString()` 的写法会静默解出 U+FFFD —— 那正是 08 票 CR 抓到的实现侧缺陷,夹具不能陪着一起错。
 
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -37,6 +39,11 @@ export interface FakeClient {
   /** 这个假确认器至今回过的决定(便于断言"它确实被问过")。 */
   resolved: { confirmation: string; decision: ConfirmBehavior }[];
   /**
+   * 帧的**到达顺序**(`push` / `response`)。「快照即基线,此后才是增量」这条协议保证靠它:
+   * 注册连接收到的第一帧必须是自己那条响应,不能先来一条推送。
+   */
+  arrivals: ("push" | "response")[];
+  /**
    * 这个客户端**主动发出去过的每一条 op**。「零轮询」这条断言就靠它:
    * 订阅者除了那一次 `roles.register` 之外一条请求都不该发,却照样收得到状态变化。
    */
@@ -50,23 +57,30 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
 
   const pushEvents: any[] = [];
   const sent: string[] = [];
+  /** 到达顺序(`"push"` / `"response"`)—— 「快照即基线」那条断言靠它:第一帧必须是注册响应。 */
+  const arrivals: ("push" | "response")[] = [];
   const resolved: { confirmation: string; decision: ConfirmBehavior }[] = [];
   const waiters: { predicate: (event: any) => boolean; resolve: (event: any) => void }[] = [];
   const inflight = new Map<string, (envelope: any) => void>();
   let closed = false;
-  let buffer = "";
+  let buffer = new Uint8Array(0);
+  const decoder = new TextDecoder();
 
   const socket = await Bun.connect({
     unix: options.socketPath,
     socket: {
       data(_socket, chunk) {
-        buffer += chunk.toString();
-        let newline = buffer.indexOf("\n");
+        const merged = new Uint8Array(buffer.length + chunk.length);
+        merged.set(buffer, 0);
+        merged.set(chunk, buffer.length);
+        buffer = merged;
+        let newline = buffer.indexOf(0x0a);
         while (newline >= 0) {
-          const line = buffer.slice(0, newline);
+          // **整行到齐了才 decode**(手写第二份,理由见文件头)。
+          const line = decoder.decode(buffer.subarray(0, newline));
           buffer = buffer.slice(newline + 1);
           if (line.trim().length > 0) accept(line);
-          newline = buffer.indexOf("\n");
+          newline = buffer.indexOf(0x0a);
         }
       },
       close() {
@@ -84,6 +98,7 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
     }
     // 手写的帧判别:有 push 的是推送,有 ok 的是响应。两者永不同时出现。
     if (frame.push === true) {
+      arrivals.push("push");
       pushEvents.push(frame.event);
       for (let index = waiters.length - 1; index >= 0; index -= 1) {
         const waiter = waiters[index]!;
@@ -97,6 +112,7 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
       }
       return;
     }
+    arrivals.push("response");
     const settle = inflight.get(frame.id);
     if (settle) {
       inflight.delete(frame.id);
@@ -132,6 +148,7 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
   return {
     resolved,
     sent,
+    arrivals,
     async register(role) {
       const response = await write("roles.register", {
         role,

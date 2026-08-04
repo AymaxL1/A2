@@ -20,9 +20,9 @@ import {
   failureResponse,
   opFailure,
   opSuccess,
+  payload,
   pushEnvelope,
   successResponse,
-  type JsonValue,
   type OpOutcome,
   type RequestEnvelope,
 } from "../contract/wire.ts";
@@ -61,19 +61,25 @@ const HANDLERS: Record<string, OpHandler> = {
       refuseWithoutConfirmer: (descriptor) => runtime.arbiter.refuseWithoutConfirmer(descriptor),
       // 「我把你这条转给人了,最多等这么久」—— 只发给**发起方那条连接**,别的订阅者与此无关。
       confirm: (descriptor, input) =>
-        runtime.arbiter.confirm(descriptor, input, (pending, timeoutMs) => {
-          connection.send(
-            encodeFrame(
-              pushEnvelope({
-                kind: "confirmation-pending",
-                at: new Date().toISOString(),
-                requestId: request.id,
-                timeoutMs,
-                confirmation: pending,
-              }),
-            ),
-          );
-        }),
+        runtime.arbiter.confirm(
+          descriptor,
+          input,
+          (pending, timeoutMs) => {
+            connection.send(
+              encodeFrame(
+                pushEnvelope({
+                  kind: "confirmation-pending",
+                  at: new Date().toISOString(),
+                  requestId: request.id,
+                  timeoutMs,
+                  confirmation: pending,
+                }),
+              ),
+            );
+          },
+          // 发起方是**这条连接**:它断了,这次确认就该取消(没人在等答案了)。
+          connection,
+        ),
     });
     if (!outcome.ok) return outcome;
 
@@ -96,28 +102,38 @@ const HANDLERS: Record<string, OpHandler> = {
     if (!params.success) return invalidParams("roles.register", params.error.message);
 
     const added = runtime.hub.register(connection, params.data.role, params.data.identity);
+    // **快照先取**:它必须反映"我已经在里面了"的那一刻,而且要在任何推送发出去之前定格。
+    const snapshot = runtime.snapshot();
     if (added) {
-      runtime.audit.record({
-        action: params.data.role === "confirm-agent" ? "confirmer_joined" : "subscriber_joined",
-        client: {
-          role: params.data.role,
-          name: params.data.identity.name,
-          ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+      // 进场事件推给**别人**,不推给刚注册的自己 —— 它的成员关系已经含在上面那份快照里,
+      // 再推一次会让严格按「快照 + 增量」记账的客户端重复计入(契约见 `KernelSnapshotSchema` 头注)。
+      runtime.audit.record(
+        {
+          action: params.data.role === "confirm-agent" ? "confirmer_joined" : "subscriber_joined",
+          client: {
+            role: params.data.role,
+            name: params.data.identity.name,
+            ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+          },
+          detail: `连接 ${connection.id} 注册为 ${params.data.role}。V1 不校验身份声明(已知边界:同 UID 冒充)。`,
         },
-        detail: `连接 ${connection.id} 注册为 ${params.data.role}。V1 不校验身份声明(已知边界:同 UID 冒充)。`,
-      });
-      // 确认器进场 = dangerous 从"走不通"变成"要等人点头",这条事实要让全体订阅者知道。
-      runtime.arbiter.rosterChanged();
+        { exceptPush: connection },
+      );
+      // 确认器进场 = dangerous 从"走不通"变成"要等人点头",这条事实要让**别的**订阅者知道。
+      runtime.arbiter.rosterChanged(connection);
     }
 
-    return opSuccess({
-      role: params.data.role,
-      connection: connection.id,
-      ...(connection.uid === undefined ? {} : { uid: connection.uid }),
-      roles: [...connection.roles],
-      // **注册与首帧快照是同一次往返** —— 没有"注册成功了但还没拿到状态"的中间态。
-      snapshot: runtime.snapshot(),
-    } as unknown as JsonValue);
+    return opSuccess(
+      payload({
+        role: params.data.role,
+        connection: connection.id,
+        ...(connection.uid === undefined ? {} : { uid: connection.uid }),
+        roles: [...connection.roles],
+        // **注册与首帧快照是同一次往返**,而且这条响应是本连接上的**第一帧**:
+        // 没有"注册成功了但还没拿到状态"的中间态,也没有"增量先于基线"的窗口。
+        snapshot,
+      }),
+    );
   },
 
   [Op.confirmationsResolve]: (request, runtime, connection) => {

@@ -33,8 +33,14 @@ export interface ClientHub {
   drop(connection: ClientConnection): ClientRole[];
   confirmerCount(): number;
   subscriberCount(): number;
-  /** 发给全体已注册连接(确认器 + 订阅者)。 */
-  broadcast(event: KernelEvent): void;
+  /**
+   * 发给全体已注册连接(确认器 + 订阅者)。
+   *
+   * `except` 是**协议语义**而不是优化:注册那一刻,这条连接自己的进场事件不该推给它自己 ——
+   * 它的成员关系已经含在刚拿到的那份快照里,再推一次会让"快照 + 增量"的客户端重复计入
+   * (见 `wire.ts` 的 `KernelSnapshotSchema` 头注)。
+   */
+  broadcast(event: KernelEvent, except?: ClientConnection): void;
   /** 只发给确认器。带 input 的确认请求走这条。 */
   toConfirmers(event: KernelEvent): void;
 }
@@ -72,8 +78,8 @@ export function createClientHub(): ClientHub {
     },
     confirmerCount: () => countOf("confirm-agent"),
     subscriberCount: () => countOf("subscriber"),
-    broadcast(event) {
-      deliver(event, () => true);
+    broadcast(event, except) {
+      deliver(event, (connection) => connection !== except);
     },
     toConfirmers(event) {
       deliver(event, (connection) => connection.roles.has("confirm-agent"));

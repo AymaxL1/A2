@@ -13,6 +13,7 @@ import path from "node:path";
 import type { AuditEvent } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { LOG_DIR_MODE, LOG_DIR_NAME } from "../service/unit.ts";
+import type { ClientConnection } from "./hub.ts";
 
 /** 审计日志文件名(NDJSON,一行一条)。 */
 export const AUDIT_LOG_NAME = "arbitration.log";
@@ -25,22 +26,27 @@ export function auditLogPath(paths: KernelPaths): string {
 
 export interface AuditLog {
   readonly logPath: string;
-  /** 记一条(`at` 由本模块统一打,调用方不必各自 `new Date()`)。返回补齐后的事件。 */
-  record(event: Omit<AuditEvent, "at">): AuditEvent;
+  /**
+   * 记一条(`at` 由本模块统一打,调用方不必各自 `new Date()`)。返回补齐后的事件。
+   *
+   * `exceptPush` 让某一条连接**不收到**这条事件的推送(落盘与内存那两份照记)——
+   * 唯一的用途是注册那一刻:进场事件不推给刚注册的自己(它的快照里已经含着了)。
+   */
+  record(event: Omit<AuditEvent, "at">, options?: { exceptPush?: ClientConnection }): AuditEvent;
   /** 最近若干条(新的在后)。 */
   recent(): AuditEvent[];
 }
 
 export function createAuditLog(
   paths: KernelPaths,
-  publish: (event: AuditEvent) => void,
+  publish: (event: AuditEvent, except?: ClientConnection) => void,
 ): AuditLog {
   const logPath = auditLogPath(paths);
   const events: AuditEvent[] = [];
 
   return {
     logPath,
-    record(partial) {
+    record(partial, options) {
       const event: AuditEvent = { at: new Date().toISOString(), ...partial };
       events.push(event);
       if (events.length > RECENT_EVENTS) events.splice(0, events.length - RECENT_EVENTS);
@@ -48,7 +54,7 @@ export function createAuditLog(
       void mkdir(path.dirname(logPath), { recursive: true, mode: LOG_DIR_MODE })
         .then(() => appendFile(logPath, `${JSON.stringify(event)}\n`))
         .catch(() => {});
-      publish(event);
+      publish(event, options?.exceptPush);
       return event;
     },
     recent: () => [...events],

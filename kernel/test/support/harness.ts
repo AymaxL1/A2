@@ -177,6 +177,9 @@ export async function waitForSocket(socketPath: string, timeoutMs = 5000): Promi
  * (`{"push":true,…}`),响应才在后面。判据是**结构性的**:有 `ok` 的是响应,有 `push` 的是推送。
  * 这里刻意手写这条判据,而不是 import 契约里的 `ServerFrameSchema` —— 判别方式若被实现悄悄改了,
  * 这份夹具要能吵起来。推送帧一律丢弃(要收推送请用 `fake-client.ts`)。
+ *
+ * 拆行同样**在字节层面**独立做一遍:分片边界可能切在多字节字符中间,先 `toString()` 就会把半个汉字
+ * 解成 U+FFFD。实现侧有 `contract/ndjson.ts` 守这件事,这里手写第二份 —— 两边一起写歪的概率才够低。
  */
 export async function sendRawLine(socketPath: string, line: string, timeoutMs = 5000): Promise<string> {
   let resolveResponse: (value: string) => void;
@@ -185,28 +188,35 @@ export async function sendRawLine(socketPath: string, line: string, timeoutMs = 
     resolveResponse = resolve;
     rejectResponse = reject;
   });
-  let buffer = "";
+  let buffer = new Uint8Array(0);
+  const decoder = new TextDecoder();
   const socket = await Bun.connect({
     unix: socketPath,
     socket: {
       data(_socket, chunk) {
-        buffer += chunk.toString();
-        let newline = buffer.indexOf("\n");
+        const merged = new Uint8Array(buffer.length + chunk.length);
+        merged.set(buffer, 0);
+        merged.set(chunk, buffer.length);
+        buffer = merged;
+        let newline = buffer.indexOf(0x0a);
         while (newline >= 0) {
-          const frame = buffer.slice(0, newline);
+          // **整行到齐了才 decode** —— 分片边界与字符边界互不相干。
+          const frame = decoder.decode(buffer.subarray(0, newline));
           buffer = buffer.slice(newline + 1);
           if (frame.trim().length > 0 && !isPushFrame(frame)) {
             resolveResponse(frame);
             return;
           }
-          newline = buffer.indexOf("\n");
+          newline = buffer.indexOf(0x0a);
         }
       },
       error(_socket, error) {
         rejectResponse(error as Error);
       },
       close() {
-        rejectResponse(new Error(`连接关闭但未收到整行响应:${JSON.stringify(buffer)}`));
+        rejectResponse(
+          new Error(`连接关闭但未收到整行响应:${JSON.stringify(decoder.decode(buffer))}`),
+        );
       },
     },
   });

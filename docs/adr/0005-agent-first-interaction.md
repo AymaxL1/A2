@@ -53,3 +53,11 @@ amended: 2026-08-04
 5. **第 5 条连带更新**：MCP adapter 的时点已裁——不进 V1、继续挂起不排期（[ADR 0011](0011-plugin-exec-protocol-loading.md)）。
 6. **agent-delegation 连带**：委托执行器的审批**收敛到内核统一仲裁**（同三层、同确认器通道、同禁旁路、统一 audit），无确认器时「拒绝即指引」结构化回传发起方。修订指令已下达至 `.scratch/agent-delegation/spec.md` 文末。
 7. **不变的**：第 1/2/3/6 条原样有效；`--yes` 类旁路永禁；safe/normal/dangerous 三档分级不变。
+
+## 实施补记（2026-08-05）：在场机制的两条已知边界
+
+第 4 条的「在场 = 长连接 + 内核校验对端 UID」在内核里落地时，暴露出两条**必须写明的边界**——它们不是缺陷，是这套机制**保护范围的边沿**。实现出处：`kernel/src/daemon/peer.ts`、`kernel/src/daemon/hub.ts`；威胁模型口径沿用 06 票（壳契约）的裁定（`.scratch/kernel-bin-recharter/issues/06-ui-shell-contract.md`，**本机决策记录，未入库**）。
+
+1. **同 UID 冒充确认器 = 已知边界，V1 不设防**。角色注册报文里的身份声明（自报的名字，以及为将来预留的 cdhash / 团队 ID 两个插槽）**内核一律收下、不校验**——与内核同 UID 的任意本机进程都可以注册成 confirm-agent 并替人批准 dangerous。这是有意的：仲裁保护的是**受认可路径上的 AI agent 不能自批**，不对抗已经拿到该用户身份的任意本机代码——那样的攻击者可以直接替换 `a2` 这个二进制，任何协议层校验都拦不住。将来的强化路径是用 peer 凭据里的 pid 反查可执行文件并核对 cdhash / 团队 ID，插槽已在契约里留好（`RoleRegisterParams.identity`）。
+
+2. **对端凭据问不出来时放行（fail-open），但绝不静默**。UID 校验是**纵深的第三道门**：前两道是 `<A2_HOME>/run` 目录 0700 与 socket 文件 0600，由操作系统强制，别的用户在 `connect()` 那一步就被拒了。若 `bun:ffi` 在某个平台上取不到 `getpeereid`/`SO_PEERCRED`（或运行时不再暴露 socket fd），内核**放行**而不是拒绝一切连接——后者是"零收益换不可用"。代价由留痕补偿：每一次都记一条 `peer_unverified` 审计事件（按原因去重 + 限频），且该连接在快照与审计里的 `uid` 字段**缺省**，不伪造一个值。**凭据问得出来但对不上 UID 的，一律拒**（`peer_rejected`）——那才是真信号。

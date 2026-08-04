@@ -4,7 +4,10 @@
 // 它把一次调用挂起,把请求全文推给在场的确认器,然后等三件事之一发生:
 //   * 有确认器 `confirmations.resolve`(批准 / 拒绝);
 //   * 超时窗口到(**沉默不是同意**,超时即拒);
-//   * **确认器全断线**(在场 = 长连接,人走了就没人能确认了)→ 立即按默拒收尾,不等超时。
+//   * **确认器全断线**(在场 = 长连接,人走了就没人能确认了)→ 立即按默拒收尾,不等超时;
+//   * **发起方自己断线**(agent 被 Ctrl-C、CLI 进程被杀)→ 立即取消,不再打扰任何人。
+//     这条同样重要:没有它,一次早已无人等待的调用照样会被人批准、handler 照样会执行副作用,
+//     而那个答案没有任何去处 —— 「批了个没人要的东西」是最难解释的一类事故。
 //
 // 三条不变量,值得写在最前面:
 //   1. **确认信息永不过 AI agent 之手**:发起方那条连接上只会收到"我转给人了、最多等这么久"
@@ -30,7 +33,7 @@ import {
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import type { AuditLog } from "./audit.ts";
-import type { ClientHub } from "./hub.ts";
+import type { ClientConnection, ClientHub } from "./hub.ts";
 
 /** 确认超时的默认窗口。人要看清参数、走到菜单栏、再点一下 —— 两分钟是「人的尺度」。 */
 export const DEFAULT_CONFIRM_TIMEOUT_MS = 120_000;
@@ -45,11 +48,15 @@ export interface Arbiter {
   readonly timeoutMs: number;
   /** 第①层:没有确认器时的默拒报文(**顺带留痕**:审计里 `unavailable` 那一条就在这里产生)。 */
   refuseWithoutConfirmer(descriptor: CapabilityDescriptor): WireError;
-  /** 第③层:挂起、推给确认器、等决定。放行返回 undefined,三种拒绝各返回一条报文。 */
+  /**
+   * 第③层:挂起、推给确认器、等决定。放行返回 undefined,四种拒绝各返回一条报文。
+   * `requester` 是**发起这次调用的那条连接** —— 它断了,这次确认就没有意义了(见 `cancelFor`)。
+   */
   confirm(
     descriptor: CapabilityDescriptor,
     input: CapabilityInput,
     notify: PendingNotifier,
+    requester: ClientConnection,
   ): Promise<WireError | undefined>;
   /** 确认器做决定。返回 undefined = 成功;否则是一条说明"为什么这个决定不作数"的报文。 */
   resolve(
@@ -59,7 +66,16 @@ export interface Arbiter {
     reason?: string,
   ): WireError | undefined;
   /** 有连接注册/断开之后调用:确认器归零就立刻降级在途请求,并把仲裁面状态推出去。 */
-  rosterChanged(): void;
+  rosterChanged(except?: ClientConnection): void;
+  /**
+   * 某条连接断了:把**由它发起**的在途确认全部取消。
+   *
+   * 收场方式选的是**最简的那一种**(CR 允许二选一,如实记录):不新增事件族,
+   * 取消照走 `finish` 的统一出口 —— 于是确认器会收到一条 `arbitration` 状态推送(待办列表少了一条)
+   * 与一条 `audit`(`cancelled`);它若仍拿旧 id 来 `resolve`,拿到的是 `confirmation_unknown`,
+   * 而那条报文早已写明「发起方已断开」是收场原因之一。这样契约形状一个字都不用改(09 票正在消费金标)。
+   */
+  cancelFor(connection: ClientConnection): void;
   /** 仲裁面此刻的状态(快照与 `arbitration.status` 都读它)。 */
   state(): ArbitrationState;
   /** daemon 收摊:在途请求一律按降级收尾,不留悬空的 promise。 */
@@ -69,6 +85,8 @@ export interface Arbiter {
 interface PendingEntry {
   pending: PendingConfirmation;
   descriptor: CapabilityDescriptor;
+  /** 发起这次调用的连接 —— 它断了就没人在等这个答案了。 */
+  requester: ClientConnection;
   timer: ReturnType<typeof setTimeout>;
   /** 只会被调用一次(第一个到达的收场胜出);之后的决定一律 `confirmation_unknown`。 */
   settle: (refusal: WireError | undefined) => void;
@@ -97,15 +115,15 @@ export function createArbiter(options: {
     };
   }
 
-  function publishState(): void {
-    hub.broadcast({ kind: "arbitration", at: new Date().toISOString(), state: state() });
+  function publishState(except?: ClientConnection): void {
+    hub.broadcast({ kind: "arbitration", at: new Date().toISOString(), state: state() }, except);
   }
 
   /** 收场的唯一出口:摘挂起、停表、记账、推状态,然后把结果交回给挂起的那次 invoke。 */
   function finish(
     id: string,
     outcome: {
-      action: "approved" | "denied" | "timed_out" | "downgraded";
+      action: "approved" | "denied" | "timed_out" | "downgraded" | "cancelled";
       refusal: WireError | undefined;
       detail?: string;
       client?: { connection: string; name?: string; uid?: number };
@@ -151,7 +169,7 @@ export function createArbiter(options: {
 
     refuseWithoutConfirmer,
 
-    async confirm(descriptor, input, notify) {
+    async confirm(descriptor, input, notify, requester) {
       // 防守一手:`confirmerPresent()` 与本调用之间理论上还有一个事件循环的缝。
       // 这里再问一次,把"挂起一个没人能收的请求"这条路彻底堵死(默认拒绝)。
       if (hub.confirmerCount() === 0) return refuseWithoutConfirmer(descriptor);
@@ -176,7 +194,7 @@ export function createArbiter(options: {
         }, timeoutMs);
         // 挂起的确认不该把 daemon 钉在事件循环上:该退的时候 shutdown() 会把它们按降级收尾。
         timer.unref?.();
-        pendings.set(id, { pending, descriptor, timer, settle: resolve });
+        pendings.set(id, { pending, descriptor, requester, timer, settle: resolve });
       });
 
       audit.record({
@@ -229,7 +247,7 @@ export function createArbiter(options: {
       return undefined;
     },
 
-    rosterChanged() {
+    rosterChanged(except) {
       // **在场 = 长连接**:确认器归零的那一刻,在途请求立即按默拒收尾 —— 不等超时、不留悬念。
       if (hub.confirmerCount() === 0) {
         for (const [id, entry] of [...pendings]) {
@@ -240,7 +258,21 @@ export function createArbiter(options: {
           });
         }
       }
-      publishState();
+      publishState(except);
+    },
+
+    cancelFor(connection) {
+      for (const [id, entry] of [...pendings]) {
+        if (entry.requester !== connection) continue;
+        finish(id, {
+          action: "cancelled",
+          // **必须给一条拒绝**:返回 undefined 会让 registry 认为"放行",handler 就跑了 ——
+          // 而这次调用早已无人等待。报文本身没有去处(发起方的 socket 已经没了),
+          // 复用默拒那一条即可,真相在审计的 `cancelled` 里。
+          refusal: confirmationUnavailableError(entry.descriptor, paths),
+          detail: "发起这次调用的连接已断开,确认请求随之取消 —— 没有人在等这个答案了。",
+        });
+      }
     },
 
     state,

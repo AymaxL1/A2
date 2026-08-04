@@ -46,8 +46,8 @@ export interface KernelRuntime {
 export function createRuntime(paths: KernelPaths, now: Date = new Date()): KernelRuntime {
   const env = process.env;
   const hub = createClientHub();
-  const audit = createAuditLog(paths, (event) =>
-    hub.broadcast({ kind: "audit", at: event.at, audit: event }),
+  const audit = createAuditLog(paths, (event, except) =>
+    hub.broadcast({ kind: "audit", at: event.at, audit: event }, except),
   );
   const arbiter = createArbiter({ paths, hub, audit, env });
   const supervisor = createProxySupervisor(paths, env, (event) =>

@@ -95,7 +95,9 @@ export async function requestOnce(
       unix: socketPath,
       socket: {
         data(_socket, chunk) {
-          for (const line of lines.push(chunk.toString())) consume(line);
+          // **喂字节,不喂字符串**:分片边界可能切在多字节字符中间,先 toString 就会静默污损
+          // (11KB 的快照必然分片到达,而报文里全是中文 —— 见 `contract/ndjson.ts` 文件头)。
+          for (const line of lines.push(chunk)) consume(line);
         },
         error(_socket, error) {
           rejectResponse(new DaemonUnreachableError(String(error)));

@@ -10,7 +10,7 @@
 import { auditLogPath } from "../daemon/audit.ts";
 import type { Arbiter } from "../daemon/arbitration.ts";
 import type { AuditLog } from "../daemon/audit.ts";
-import type { JsonValue } from "../contract/wire.ts";
+import { payload } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import type { Capability } from "./registry.ts";
 
@@ -28,13 +28,11 @@ export function arbitrationCapabilities(context: {
       cliAlias: ["arbitration", "status"],
     },
     handler: () =>
-      // 一次类型放行(同 `capability/proxy.ts::payload` 的理由:具名 result 类型不结构化属于 JsonValue,
-      // 运行时什么都没发生;真正的形状把关在 CLI 侧的 zod 校验上)。
-      ({
+      payload({
         state: context.arbiter.state(),
         logPath: auditLogPath(context.paths),
         events: context.audit.recent(),
-      }) as unknown as JsonValue,
+      }),
   };
   return [status];
 }

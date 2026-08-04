@@ -1022,6 +1022,8 @@ export const AuditActionSchema = z.enum([
   "unavailable",
   /** **在途时确认器全部断线** → 立即降回默拒(第③层塌回第①层)。 */
   "downgraded",
+  /** **发起那次调用的连接断开了** → 在途确认取消(没人在等这个答案了)。 */
+  "cancelled",
   "confirmer_joined",
   "confirmer_left",
   "subscriber_joined",
@@ -1031,6 +1033,16 @@ export const AuditActionSchema = z.enum([
    * 它是"有别的用户在敲这个 socket"的唯一记录。
    */
   "peer_rejected",
+  /**
+   * 对端凭据**问不出来**,连接照常放行(fail-open,见 `daemon/peer.ts` 的取舍与 ADR 0005/0008 修订记录)。
+   * 按原因去重 + 限频 —— 它在正常机器上一次都不该出现,一旦出现就说明取凭据那条路失效了。
+   */
+  "peer_unverified",
+  /**
+   * 推送积压超限,该连接被判定为**慢消费者**并断连。它重连时会拿到一份新的全量快照,
+   * 所以丢掉中间那些增量不会让它错乱(这正是"全量快照 + 增量"模型的兜底)。
+   */
+  "backpressure_dropped",
 ]);
 export type AuditAction = z.infer<typeof AuditActionSchema>;
 
@@ -1072,6 +1084,13 @@ export type CapabilityEvent = z.infer<typeof CapabilityEventSchema>;
 
 /**
  * 注册那一刻回给客户端的**全量快照**。之后的变化一律走增量推送(`KernelEvent`)。
+ *
+ * **快照即基线,此后才是增量 —— 这条顺序是协议保证,不是巧合**(09/10 票的客户端要依赖它):
+ *   * `roles.register` 的**响应**(含本快照)是这条连接上的**第一帧**,任何推送都排在它之后;
+ *   * 快照里的 `arbitration` 计数**已经含这条连接自己**,所以内核**不会**再把它自己的
+ *     `confirmer_joined` / `subscriber_joined` 推给它 —— 否则严格按"快照 + 增量"记账的客户端会重复计入。
+ *     别的已注册连接照常收到那条进场事件(对它们那是真增量)。
+ * 于是客户端的算法可以是最简单的那种:拿快照当初值,之后每条事件直接叠上去,不必去重、不必对账。
  *
  * 为什么快照就是这五样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求、
  * 不读一次外部进程 —— 快照必须是廉价且瞬时一致的,否则"注册即快照"会变成一次慢启动。
@@ -1244,6 +1263,21 @@ export function request(op: string, params?: Record<string, JsonValue>): Request
 /** 推送帧(08 票)。`id` 现造 —— 它不对应任何请求。 */
 export function pushEnvelope(event: KernelEvent): PushEnvelope {
   return { v: PROTOCOL_VERSION, id: crypto.randomUUID(), push: true, event };
+}
+
+/**
+ * 具名 result 对象 → `JsonValue`(全内核**唯一**的一次类型放行)。
+ *
+ * 为什么需要它:handler 与 op 的返回值本质上是"某个已登记 result 的形状"(`ProxyStatusResult`
+ * `RoleRegisterResult` 之类),而 `JsonValue` 是个递归联合类型 —— TS 不认为一个具名 interface
+ * 结构化地属于它(可选字段的 `| undefined` 在联合里对不上),于是每处都要写一遍
+ * `as unknown as JsonValue`。**运行时什么都没发生**:那些对象本来就只含 JSON 值。
+ * 收敛到这一个函数,是为了让"这里有一次类型放行"只需要读一遍、也只有一个地方可以出错。
+ * (真正的形状把关在别处:CLI 侧 `outcomeFromEnvelope` 拿 zod schema 校验 daemon 的应答,漂了就红;
+ * 金标样本双向核对同一批形状。)
+ */
+export function payload(value: object): JsonValue {
+  return value as unknown as JsonValue;
 }
 
 /** 编码成一帧(带换行)。 */

@@ -9,16 +9,18 @@
 // (ADR 0010 Consequences:Bun 的 UDS 权限跟随 umask,内核不能指望它。)
 //
 // 08 票起这条 socket 是**长连接**:同一条连接上既有一问一答,也有内核单向推来的帧(推送)。
-// 每连接一份状态因此长出了角色与身份 —— 那正是 03 票留在 `socket.data` 上的那个位置。
+// 每连接一份状态因此长出了角色、身份与一个**有上限的写队列**(见 `daemon/writer.ts`:半写要接住、
+// 顺序要统一、积压要有天花板)—— 那正是 03 票留在 `socket.data` 上的那个位置。
 
 import { chmod, mkdir, stat, unlink } from "node:fs/promises";
 import { LineBuffer } from "../contract/ndjson.ts";
 import { ErrorCode, encodeFrame, failureResponse } from "../contract/wire.ts";
 import { RUN_DIR_MODE, SOCKET_MODE, type KernelPaths } from "../runtime/paths.ts";
 import type { ClientConnection } from "./hub.ts";
-import { judgePeer } from "./peer.ts";
+import { createUnverifiedPeerLog, judgePeer } from "./peer.ts";
 import { handleLine } from "./router.ts";
 import type { KernelRuntime } from "./runtime.ts";
+import { createFrameWriter } from "./writer.ts";
 
 /** socket 上已经有个活着的 daemon —— 不抢,报错退出(自愈归系统 supervisor,应用层不造看门狗)。 */
 export class AlreadyRunningError extends Error {
@@ -40,58 +42,8 @@ interface ConnectionState {
   queue: Promise<void>;
   /** 这条连接在 hub 眼里的样子(角色、身份、怎么给它写帧)。 */
   client: ClientConnection;
-  /** 写不完的字节暂存在这儿,等 `drain` 再续(见 `createWriter`)。 */
+  /** 写不完的字节暂存处(见 `daemon/writer.ts`);挂在 socket 的 `drain` 上。 */
   flush(): void;
-}
-
-/**
- * 一条连接的**唯一写出口**(响应与推送都走它)。两件事必须由它统一管:
- *
- * 1. **半写**。`socket.write()` 只保证写"能写多少写多少",返回实际写进去的**字节数**;
- *    剩下的**不会**被自动缓冲。快照报文有十几 KB,一次写不完是常态 —— 不接住就是"报文被截断"
- *    (本票实测踩到:注册响应写到一半没了,客户端读到半个 JSON)。剩料留在这里,等 `drain` 再续。
- * 2. **顺序**。推送是内核随时发起的,响应是排队产出的;两者若各写各的,先来的半截会被后来的插队。
- *    统一从一个队列出去,先进先出。
- *
- * 缓冲用 `Uint8Array` 而不是字符串:`write` 的返回值是字节数,而报文里全是中文 —— 按字符切会切碎多字节序列。
- */
-function createWriter(socket: { write(data: Uint8Array): number }): {
-  send(frame: string): void;
-  flush(): void;
-} {
-  const encoder = new TextEncoder();
-  let backlog: Uint8Array | undefined;
-
-  function flush(): void {
-    while (backlog && backlog.length > 0) {
-      let written = 0;
-      try {
-        written = socket.write(backlog);
-      } catch {
-        backlog = undefined; // 对端已断,这些字节没有去处了。
-        return;
-      }
-      if (written <= 0) return; // 缓冲满了,等 drain。
-      backlog = written >= backlog.length ? undefined : backlog.subarray(written);
-    }
-    backlog = undefined;
-  }
-
-  return {
-    send(frame) {
-      const bytes = encoder.encode(frame);
-      if (backlog && backlog.length > 0) {
-        const merged = new Uint8Array(backlog.length + bytes.length);
-        merged.set(backlog, 0);
-        merged.set(bytes, backlog.length);
-        backlog = merged;
-      } else {
-        backlog = bytes;
-      }
-      flush();
-    },
-    flush,
-  };
 }
 
 export async function startKernelServer(runtime: KernelRuntime): Promise<KernelServer> {
@@ -99,12 +51,23 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
   await prepareRunDirectory(paths);
   await clearStaleSocket(paths.socketPath);
 
+  /** 「凭据问不出来」的留痕器,每个 server 一份(按原因去重 + 限频,见 `peer.ts`)。 */
+  const unverifiedPeers = createUnverifiedPeerLog();
+
   const listener = Bun.listen<ConnectionState>({
     unix: paths.socketPath,
     socket: {
       open(socket) {
         // 第三道门:先验对端,再谈别的。**验不过的连接一个字节都不路由**。
         const verdict = judgePeer(socket);
+        if (verdict.allow && verdict.unverified) {
+          // **fail-open 但绝不静默**(08 票 CR):凭据问不出来正是「Bun 挪走了 fd 取值器」这类失效
+          // 最可能的表现。按原因去重 + 限频,既不静默也不刷屏(取舍见 `peer.ts` 文件头)。
+          const detail = unverifiedPeers.note(verdict.unverified);
+          if (detail !== undefined) {
+            runtime.audit.record({ action: "peer_unverified", detail });
+          }
+        }
         if (!verdict.allow) {
           runtime.audit.record({
             action: "peer_rejected",
@@ -140,9 +103,20 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
           return;
         }
 
-        const writer = createWriter(socket);
+        const id = crypto.randomUUID();
+        const writer = createFrameWriter(socket, {
+          onOverflow(bytes, limit) {
+            // 对端连上来就不读 —— 别让它把内核的内存拖垮。断连 + 留痕;它重连时会拿到新的全量快照,
+            // 所以丢掉中间那些增量不会让它错乱(「全量快照 + 增量」模型自带的兜底)。
+            runtime.audit.record({
+              action: "backpressure_dropped",
+              detail: `连接 ${id} 的推送积压达 ${bytes} 字节(上限 ${limit}),判定为慢消费者并断开。`,
+            });
+            socket.end();
+          },
+        });
         const client: ClientConnection = {
-          id: crypto.randomUUID(),
+          id,
           ...(verdict.credential === undefined ? {} : { uid: verdict.credential.uid }),
           roles: new Set(),
           // 推送失败不该把内核拖下水:对端可能刚好断了,那是它的事(writer 自己吞掉写异常)。
@@ -163,7 +137,8 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
         const state = socket.data;
         // 被拒的连接没有 state(open 里已经 end 掉了),它后面若还发字节,一律不理。
         if (!state) return;
-        for (const line of state.lines.push(chunk.toString())) {
+        // **喂字节,不喂字符串**:分片边界可能切在多字节字符中间,先 toString 就会静默污损(见 ndjson.ts)。
+        for (const line of state.lines.push(chunk)) {
           // 串成一条链:上一条应答写完才处理下一条,请求-响应顺序天然对齐(handler 可异步)。
           state.queue = state.queue
             .then(async () => {
@@ -183,10 +158,13 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
         }
       },
       close(socket) {
-        // **在场 = 长连接**:断连即离场。角色随连接一起消失,在途的 dangerous 请求由 arbiter
-        // 在确认器归零时立即按默拒收尾 —— 不等超时,也没有"重连恢复会话"这回事。
+        // **在场 = 长连接**:断连即离场。两件事各管一头 ——
+        //   ① 由**这条连接发起**的在途确认:取消(没人在等那个答案了);
+        //   ② 这条连接持有的**角色**:摘掉;确认器因此归零时,别人发起的在途请求按默拒收尾。
+        // 两者都不等超时,也没有"重连恢复会话"这回事。
         const state = socket.data;
         if (!state) return;
+        runtime.arbiter.cancelFor(state.client);
         dropClient(runtime, state.client);
       },
     },
