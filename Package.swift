@@ -38,6 +38,11 @@ let package = Package(
         //   10 票原子切换时才由它们接管喂养源,AA* 随之退场。
         .library(name: "A2Contract", targets: ["A2Contract"]),
         .library(name: "A2KernelClient", targets: ["A2KernelClient"]),
+        // a2 内核 bin 化 10 票:菜单栏壳 `a2-panel`(.app 显示名「A2 Panel」)。
+        //   **这是本包唯一的对外交付物**——旧的 aa / aa-agent / aahost 三个可执行在本票退场。
+        .executable(name: "a2-panel", targets: ["a2-panel"]),
+        .library(name: "A2Panel", targets: ["A2Panel"]),
+        .library(name: "A2PanelMacOS", targets: ["A2PanelMacOS"]),
     ],
     targets: [
         // ① 零依赖底座
@@ -117,7 +122,36 @@ let package = Package(
         //   角色注册与确认往返)。依赖边与源码实际 import 一一对应:只有 A2Contract + Foundation/Darwin。
         .target(name: "A2KernelClient", dependencies: ["A2Contract"]),
 
-        // ④ CLI 可执行
+        // ③″ 菜单栏壳 a2-panel(10 票 —— 壳原子切换,Phase 1 出口)。
+        //
+        // 「一个模型,两个渲染器」的结构自 14 票原封平移,只换喂养源:
+        //   A2Panel       —— 纯逻辑(菜单模型 + 构造器 + 事件投影 + 会话循环 + 确认呈现模型)。**零 AppKit**:
+        //                    这是「快照能进 headless 门禁」与「投影可纯逻辑断言」的共同前提。
+        //                    依赖边与源码实际 import 一一对应:A2Contract(模型)+ A2KernelClient(会话)。
+        //   A2PanelMacOS  —— 两个渲染器 + 确认器窗口 + 关于页 + 装配层(要 AppKit)。
+        //   A2PanelFixtures —— 三态 + 断连态的固定装置,以及与内核 manifest 对照的能力清单。
+        //                    **刻意住在 Sources/ 而不是 Tests/**:它有两类消费者(测试 target 与
+        //                    `a2-panel-snapshot` 这个可执行),而 executableTarget 不能依赖 testTarget
+        //                    —— 与 14 票 AAHostTestKit 的理由逐字相同。
+        .target(name: "A2Panel", dependencies: ["A2Contract", "A2KernelClient"]),
+        .target(name: "A2PanelMacOS", dependencies: ["A2Panel", "A2Contract"]),
+        .target(name: "A2PanelFixtures", dependencies: ["A2Panel", "A2Contract"]),
+
+        // ④ 可执行
+        // 10 票:菜单栏壳的薄可执行(「建 NSApplication、挂 AppDelegate、run」三行)。
+        //   与 11 票 `aahost` 同一条安排:SPM 的可执行产不出 `.app` bundle,
+        //   bundle 由 `Scripts/build-app.sh` 手工组 + ad-hoc 签名产出。
+        .executableTarget(name: "a2-panel", dependencies: ["A2PanelMacOS"]),
+        // 10 票:壳快照的**产物工具**(重录 golden + 给人眼抽查的图)。**门禁内部工具,不进 products**;
+        //   门禁的判据在 `Tests/A2PanelSnapshotTests`(swift test),不在这里。
+        .executableTarget(name: "a2-panel-snapshot",
+                          dependencies: ["A2PanelMacOS", "A2Panel", "A2PanelFixtures"]),
+        // 10 票:壳的**无头替身**,旗舰 e2e 的驱动(门禁内部工具,不进 products)。
+        //   它把壳除 AppKit 之外的全部代码路径接到真内核上;`--decision` 是**人的替身**,
+        //   只住在这里 —— 壳与内核里都没有任何测试专用的确认旁路。
+        .executableTarget(name: "a2-panel-probe", dependencies: ["A2Panel", "A2PanelFixtures", "A2Contract"]),
+
+        // ④′ 旧 CLI 可执行
         .executableTarget(name: "aa", dependencies: ["AAContracts"]),
         // agent-delegation 07:委托试驾 CLI(`run|status|cancel|list|prune`)。
         //   依赖边与源码实际 import 一一对应:AAAgentCore(组装 / 状态机 / 归一化 / 看门狗)+
@@ -174,6 +208,12 @@ let package = Package(
         // 09 票:客户端基座的协议逻辑(拆行、相关性、推送分流、超时顺延)。
         //   假内核用 `socketpair()` 现造,**不起任何进程、不碰文件系统** —— 真 daemon 那一关归烟测。
         .testTarget(name: "A2KernelClientTests", dependencies: ["A2KernelClient", "A2Contract"]),
+        // 10 票:壳的纯逻辑(菜单覆盖面与可追溯性、四态如实反映、事件投影逐族、确认原样呈现)。
+        .testTarget(name: "A2PanelTests", dependencies: ["A2Panel", "A2PanelFixtures", "A2Contract"]),
+        // 10 票:**壳快照进 swift test**(新门禁四件套的第③件)。渲染器 B 在测试进程里离屏渲染 →
+        //   与入库 golden(`Snapshots/a2-panel/`)比像素 + 比模型文本。14 票那条 shell 中间层就此退役。
+        .testTarget(name: "A2PanelSnapshotTests",
+                    dependencies: ["A2PanelMacOS", "A2Panel", "A2PanelFixtures"]),
     ],
     swiftLanguageModes: [.v5]
 )
