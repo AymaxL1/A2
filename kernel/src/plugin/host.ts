@@ -11,7 +11,7 @@
 // 「插件工具的仲裁不用做任何事」这句话能成立,靠的是插件能力与内置能力**是同一种东西**。
 
 import { statSync } from "node:fs";
-import { copyFile, mkdir, rename, rm } from "node:fs/promises";
+import { copyFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Capability, CapabilityRegistry } from "../capability/registry.ts";
 import {
@@ -31,7 +31,6 @@ import type { ClientHub } from "../daemon/hub.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { describePlugin } from "./protocol.ts";
 import {
-  PLUGIN_DIR_MODE,
   PLUGIN_NAME_PATTERN,
   capabilityIdsOf,
   ensurePluginsDir,
@@ -181,7 +180,6 @@ export async function addPlugin(
   }
 
   const directory = ensurePluginsDir(context.paths);
-  await mkdir(directory, { recursive: true, mode: PLUGIN_DIR_MODE });
   const artifact = path.join(directory, `${name}${extension}`);
   const staging = path.join(directory, `.staging-${name}-${crypto.randomUUID()}${extension}`);
 
@@ -255,6 +253,9 @@ export async function addPlugin(
     await writePluginManifest(context.paths, records);
   } catch (error) {
     // 清单没落盘 = 重启就没了。与其留一个"这次能用、下次消失"的幽灵,不如当场退回去。
+    // **诚实记账**:注册表退得回去,但同名替换时**盘上那份旧工件已经被覆盖**(rename 是原子的、
+    // 也是不可逆的)。所以退回去的那条旧记录此刻指着新内容 —— 这条路径只在写盘失败(盘满/只读)
+    // 时走到,那种时候用户要做的本来就是先修盘再重装,不值得为它把旧工件也备份一份。
     context.registry.unregister(record.capabilities);
     if (previous) context.registry.register(pluginCapabilities(previous, context.env));
     return opFailure(loadError(`写插件清单失败:${String(error)}`, undefined, source));
