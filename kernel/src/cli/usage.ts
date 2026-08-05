@@ -186,17 +186,25 @@ export const ARBITRATION_USAGE = `a2 arbitration —— dangerous 三层仲裁�
  * 而一个 agent 手上通常只有这台机器上的这个 bin —— 它必须能只读这一屏就写出一个能用的插件。
  * 所以下面那段例子是可以逐字抄走就跑的,不是示意。
  */
-export const PLUGIN_USAGE = `a2 plugin —— 插件装载(零依赖单文件 .ts,现场写完当场可用)
+export const PLUGIN_USAGE = `a2 plugin —— 插件装载(单文件 .ts 现场写完当场可用;带依赖的交目录)
 
 用法:
   a2 [--json] plugin add <路径> [--name <名字>]   登记一个插件(即时生效,无任何确认闸)
   a2 [--json] plugin list                        列出已登记插件与它们的能力 id
   a2 [--json] plugin remove <名字>                卸载(它的能力当场从注册表消失)
 
+<路径> 收两种形态,**运行期没有区别**(都是登记区里的一个单文件工件):
+  ① 零依赖单文件 .ts / .js —— 现场写完直接装,不需要任何构建步骤(北极星主形态);
+  ② 带 npm 依赖的**目录** —— 入口(index.ts,或 package.json 的 main/module 指着的那个)
+     + 可选 package.json。内核在 add 那一刻替你做完这些,你一步都不用自己跑:
+       临时目录里 bun install --ignore-scripts  →  bun build --target=bun  →  单文件工件登记
+     node_modules 用完即弃(**绝不进 ~/.a2**),源目录一个字节都不会被写。
+     装完删掉源目录也照跑 —— 依赖已经内联进工件了。
+
 装上之后**怎么调**:与内置能力同一个调用面 —— 没有 a2 plugin call 这回事。
   a2 capabilities call plugin.<插件名>.<工具名> --input '{"参数":"值"}' --json
 
-命名:能力 id 恒为 plugin.<插件名>.<工具名>。插件名默认取文件名(去扩展名),--name 可覆写;
+命名:能力 id 恒为 plugin.<插件名>.<工具名>。插件名默认取文件名(去扩展名)或目录名,--name 可覆写;
 名字与工具名的取值域都是 [a-z0-9][a-z0-9_-]*。同名再 add = 替换(工件换掉,id 不变)。
 
 内核 → 插件的协议(exec 一次一调,一次调用一个进程):
@@ -238,14 +246,30 @@ dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(�
   }
   process.exit(2);
 
+打不进单文件的东西(add 时当场拒绝 + 指引,不做半吊子兼容):
+  * native addon(.node)与任何被外置的资源 —— 判据是"打包产物不止一个文件";
+  * 打包失败(包名拼错、依赖没声明、这台机器连不上 registry)—— 打包器原文进 detail;
+  * 动态 require(变量)/ 拼出来的 import —— 打包期**看不见**,所以它活到调用时才发作:
+    内核运行插件恒带 --no-install,于是那是一句 Cannot find package 硬错,而不是静默联网装包。
+    报错的指引会告诉你改成静态 import 后重新 add。
+
+供应链口径(与"装载零闸"配套):add 不执行你的插件代码 —— install 带 --ignore-scripts,
+连**你自己** package.json 里的 preinstall/postinstall/prepare 一起拦(默认只拦依赖的,不拦根工程的)。
+装了哪些依赖、拦下了哪些脚本,都写进 plugin_added 审计事件(a2 arbitration status 查得到)。
+
 边界(V1 显式不做,不是遗漏):
   * 插件**没有事件面、没有常驻态** —— 不能主动推事件,也不能跨调用保存内存状态(要存就自己写文件);
   * 插件是**进程外子进程**,能力只经本协议进出;内核不把自己的坐标(A2_HOME 等)传给它;
   * 运行期**不联网装包**(内核固定带 --no-install)。import 了没打进来的包 = 调用时硬失败;
-  * 带 npm 依赖的**目录插件**(装载期 install + bundle)尚未交付,本版只收零依赖单文件。
+  * stdout/stderr 各有 4MiB 上限,一个插件最多声明 128 个工具 —— 撞上即结构化错误 + 杀掉;
+  * 内核杀得掉插件进程本身,**杀不掉它派生的子孙**(没有进程组的口子)。插件自己 spawn 的进程
+    请自己收尾:它继承着同一条 stdout,不退出就会把这次调用拖到超时。
 
 环境变量:
-  A2_PLUGIN_TIMEOUT_MS   describe/call 的超时窗口(默认 15000)。超时即杀,不等不猜
+  A2_PLUGIN_TIMEOUT_MS         describe/call 的超时窗口(默认 15000)。超时即杀,不等不猜
+  A2_PLUGIN_BUILD_TIMEOUT_MS   目录插件 install+build 的窗口(默认 180000)。与上面那条**不是**同一个
+                               旋钮:一次调用是毫秒级,冷缓存装一棵依赖树是秒级
+  BUN_INSTALL_CACHE_DIR        装依赖时的包缓存(缺省 ~/.bun/install/cache)
 
 退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 5 装载或调用没成 / 6 插件说的话不合协议`;
 

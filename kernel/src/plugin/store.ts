@@ -9,8 +9,8 @@
 // 清单损坏时的处置**照抄订阅清单那条**(07 票):**拒绝读写**,不覆盖 —— 盘上那份东西可能是用户
 // 唯一能救回插件列表的线索,内核宁可什么都不装也不擅自重写它。
 
-import { mkdirSync, readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { CapabilityFailedError, type Capability } from "../capability/registry.ts";
@@ -107,6 +107,93 @@ export function ensurePluginsDir(paths: KernelPaths): string {
   const dir = pluginsDir(paths);
   mkdirSync(dir, { recursive: true, mode: PLUGIN_DIR_MODE });
   return dir;
+}
+
+/** 暂存工件的文件名前缀(add 的中间态;正式工件永远不以点开头)。 */
+export const STAGING_PREFIX = ".staging-";
+
+/**
+ * 清掉登记区里遗留的暂存工件(11 票 CR 尾款 d)。
+ *
+ * add 的路径上每一条失败分支都会自己删暂存件,但**进程被杀 / 掉电**时没有分支可走 ——
+ * 于是登记区里会攒下 `.staging-xxx-<uuid>.ts` 这种谁也不会再看一眼的文件,一份 add 一个。
+ * 启动时与每次 add 前各扫一次:装载面的写操作是串行的(见 `host.ts` 的 `serializeMutation`),
+ * 所以这里绝不会误删"另一次 add 正在用的那份"。
+ *
+ * best-effort:扫不动(权限/竞态)就算了 —— 卫生问题不该拦住装载。
+ */
+export async function sweepStagingArtifacts(paths: KernelPaths): Promise<string[]> {
+  const dir = pluginsDir(paths);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const swept: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith(STAGING_PREFIX)) continue;
+    try {
+      await rm(path.join(dir, name), { force: true });
+      swept.push(name);
+    } catch {
+      // 删不掉就留着,下次再说。
+    }
+  }
+  return swept;
+}
+
+/**
+ * 清单里的记录逐条复验(11 票 CR 尾款 e)。
+ *
+ * 清单是盘上一个普通 JSON 文件,谁都能手改。schema 只管形状("name 是个非空字符串"),
+ * 管不到**取值域** —— 而能力 id 是靠插件名与工具名拼出来的:一条名字带点的记录
+ * (`{"name":"a.b"}` 配上工具 `c`)就能拼出与另一条插件的 id 一模一样的能力 id,
+ * 于是注册表构造器在 daemon **启动那一刻**抛出重复 id —— **手改一个文件掀翻整个内核**。
+ *
+ * 处置:坏条目单条拒绝(重名同理,只认首条),好条目照常还原,问题写成一句话交给调用方
+ * (daemon 落 stderr,`plugin list` 里那条记录直接不出现)。
+ */
+export function sanitizeRecords(records: PluginRecord[]): {
+  records: PluginRecord[];
+  problem?: string;
+} {
+  const seen = new Set<string>();
+  const kept: PluginRecord[] = [];
+  const rejected: string[] = [];
+
+  for (const record of records) {
+    if (!PLUGIN_NAME_PATTERN.test(record.name)) {
+      rejected.push(`${JSON.stringify(record.name)}(插件名不合取值域)`);
+      continue;
+    }
+    const badTool = record.tools.find((tool) => !PLUGIN_NAME_PATTERN.test(tool.name));
+    if (badTool) {
+      rejected.push(`${record.name}(工具名 ${JSON.stringify(badTool.name)} 不合取值域)`);
+      continue;
+    }
+    if (new Set(record.tools.map((tool) => tool.name)).size !== record.tools.length) {
+      rejected.push(`${record.name}(清单里有重名工具)`);
+      continue;
+    }
+    if (seen.has(record.name)) {
+      rejected.push(`${record.name}(重名条目,只认首条)`);
+      continue;
+    }
+    seen.add(record.name);
+    kept.push(record);
+  }
+
+  return {
+    records: kept,
+    ...(rejected.length === 0
+      ? {}
+      : {
+          problem:
+            `插件清单里有 ${rejected.length} 条记录没通过复验,已逐条拒绝(其余插件照常可用):` +
+            rejected.join("、"),
+        }),
+  };
 }
 
 /**

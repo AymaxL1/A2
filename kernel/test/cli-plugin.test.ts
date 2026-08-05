@@ -394,18 +394,36 @@ test("能力全集变了要推增量:订阅者收到 capability-set 事件(带�
 
 test("dangerous 插件工具 · 无确认器:默拒 + 指引,插件一次都没被拉起", async () => {
   daemon = await startDaemon(home);
-  await addHello();
+  // 「没被拉起」这件事要**直接**证:插件一被执行就在盘上落一个标记文件,断言那个文件不存在。
+  // (11 票时是间接证的 —— "响应里没有 handler 的产物"。那只说明产物没回来,不说明进程没起:
+  //  一个有副作用的 dangerous 工具完全可能"跑了、把事做了、结果被内核丢掉"。)
+  const marker = path.join(workspace, "wipe-was-executed");
+  const file = await writePlugin("tracer", `
+    const MARKER = ${JSON.stringify(marker)};
+    if (process.argv[2] === "describe") {
+      console.log(JSON.stringify({ protocol: 1, tools: [
+        { name: "wipe", summary: "一被执行就留下痕迹", dangerous: true, parameters: [] },
+      ] }));
+      process.exit(0);
+    }
+    if (process.argv[2] === "call") {
+      await Bun.write(MARKER, "executed\\n");
+      console.log(JSON.stringify({ ok: true, output: { wiped: true } }));
+      process.exit(0);
+    }
+    process.exit(2);
+  `);
+  expect((await runCli(["plugin", "add", file, "--json"], { home })).exitCode).toBe(0);
+  expect(existsSync(marker)).toBe(false); // describe 那一趟不该碰它
 
-  const result = await runCli(
-    ["capabilities", "call", "plugin.hello.wipe", "--input", '{"target":"x"}', "--json"],
-    { home },
-  );
+  const result = await runCli(["capabilities", "call", "plugin.tracer.wipe", "--json"], { home });
 
   expect(result.exitCode).toBe(2);
   const body = parseJsonStdout(result);
   expect(body.error.code).toBe("confirmation_unavailable");
   expect(body.error.guidance.summary.length).toBeGreaterThan(0);
-  // 反证:被拒时**响应里绝不出现 handler 的产物** —— 插件子进程压根没被起。
+  // 直接判据:插件的 call 分支一次都没跑过。
+  expect(existsSync(marker)).toBe(false);
   expect(JSON.stringify(body)).not.toContain("wiped");
 });
 
@@ -552,18 +570,207 @@ test("--name 覆写登记名;非法名字当场拒绝(它要拼进能力 id)", a
   expect(parseJsonStdout(bad).error.code).toBe("plugin_load_failed");
 });
 
-test("装不上的两种输入各有各的指引:文件不存在 / 目录插件(那是 12 票)", async () => {
+test("装不上的两种输入各有各的指引:路径不存在 / 扩展名不收(指向目录插件那条路)", async () => {
   daemon = await startDaemon(home);
 
   const missing = await runCli(["plugin", "add", path.join(workspace, "nope.ts"), "--json"], { home });
   expect(missing.exitCode).toBe(5);
   expect(parseJsonStdout(missing).error.code).toBe("plugin_load_failed");
 
-  const directory = await runCli(["plugin", "add", workspace, "--json"], { home });
-  expect(directory.exitCode).toBe(5);
-  const body = parseJsonStdout(directory);
-  expect(body.error.message).toContain("零依赖单文件");
-  expect(body.error.detail).toContain("12 票");
+  // 单文件只收 .ts / .js;带依赖的东西请交**目录**(12 票的装载期流水线)。
+  const wrongExtension = path.join(workspace, "notes.txt");
+  await writeFile(wrongExtension, "我不是插件\n", "utf8");
+  const rejected = await runCli(["plugin", "add", wrongExtension, "--json"], { home });
+  expect(rejected.exitCode).toBe(5);
+  const body = parseJsonStdout(rejected);
+  expect(body.error.message).toContain(".ts");
+  expect(body.error.detail).toContain("目录");
+  // 指引现在要把**两种形态**都说清楚(11 票时只有单文件那一种)。
+  expect(body.error.guidance.summary).toContain("目录");
+});
+
+// MARK: - 11 票 CR 尾款
+//
+// 下面这批断言都不是"新功能",而是**11 票交付时漏掉的账**:并发、孙进程、输出上限、登记区卫生、
+// 清单伪造。每一条都对应一条能把内核弄坏的具体走法,所以每一条都从"怎么弄坏它"写起。
+
+test("尾款 a:两次 add 并发,注册表与清单不许分叉(重启后两个插件都还在)", async () => {
+  daemon = await startDaemon(home);
+  const first = await writePlugin("hello", HELLO);
+  const second = await writePlugin("other", OTHER);
+
+  // 同时打两枪。11 票时 add 的"读清单"在头、"写清单"在尾,中间隔着一次 describe ——
+  // 后写的那份是基于**它进门时读到的**清单算的,于是先写的那条记录被覆盖没了:
+  // 注册表里有两个插件,清单里只有一个,重启就少一个。
+  const [a, b] = await Promise.all([
+    runCli(["plugin", "add", first, "--json"], { home }),
+    runCli(["plugin", "add", second, "--json"], { home }),
+  ]);
+  expect([a.exitCode, b.exitCode]).toEqual([0, 0]);
+
+  const listed = parseJsonStdout(await runCli(["plugin", "list", "--json"], { home }));
+  expect((listed.result.plugins as { name: string }[]).map((p) => p.name).sort()).toEqual([
+    "hello",
+    "other",
+  ]);
+
+  // 判据落在**重启之后**:清单是唯一能跨重启的记账,分叉了这里就会少一个。
+  await stopDaemon(daemon);
+  daemon = await startDaemon(home);
+  const ids = await capabilityIds();
+  expect(ids).toContain("plugin.hello.greet");
+  expect(ids).toContain("plugin.other.greet");
+});
+
+test("尾款 b:插件派生的孙进程攥着 stdout 不放 —— 内核照样在超时窗口内收场,不挂死", async () => {
+  daemon = await startDaemon(home, { A2_PLUGIN_TIMEOUT_MS: "800" });
+  // 插件自己**立刻退出**,但它 spawn 的孙进程继承了同一条 stdout 并睡着 —— 于是那根 pipe
+  // 永远没有 EOF。11 票时内核在"读 stdout 到底"上等着,超时杀掉直接子进程也救不回来:
+  // 杀完接着等,调用永远不返回。修法是**读流与超时赛跑**(见 plugin/spawn.ts)。
+  const file = await writePlugin("grandchild", `
+    const mode = process.argv[2];
+    if (mode === "describe") {
+      console.log(JSON.stringify({ protocol: 1, tools: [
+        { name: "leak", summary: "派生一个攥着 stdout 的孙进程", dangerous: false, parameters: [] },
+      ] }));
+      process.exit(0);
+    }
+    if (mode === "call") {
+      Bun.spawn({ cmd: ["/bin/sleep", "5"], stdout: "inherit", stderr: "inherit" });
+      console.log(JSON.stringify({ ok: true, output: { spawned: true } }));
+      process.exit(0);
+    }
+    process.exit(2);
+  `);
+  expect((await runCli(["plugin", "add", file, "--json"], { home })).exitCode).toBe(0);
+
+  const started = Date.now();
+  const result = await runCli(["capabilities", "call", "plugin.grandchild.leak", "--json"], { home });
+  const elapsed = Date.now() - started;
+
+  expect(result.exitCode).toBe(5);
+  const body = parseJsonStdout(result);
+  expect(body.error.code).toBe("plugin_timeout");
+  // 诚实的账:内核杀得掉直接子进程,杀不掉它的子孙(没有进程组的口子)——
+  // 所以指引里得写明"派生的进程请自己收尾",而不是吹"不留孤儿"。
+  expect(JSON.stringify(body.error.guidance)).toContain("杀不掉它的子孙");
+  // 关键判据:**回来了**,而且远早于孙进程自己睡醒的时刻。
+  expect(elapsed).toBeLessThan(4_000);
+});
+
+test("尾款 c:stdout 撞 4MiB 上限 → 结构化错误 + 杀掉;工具数也有 sanity 上限", async () => {
+  daemon = await startDaemon(home, { A2_PLUGIN_TIMEOUT_MS: "20000" });
+
+  const flood = await writePlugin("flood", `
+    if (process.argv[2] === "describe") {
+      // 一行 JSON 是协议;这个插件打算往那条唯一的机读面上倒 6MiB。
+      // (逐块 await:直接 write 完就 exit 会把还没落进管道的部分丢掉,那样测的就不是上限了。)
+      const chunk = "x".repeat(1024 * 1024);
+      for (let i = 0; i < 6; i += 1) await Bun.write(Bun.stdout, chunk);
+      process.exit(0);
+    }
+    process.exit(2);
+  `);
+  const flooded = await runCli(["plugin", "add", flood, "--json"], { home });
+  expect(flooded.exitCode).toBe(6);
+  const floodBody = parseJsonStdout(flooded);
+  expect(floodBody.error.code).toBe("plugin_protocol_error");
+  expect(floodBody.error.message).toContain("4MiB");
+  expect(JSON.stringify(floodBody.error.guidance)).toContain("回一个路径");
+
+  const many = await writePlugin("many", `
+    if (process.argv[2] === "describe") {
+      const tools = Array.from({ length: 500 }, (_, i) => ({
+        name: "t" + i, summary: "工具 " + i, dangerous: false, parameters: [],
+      }));
+      console.log(JSON.stringify({ protocol: 1, tools }));
+      process.exit(0);
+    }
+    process.exit(2);
+  `);
+  const manyResult = await runCli(["plugin", "add", many, "--json"], { home });
+  expect(manyResult.exitCode).toBe(6);
+  expect(parseJsonStdout(manyResult).error.message).toContain("超过上限 128");
+  // 两次都没登记:能力表干干净净。
+  expect(parseJsonStdout(await runCli(["plugin", "list", "--json"], { home })).result.plugins).toEqual([]);
+});
+
+test("尾款 d:跨扩展名替换要删旧工件;崩在半路留下的暂存件启动与 add 时都会被清掉", async () => {
+  daemon = await startDaemon(home);
+  await addHello();
+  expect(existsSync(path.join(registryDir(), "hello.ts"))).toBe(true);
+
+  // 同一个插件名,这次交的是 .js —— rename 覆盖的是 hello.js,hello.ts 原地不动。
+  // 不删它就等于在登记区里留一份"再也不会被调用、却看起来像这个插件的代码"的死文件。
+  const replacement = path.join(workspace, "hello.js");
+  await writeFile(replacement, `
+    if (process.argv[2] === "describe") {
+      console.log(JSON.stringify({ protocol: 1, tools: [
+        { name: "greet", summary: "换成 .js 了", dangerous: false, parameters: [] },
+      ] }));
+      process.exit(0);
+    }
+    if (process.argv[2] === "call") {
+      console.log(JSON.stringify({ ok: true, output: { flavour: "js" } }));
+      process.exit(0);
+    }
+    process.exit(2);
+  `, "utf8");
+  const replaced = await runCli(["plugin", "add", replacement, "--json"], { home });
+
+  expect(replaced.exitCode).toBe(0);
+  expect(parseJsonStdout(replaced).result.action).toBe("replaced");
+  expect(existsSync(path.join(registryDir(), "hello.js"))).toBe(true);
+  expect(existsSync(path.join(registryDir(), "hello.ts"))).toBe(false); // 旧工件收了尸
+
+  // 崩溃遗留的暂存件:add 时清扫。
+  const leftover = path.join(registryDir(), ".staging-hello-deadbeef.ts");
+  await writeFile(leftover, "// 上一次 add 崩在半路留下的\n", "utf8");
+  await runCli(["plugin", "add", replacement, "--json"], { home });
+  expect(existsSync(leftover)).toBe(false);
+
+  // 启动时也清扫(这条更要紧:崩溃之后没有下一次 add 也该干净)。
+  const afterCrash = path.join(registryDir(), ".staging-other-cafebabe.ts");
+  await writeFile(afterCrash, "// 同上\n", "utf8");
+  await stopDaemon(daemon);
+  daemon = await startDaemon(home);
+  await runCli(["status", "--json"], { home });
+  expect(existsSync(afterCrash)).toBe(false);
+});
+
+test("尾款 e:手改清单塞一条非法记录,daemon 照起 —— 坏条目单条拒绝,好插件照用", async () => {
+  daemon = await startDaemon(home);
+  await addHello();
+  await stopDaemon(daemon);
+
+  // 名字带点 = 它派生出的能力 id 会与别人撞上,注册表构造器当场抛。
+  // 11 票时这一条足以让 daemon **起不来**:手改一个文件就能掀翻整个内核。
+  const manifestPath = path.join(registryDir(), "plugins.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.plugins.push({
+    name: "hello.greet",
+    artifact: path.join(registryDir(), "hello.ts"),
+    source: "/forged",
+    addedAt: new Date().toISOString(),
+    tools: [{ name: "x", summary: "伪造的", dangerous: false, parameters: [] }],
+    capabilities: ["plugin.hello.greet.x"],
+  });
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+  daemon = await startDaemon(home); // ← 起得来才算过
+
+  const ids = await capabilityIds();
+  expect(ids).toContain("plugin.hello.greet"); // 好插件照常在
+  expect(ids.some((id) => id.startsWith("plugin.hello.greet."))).toBe(false); // 坏条目没上岗
+  // list 与能力面口径一致:列得出来的就是调得动的,不留"列得出、调不动"的幽灵。
+  const listed = parseJsonStdout(await runCli(["plugin", "list", "--json"], { home }));
+  expect((listed.result.plugins as { name: string }[]).map((p) => p.name)).toEqual(["hello"]);
+  // 但绝不静默:降级这件事落 stderr。
+  await stopDaemon(daemon);
+  const stderr = await daemon.stderr();
+  daemon = undefined;
+  expect(stderr).toContain("plugins.restore.degraded");
+  expect(stderr).toContain("hello.greet");
 });
 
 // MARK: - 红线:进程外 + 能力只经协议白名单
@@ -628,10 +835,23 @@ test("红线③:spawn 插件恒带 --no-install;import 不在的包 = 当场硬�
   expect(body.error.detail).toContain("a2-definitely-not-a-real-package");
 });
 
-test("红线④:命名空间隔离 —— 内置能力没有一条以 plugin. 开头,插件永远撞不掉它们", () => {
+test("红线④:命名空间隔离 —— **全部**内置能力都不以 plugin. 开头,插件永远撞不掉它们", async () => {
+  // 静态那一半:自检样本族。
   const builtins = BUILTIN_CAPABILITIES.map((capability) => capability.descriptor.id);
   expect(builtins.length).toBeGreaterThan(0);
   for (const id of builtins) {
+    expect(id.startsWith(CAPABILITY_NAMESPACE)).toBe(false);
+  }
+
+  // 活体那一半(11 票 CR 尾款 g):`BUILTIN_CAPABILITIES` 只是内置能力的**一族**——
+  // 代理域(proxy.*)、仲裁面(arbitration.*)是在 daemon 装配时才拼进注册表的。
+  // 只扫那一族,等于把大半个内置面漏在断言之外。这里问的是**一台真内核此刻的整张表**。
+  daemon = await startDaemon(home);
+  const live = await capabilityIds();
+  expect(live.length).toBeGreaterThan(builtins.length); // 确实比自检样本族多(否则这条断言是空的)
+  expect(live.filter((id) => id.startsWith("proxy.")).length).toBeGreaterThan(0);
+  expect(live.filter((id) => id.startsWith("arbitration.")).length).toBeGreaterThan(0);
+  for (const id of live) {
     expect(id.startsWith(CAPABILITY_NAMESPACE)).toBe(false);
   }
 });

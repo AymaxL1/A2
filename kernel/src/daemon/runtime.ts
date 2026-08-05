@@ -9,6 +9,7 @@ import { proxyCapabilities } from "../capability/proxy.ts";
 import { CapabilityRegistry } from "../capability/registry.ts";
 import { PROTOCOL_VERSION, type KernelSnapshot, type StatusResult } from "../contract/wire.ts";
 import { restorePlugins } from "../plugin/host.ts";
+import { sweepStagingArtifacts } from "../plugin/store.ts";
 import { createProxySupervisor, type ProxySupervisor } from "../proxy/supervision.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
@@ -63,6 +64,9 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
   // 11 票:已登记的插件在**建注册表之前**还原出来 —— 于是"内核提供哪些能力"从第一帧起就是完整的,
   // 不存在"daemon 起来了但插件还没装上"的中间态(那会让刚连上的壳先看到一份少一截的快照)。
   const plugins = restorePlugins(paths, env);
+  // 上一次进程被杀在 add 半路时留下的暂存工件,在这里清掉(11 票 CR 尾款 d)。
+  // 不 await:登记区的卫生问题不该让 daemon 晚一毫秒起来,失败也不该拦住启动。
+  void sweepStagingArtifacts(paths).catch(() => {});
   const registry = new CapabilityRegistry([
     // 内置自检样本 + 代理域真能力 + 仲裁面只读查询 + 已登记的插件工具。
     // **顺序即 `capabilities list` 的输出顺序**;插件排在最后(内置的位置永远不因装插件而变)。

@@ -17,9 +17,11 @@
 #                              + 客户端协议逻辑 + 壳纯逻辑 + **壳快照**(离屏渲染 × 入库 golden)。
 #   ③ 旗舰 e2e              —— `Scripts/a2-flagship-e2e.sh`:真 `a2` bin + 假 mihomo + 壳的真代码路径,
 #                              旗舰链零打断 / dangerous 三收场 / 壳退出仅断连 / 显式还原。
-#   ④ 插件 e2e(11 票)      —— `Scripts/a2-plugin-e2e.sh`:agent **现场写**一个零依赖单文件插件 →
+#   ④ 插件 e2e(11/12 票)   —— `Scripts/a2-plugin-e2e.sh`:agent **现场写**一个零依赖单文件插件 →
 #                              `a2 plugin add` 零闸装上 → 经 CLI 全链调用 → dangerous 两分支 →
-#                              进程外 + 协议白名单红线断言 → 卸载 → 留痕。
+#                              进程外 + 协议白名单红线断言 → 卸载 → 留痕;**幕⑥(12 票)**:
+#                              带 npm 依赖的目录插件装载期 install+bundle → 删源目录仍可调(离线证明)
+#                              → native addon 结构化拒绝。全程不出网、不写用户的 bun 包缓存。
 #   ⑤ `.app` 出包           —— `Scripts/build-app.sh`:以 **a2-panel** 身份组 bundle + ad-hoc 签名,
 #                              并核验包结构与签名(证书 / TCC / 公证是人工项,顺延不阻塞)。
 #
@@ -167,40 +169,26 @@ run_step "① bun test(内核 CLI 面 + 契约金标 TS 半边)" "$BUILD/bun-tes
 run_step "② swift test(契约金标 Swift 半边 + 客户端协议 + 壳纯逻辑 + 壳快照)" "$BUILD/swift-test.log" \
   "$SWIFT_BIN" test --scratch-path "$BUILD/spm" --no-parallel
 
-# ---- ②b 内核产物新鲜度守卫(11 票 CR 尾款 a)---------------------------------------------
+# ---- ②b 内核产物:**每次都重建**(11 票 CR 尾款 a 立,12 票 CR 尾款 f 收紧)-------------
 # ③④ 两步的被测体优先取 `kernel/dist/a2`(**编译产物**),取不到才回落源码入口。这个"优先"是静默的,
-#   于是产物比 `kernel/src` 旧的时候,e2e 验的是**上一版内核**而门禁照绿 —— 一次真实的假绿风险。
-# 判据:产物存在且不比 `kernel/src` / `package.json` / `bun.lock` 里任何一个文件旧。陈旧即**当场重建**
-#   (`bun build --compile`,十几秒),而不是"报个错让人自己想起来"。产物不入库,重建没有副作用。
+# 于是产物比 `kernel/src` 旧的时候,e2e 验的是**上一版内核**而门禁照绿 —— 一次真实的假绿风险。
+#
+# 11 票时这里是一道"新鲜度守卫":`find -newer` 比 mtime,陈旧才重建。12 票把它换成**恒重建**,
+# 因为那道守卫本身有洞、而且补不干净:①**删掉**一个源文件不会让任何东西变新,守卫看不见;
+# ②`tsconfig.json` 之类不在比对清单里;③mtime 本来就不是内容的可靠代理(checkout、复制、
+# 时钟回拨都能骗过它)。补一条漏一条,不如认下这十几秒 —— 重建是幂等的、产物不入库、没有副作用,
+# 而"假绿"的代价是整条 e2e 白跑。
 # 只编译、不复跑产物那一遍测试:那是 `kernel/scripts/build.sh` 的活(再花 80 秒),门禁不为它买单。
 DIST_BIN="$ROOT/kernel/dist/a2"
-STALE_REASON=""
-if [ ! -x "$DIST_BIN" ]; then
-  STALE_REASON="产物不存在"
-else
-  # `find -newer` 逐个比:src 下、或 package.json / bun.lock 里,只要有一个比产物新就算陈旧。
-  NEWER_FILES="$(find "$ROOT/kernel/src" "$ROOT/kernel/package.json" "$ROOT/kernel/bun.lock" \
-                   -type f -newer "$DIST_BIN" -print 2>/dev/null | head -5)"
-  [ -n "$NEWER_FILES" ] && STALE_REASON="比产物新的文件:$(echo "$NEWER_FILES" | tr '\n' ' ')"
-fi
-if [ -n "$STALE_REASON" ]; then
-  echo
-  echo "==== ②b 内核产物新鲜度(陈旧,重建中)===="
-  echo "  $STALE_REASON"
-  run_step "②b 重建 kernel/dist/a2(产物陈旧,e2e 不许验旧内核)" "$BUILD/kernel-build.log" \
-    env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"
-else
-  echo
-  echo "==== ②b 内核产物新鲜度 ===="
-  step_pass "②b kernel/dist/a2 不比 kernel/src 旧(e2e 验的是当前这版内核)"
-fi
+run_step "②b 重建 kernel/dist/a2(恒重建 —— e2e 只许验当前这版内核)" "$BUILD/kernel-build.log" \
+  env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"
 
 # ---- ③ 旗舰 e2e ------------------------------------------------------------------------
 run_step "③ 旗舰 e2e(真 a2 bin + 假 mihomo + 壳的真代码路径)" "$BUILD/flagship-e2e.log" \
   bash "$ROOT/Scripts/a2-flagship-e2e.sh"
 
 # ---- ④ 插件 e2e(11 票)-----------------------------------------------------------------
-run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dangerous 两分支 → 进程外红线)" \
+run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dangerous 两分支 → 进程外红线 → 依赖流)" \
   "$BUILD/plugin-e2e.log" bash "$ROOT/Scripts/a2-plugin-e2e.sh"
 
 # ---- ⑤ `.app` 出包(a2-panel 身份 + ad-hoc 签名)----------------------------------------

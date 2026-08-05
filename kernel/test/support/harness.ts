@@ -96,6 +96,11 @@ export interface DaemonHandle {
   socketPath: string;
   proc: Bun.Subprocess;
   stdout(): Promise<string>;
+  /**
+   * daemon 的 stderr 全文。**只在 `stopDaemon` 之后取得到**(流要等进程退出才收尾),
+   * 用于断言那些"降级但照常启动"的生命周期事件 —— 它们不进任何机读面,只落这里。
+   */
+  stderr(): Promise<string>;
 }
 
 /**
@@ -121,18 +126,25 @@ export async function startDaemon(
     stderr: "pipe",
   });
   const socketPath = socketPathFor(home);
+  // 两条流各只能被读一次 —— 缓存下来,让 `stderr()` 既能给启动失败的诊断用、也能给断言用。
+  let stderrText: Promise<string> | undefined;
   const handle: DaemonHandle = {
     home,
     socketPath,
     proc,
     stdout: async () => await new Response(proc.stdout).text(),
+    stderr: async () => {
+      stderrText ??= new Response(proc.stderr).text();
+      return await stderrText;
+    },
   };
   try {
     await waitForSocket(socketPath);
   } catch (error) {
     await stopDaemon(handle);
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`daemon 起不来:${(error as Error).message}\n--- stderr ---\n${stderr}`);
+    throw new Error(
+      `daemon 起不来:${(error as Error).message}\n--- stderr ---\n${await handle.stderr()}`,
+    );
   }
   return handle;
 }

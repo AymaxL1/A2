@@ -13,6 +13,7 @@
 import { statSync } from "node:fs";
 import { copyFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { bundleDirectoryPlugin, type BundleReport } from "./bundle.ts";
 import type { Capability, CapabilityRegistry } from "../capability/registry.ts";
 import {
   ErrorCode,
@@ -38,11 +39,36 @@ import {
   pluginManifestPath,
   pluginsDir,
   readPluginManifest,
+  sanitizeRecords,
+  sweepStagingArtifacts,
   writePluginManifest,
 } from "./store.ts";
 
-/** 插件工件允许的扩展名。目录插件(带依赖)是 12 票的活儿,本票遇到它给指引、不半吊子支持。 */
+/** 单文件插件允许的扩展名。目录插件走 12 票的装载期流水线,产物恒为 `.js`。 */
 const ARTIFACT_EXTENSIONS = [".ts", ".js"];
+
+/**
+ * **装载面的写操作全部串行**(11 票 CR 尾款 a)。
+ *
+ * 为什么必须有:`add` 的头是"读清单"、尾是"写清单",中间隔着一次最长 15 秒的 describe
+ * (目录插件还要隔一次可能几十秒的 install+build)。两个 `add` 并发时,后写的那份清单是基于
+ * **它自己进门时读到的**那份算出来的 —— 先写的那条记录就这么被覆盖没了,而它的能力还在注册表里。
+ * 结果是注册表与清单分叉:`capabilities list` 里有的东西,重启之后消失。
+ *
+ * 修法取最简的那个:进程内一条 promise 链。daemon 是单进程单事件循环,装载又是**人/agent 手动**
+ * 触发的低频操作(不是热路径),排队几秒钟没有任何代价;换成"写前重读合并"则要在每一处
+ * 想清楚"合并谁赢",而那正是分叉的来源。
+ */
+let mutations: Promise<unknown> = Promise.resolve();
+function serializeMutation<T>(task: () => Promise<T>): Promise<T> {
+  // 前一个失败也要接着排下一个 —— 队列不能被一次装载失败卡死。
+  const run = mutations.then(task, task);
+  mutations = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 export interface PluginHostContext {
   paths: KernelPaths;
@@ -68,7 +94,11 @@ export interface RestoredPlugins {
  * **不重新 describe**:登记的是 add 那一刻的快照,工件在我们自己的登记区里、只有 add 会动它。
  * 重新问一遍既不会更真,又会让启动时间随插件数线性增长、还多出一条"启动时插件炸了怎么办"的分支。
  *
- * 同名记录只认第一条(清单被手改坏时的兜底):重复 id 会让注册表构造器抛,而**启动不该被外来数据掀翻**。
+ * **但每一条都要复验取值域**(11 票 CR 尾款 e):清单是盘上的一个 JSON 文件,谁都能手改。
+ * 塞一条名字带点的记录进去,派生出的能力 id 就会与别的撞上、注册表构造器当场抛 —— 于是
+ * **手改一个文件就能让 daemon 起不来**。还原时逐条按 `PLUGIN_NAME_PATTERN` 复验,坏条目单条拒绝,
+ * daemon 照起、别的插件照用。这与"清单整个读不了就一个都不装"是同一条精神:
+ * **启动永远不该被外来数据掀翻**。
  */
 export function restorePlugins(
   paths: KernelPaths,
@@ -77,36 +107,25 @@ export function restorePlugins(
   const read = readPluginManifest(paths);
   if (!read.ok) return { records: [], capabilities: [], problem: read.detail };
 
-  const seen = new Set<string>();
-  const records: PluginRecord[] = [];
-  const skipped: string[] = [];
-  for (const record of read.records) {
-    if (seen.has(record.name)) {
-      skipped.push(record.name);
-      continue;
-    }
-    seen.add(record.name);
-    records.push(record);
-  }
-
+  const { records, problem } = sanitizeRecords(read.records);
   const capabilities = records.flatMap((record) => pluginCapabilities(record, env));
-  return {
-    records,
-    capabilities,
-    ...(skipped.length === 0
-      ? {}
-      : { problem: `插件清单里有重名条目,已只保留首条:${skipped.join("、")}` }),
-  };
+  return { records, capabilities, ...(problem === undefined ? {} : { problem }) };
 }
 
 // MARK: - plugin.list
 
+/**
+ * 列已登记插件。
+ *
+ * 用的是与 `restorePlugins` **同一道**复验:list 说的必须是"此刻真的在能力面上的那些"。
+ * 若清单里有被拒的坏条目,它不出现在这里 —— 于是 `plugin list` 与 `capabilities list`
+ * 永远对得上,而不是让 agent 看见一条"列得出来、调不动"的幽灵记录。
+ */
 export function listPlugins(context: PluginHostContext): OpOutcome {
   const read = readPluginManifest(context.paths);
   if (!read.ok) return opFailure(manifestBrokenError(context.paths, read.detail));
-  return opSuccess(
-    payload({ directory: pluginsDir(context.paths), plugins: read.records }),
-  );
+  const { records } = sanitizeRecords(read.records);
+  return opSuccess(payload({ directory: pluginsDir(context.paths), plugins: records }));
 }
 
 // MARK: - plugin.add
@@ -126,7 +145,14 @@ export interface AddPluginParams {
  * 那么"它说自己有哪些工具"这句话也该在**同一个环境**下问出来。在源目录里问、到登记区里跑,
  * 中间隔着一层可能不一样的祖先目录(比如源目录旁边有个 `node_modules`)—— 那正是静默漂移的温床。
  */
-export async function addPlugin(
+export function addPlugin(
+  context: PluginHostContext,
+  params: AddPluginParams,
+): Promise<OpOutcome> {
+  return serializeMutation(() => addPluginSerially(context, params));
+}
+
+async function addPluginSerially(
   context: PluginHostContext,
   params: AddPluginParams,
 ): Promise<OpOutcome> {
@@ -145,29 +171,25 @@ export async function addPlugin(
 
   const stat = statOf(source);
   if (stat === undefined) {
-    return opFailure(loadError(`插件文件不存在:${source}`, undefined, source));
+    return opFailure(loadError(`插件路径不存在:${source}`, undefined, source));
   }
-  if (stat.isDirectory()) {
-    return opFailure(
-      loadError(
-        `${source} 是一个目录。本版内核只登记**零依赖单文件**插件(.ts / .js)。`,
-        "带 npm 依赖的目录插件要在装载期 install + bundle 成单文件工件 —— 那是 12 票的活儿,尚未交付。",
-        source,
-      ),
-    );
-  }
-  const extension = path.extname(source);
-  if (!ARTIFACT_EXTENSIONS.includes(extension)) {
+
+  // 两种形态在这里分叉,**而且只在这里分叉**:目录插件多一段装载期流水线(install+bundle),
+  // 之后交出的同样是"一个待登记的单文件",后面每一步都不知道它是打出来的还是手写的。
+  const isDirectory = stat.isDirectory();
+  const extension = isDirectory ? ".js" : path.extname(source);
+  if (!isDirectory && !ARTIFACT_EXTENSIONS.includes(extension)) {
     return opFailure(
       loadError(
         `插件文件的扩展名必须是 ${ARTIFACT_EXTENSIONS.join(" 或 ")}(收到 ${JSON.stringify(extension)})。`,
-        undefined,
+        "带依赖的插件请交一个**目录**(入口 + package.json),内核会在装载期把它打成单文件。",
         source,
       ),
     );
   }
 
-  const name = params.name ?? path.basename(source, extension);
+  const name =
+    params.name ?? (isDirectory ? path.basename(source) : path.basename(source, extension));
   if (!PLUGIN_NAME_PATTERN.test(name)) {
     return opFailure(
       loadError(
@@ -180,11 +202,56 @@ export async function addPlugin(
   }
 
   const directory = ensurePluginsDir(context.paths);
+  // 上一次崩在半路留下的暂存工件,在这里清掉(登记区里只该有正式工件与清单)。
+  await sweepStagingArtifacts(context.paths);
+
+  // **装载期流水线**:目录插件在这里被打成单文件(12 票)。临时工作区在系统临时目录下,
+  // 用完即弃 —— `~/.a2` 里永远不会出现 node_modules。
+  let bundle: BundleReport | undefined;
+  if (isDirectory) {
+    const bundled = await bundleDirectoryPlugin(source, { env: context.env });
+    if (!bundled.ok) return opFailure(bundled.error);
+    bundle = bundled.value;
+  }
+
+  try {
+    return await registerArtifact(context, {
+      source,
+      name,
+      extension,
+      directory,
+      // 要登记的那份字节:单文件插件是源文件本身,目录插件是刚打出来的产物。
+      artifactSource: bundle?.artifact ?? source,
+      previousRecords: read.records,
+      ...(bundle === undefined ? {} : { bundle }),
+    });
+  } finally {
+    // 临时工作区(含 node_modules)一律在这里消失,不管上面是成是败。
+    await bundle?.dispose();
+  }
+}
+
+interface RegisterParams {
+  source: string;
+  name: string;
+  extension: string;
+  directory: string;
+  artifactSource: string;
+  previousRecords: PluginRecord[];
+  bundle?: BundleReport;
+}
+
+/** 体检 → 就位 → 注册表热更新 → 落清单 → 留痕。**两种形态在这里已经合流,一份代码。** */
+async function registerArtifact(
+  context: PluginHostContext,
+  params: RegisterParams,
+): Promise<OpOutcome> {
+  const { source, name, extension, directory, artifactSource, previousRecords, bundle } = params;
   const artifact = path.join(directory, `${name}${extension}`);
   const staging = path.join(directory, `.staging-${name}-${crypto.randomUUID()}${extension}`);
 
   try {
-    await copyFile(source, staging);
+    await copyFile(artifactSource, staging);
   } catch (error) {
     return opFailure(loadError(`复制插件到登记区失败:${String(error)}`, undefined, source));
   }
@@ -219,12 +286,18 @@ export async function addPlugin(
   }
 
   // 暂存工件通过了体检,这才让它就位(同名即替换:旧那份被原子覆盖)。
-  const previous = read.records.find((record) => record.name === name);
+  const previous = previousRecords.find((record) => record.name === name);
   try {
     await rename(staging, artifact);
   } catch (error) {
     await rm(staging, { force: true }).catch(() => {});
     return opFailure(loadError(`工件就位失败:${String(error)}`, undefined, source));
+  }
+  // **跨扩展名替换要收尸**(11 票 CR 尾款 d):`hello.ts` 换成 `hello.js`(或目录插件打出来的 `.js`)
+  // 时,rename 覆盖的是新那个路径,旧工件原地不动 —— 留在登记区里成了一份**再也不会被调用、
+  // 却随时可能被误当成"这个插件的代码"**的死文件。替换一律删掉前一份工件。
+  if (previous !== undefined && previous.artifact !== artifact) {
+    await rm(previous.artifact, { force: true }).catch(() => {});
   }
 
   const record: PluginRecord = {
@@ -247,7 +320,7 @@ export async function addPlugin(
     return opFailure(clash);
   }
 
-  const records = read.records.filter((entry) => entry.name !== name);
+  const records = previousRecords.filter((entry) => entry.name !== name);
   records.push(record);
   try {
     await writePluginManifest(context.paths, records);
@@ -268,7 +341,8 @@ export async function addPlugin(
     detail:
       `插件 ${name} ${previous ? "替换登记" : "登记"}成功,工件 ${artifact},` +
       `工具 ${record.tools.length} 个(${record.capabilities.join("、")})。` +
-      `装载零闸:本次没有经过任何确认(ADR 0011)。`,
+      `装载零闸:本次没有经过任何确认(ADR 0011)。` +
+      (bundle === undefined ? "" : bundleAudit(bundle)),
     event: {
       action,
       plugin: name,
@@ -288,9 +362,38 @@ export async function addPlugin(
   );
 }
 
+/**
+ * 目录插件那一段的审计文本(12 票验收框:**依赖清单进审计事件**)。
+ *
+ * 装载零闸下审计是这条路上唯一的可审计物,而"这个插件把什么代码内联进了工件"正是事后复盘时
+ * 唯一还问得出答案的地方 —— 工件是打包产物,`node_modules` 早就没了。
+ *
+ * 被 `--ignore-scripts` 拦下的 lifecycle scripts 也记:02 票 spike 实测,插件目录**自己**的
+ * `preinstall`/`postinstall` 在没有这个 flag 时会照跑。记下"它声明了、我们没跑",既是留痕,
+ * 也是"这个插件试图在装载期执行命令"这件事的唯一记录。
+ */
+function bundleAudit(bundle: BundleReport): string {
+  const parts = [
+    `目录插件装载期打包:入口 ${bundle.entry},工件 ${bundle.bytes} 字节` +
+      `(install ${bundle.installMs}ms + build ${bundle.buildMs}ms)。`,
+    bundle.dependencies.length === 0
+      ? "依赖:无。"
+      : `依赖(${bundle.dependencies.length} 条):${bundle.dependencies.join("、")}。`,
+    bundle.blockedScripts.length === 0
+      ? "install 带 --ignore-scripts,lifecycle scripts 全程未执行。"
+      : `install 带 --ignore-scripts:该插件目录声明的 ${bundle.blockedScripts.join("、")} ` +
+        "未被执行(依赖的 lifecycle scripts 同样跳过)。",
+  ];
+  return ` ${parts.join("")}`;
+}
+
 // MARK: - plugin.remove
 
-export async function removePlugin(
+export function removePlugin(context: PluginHostContext, name: string): Promise<OpOutcome> {
+  return serializeMutation(() => removePluginSerially(context, name));
+}
+
+async function removePluginSerially(
   context: PluginHostContext,
   name: string,
 ): Promise<OpOutcome> {
@@ -400,7 +503,9 @@ function loadError(message: string, detail?: string, source?: string): WireError
     message,
     ...(detail === undefined ? {} : { detail }),
     guidance: {
-      summary: "插件 = 一个零依赖单文件 .ts,现场写完直接装,不需要任何构建步骤。",
+      summary:
+        "两种形态都收:①零依赖单文件 .ts —— 现场写完直接装,没有任何构建步骤;" +
+        "②带 npm 依赖的目录 —— 交目录本身,内核在装载期替你 install + bundle 成单文件。",
       steps: [
         { description: "看插件协议与一个可直接抄的最小例子", command: "a2 plugin --help" },
         { description: "看看现在都装了什么", command: "a2 plugin list --json" },

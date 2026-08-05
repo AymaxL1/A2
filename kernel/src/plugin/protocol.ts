@@ -30,6 +30,7 @@ import {
   type PluginDescribeResult,
   type WireError,
 } from "../contract/wire.ts";
+import { OUTPUT_LIMIT_BYTES, captureProcess } from "./spawn.ts";
 
 /**
  * 插件退出码词表(**契约,不是约定俗成**)。02 票 spike 的参考实现按这张表写,
@@ -51,6 +52,15 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** stderr 进 detail 时的截断长度(排错够用,又不至于让一条错误报文变成日志倾倒场)。 */
 const STDERR_DETAIL_LIMIT = 2_000;
+
+/**
+ * 一个插件最多能声明多少个工具(sanity 上限,11 票 CR 尾款 c)。
+ *
+ * 不是"我们觉得够用"——是**登记一个工具就往注册表里加一条能力**:一份 describe 吐十万条,
+ * 内核的能力表、快照、每一次 `capabilities list` 的推送就都被它撑爆了。128 条对任何一个
+ * 有意义的插件都绰绰有余,超了几乎必然是插件生成清单的代码写飞了,当场说清楚比默默吃下去强。
+ */
+const MAX_TOOLS_PER_PLUGIN = 128;
 
 export interface PluginRunOptions {
   /** 覆写超时窗口(测试与诊断用:`A2_PLUGIN_TIMEOUT_MS`)。 */
@@ -94,11 +104,18 @@ export interface PluginProcessResult {
   stderr: string;
   /** 超时被杀(此时 exitCode 无意义)。 */
   timedOut: boolean;
+  /** 哪条流撞了 4MiB 上限(超限即杀,此时 exitCode 同样无意义)。 */
+  overflow?: "stdout" | "stderr";
   /** 子进程 pid —— 「插件在进程外」这条红线的活体证据。 */
   pid: number;
 }
 
-/** 起一次插件子进程,收 stdout/stderr/退出码;超时就杀掉(fail-closed:不等、不猜)。 */
+/**
+ * 起一次插件子进程,收 stdout/stderr/退出码。
+ *
+ * 超时与输出上限都在 `spawn.ts` 里(那里写着为什么"杀完还得停止等待" —— 插件的**孙进程**
+ * 会攥着同一根 pipe 不放,只杀直接子进程救不了一个已经挂死的等待)。
+ */
 export async function runPluginProcess(
   artifact: string,
   args: string[],
@@ -106,34 +123,20 @@ export async function runPluginProcess(
   options: PluginRunOptions = {},
 ): Promise<PluginProcessResult> {
   const env = options.env ?? process.env;
-  const timeoutMs = options.timeoutMs ?? readTimeout(env);
-  const proc = Bun.spawn({
-    cmd: pluginCommand(artifact, args),
-    cwd: options.cwd,
+  const captured = await captureProcess(pluginCommand(artifact, args), {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     env: pluginEnv(env),
-    stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
-    stdout: "pipe",
-    stderr: "pipe",
+    ...(stdin === undefined ? {} : { stdin }),
+    timeoutMs: options.timeoutMs ?? readTimeout(env),
   });
-  const pid = proc.pid;
-
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    // 先礼后兵没有意义:插件是一次性进程,它卡住时没有"收摊"要做。直接 SIGKILL,不留孤儿。
-    proc.kill("SIGKILL");
-  }, timeoutMs);
-
-  try {
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    await proc.exited;
-    return { exitCode: proc.exitCode ?? -1, stdout, stderr, timedOut, pid };
-  } finally {
-    clearTimeout(timer);
-  }
+  return {
+    exitCode: captured.exitCode,
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+    timedOut: captured.timedOut,
+    ...(captured.overflow === undefined ? {} : { overflow: captured.overflow }),
+    pid: captured.pid,
+  };
 }
 
 function readTimeout(env: Record<string, string | undefined>): number {
@@ -158,6 +161,9 @@ export async function describePlugin(
   if (run.timedOut) {
     return { ok: false, error: timeoutError(artifact, "describe", options, run) };
   }
+  if (run.overflow !== undefined) {
+    return { ok: false, error: overflowError(artifact, "describe", run) };
+  }
   if (run.exitCode !== PluginExit.ok) {
     return {
       ok: false,
@@ -165,7 +171,10 @@ export async function describePlugin(
         code: ErrorCode.pluginProtocolError,
         message: `插件的 describe 以非零退出码收场(exit=${run.exitCode})。`,
         detail: detailOf(run),
-        guidance: authorGuidance(artifact, "describe 必须以退出码 0 收场,并在 stdout 上写一行工具清单 JSON。"),
+        guidance: missingPackageOf(run) ?? authorGuidance(
+          artifact,
+          "describe 必须以退出码 0 收场,并在 stdout 上写一行工具清单 JSON。",
+        ),
       },
     };
   }
@@ -204,6 +213,24 @@ export async function describePlugin(
     };
   }
 
+  if (shaped.data.tools.length > MAX_TOOLS_PER_PLUGIN) {
+    return {
+      ok: false,
+      error: {
+        code: ErrorCode.pluginProtocolError,
+        message: `插件声明了 ${shaped.data.tools.length} 个工具,超过上限 ${MAX_TOOLS_PER_PLUGIN}。`,
+        detail:
+          "每个工具都会在内核的能力表里占一条(还要进每一份快照与每一次能力全集推送)," +
+          "所以清单长度是有上限的。",
+        guidance: authorGuidance(
+          artifact,
+          `把工具收敛到 ${MAX_TOOLS_PER_PLUGIN} 个以内 —— 清单长成这样通常是生成它的代码写飞了,` +
+            "而不是真的有那么多工具。",
+        ),
+      },
+    };
+  }
+
   return { ok: true, value: shaped.data };
 }
 
@@ -229,6 +256,9 @@ export async function callPluginTool(
 
   if (run.timedOut) {
     return { ok: false, error: timeoutError(artifact, `call ${tool}`, options, run) };
+  }
+  if (run.overflow !== undefined) {
+    return { ok: false, error: overflowError(artifact, `call ${tool}`, run) };
   }
 
   const parsed = parseJsonLine(run.stdout);
@@ -300,11 +330,13 @@ export async function callPluginTool(
       code: ErrorCode.pluginFailed,
       message: `插件工具 ${tool} 没跑成(exit=${run.exitCode})。`,
       detail: detailOf(run),
-      guidance: authorGuidance(
-        artifact,
-        `退出码词表:0 成功 / ${PluginExit.badRequest} 报文读不懂 / ${PluginExit.toolFailed} 业务失败 / ` +
-          `${PluginExit.unknownTool} 未知工具。未捕获的异常会让 Bun 以 1 退出,栈在 stderr 里。`,
-      ),
+      guidance:
+        missingPackageOf(run) ??
+        authorGuidance(
+          artifact,
+          `退出码词表:0 成功 / ${PluginExit.badRequest} 报文读不懂 / ${PluginExit.toolFailed} 业务失败 / ` +
+            `${PluginExit.unknownTool} 未知工具。未捕获的异常会让 Bun 以 1 退出,栈在 stderr 里。`,
+        ),
     },
   };
 }
@@ -326,10 +358,62 @@ function timeoutError(
       summary: "插件是一次调用一个进程,它必须自己收场 —— 别在里面等待外部事件或常驻。",
       steps: [
         { description: "确认插件在写完 stdout 之后调用了 process.exit(0)" },
+        {
+          description:
+            "**插件自己派生的子进程也算**:它继承了同一条 stdout,只要它不退出,这次调用就交不出结果。" +
+            "内核杀得掉插件进程本身,杀不掉它的子孙(没有进程组的口子)—— 派生的进程请自己收尾。",
+        },
         { description: "临时放宽窗口再试(仅诊断用)", command: "A2_PLUGIN_TIMEOUT_MS=60000 a2 …" },
       ],
       context: { plugin: artifact },
     },
+  };
+}
+
+/** 输出撞上限:插件被杀,报文里说清楚上限是多少、以及"大东西该怎么交"。 */
+function overflowError(artifact: string, what: string, run: PluginProcessResult): WireError {
+  return {
+    code: ErrorCode.pluginProtocolError,
+    message:
+      `插件的 ${run.overflow} 超过了 ${Math.round(OUTPUT_LIMIT_BYTES / 1024 / 1024)}MiB 上限` +
+      `(${what}),进程已被杀掉。`,
+    detail: detailOf(run),
+    guidance: authorGuidance(
+      artifact,
+      "stdout 上只放那一行结果 JSON。真要交出大块数据,请把它写成文件、在 output 里回一个路径 ——" +
+        "内核不做无上限的管道搬运工(那等于让插件决定内核吃多少内存)。",
+    ),
+  };
+}
+
+/**
+ * **动态 require 的运行期兜底**(12 票;02 票 spike §8.4/§8.5 的直接落地)。
+ *
+ * `require(变量)` 这种非静态可分析的依赖,`bun build` 打包期**一句告警都不给**(spike 实测 exit=0),
+ * 所以它一定会活到运行期才发作。内核 spawn 插件恒带 `--no-install`,于是它发作的样子是确定的:
+ * `Cannot find package '<名字>'` 硬错,而不是"静默联网把包装上"。这里把那句硬错认出来,
+ * 换成一条**告诉 agent 该改哪儿**的指引 —— 否则它看到的只是一句 `exit=1`。
+ */
+function missingPackageOf(run: PluginProcessResult): Guidance | undefined {
+  const match = /Cannot find (?:package|module) ['"]([^'"]+)['"]/.exec(run.stderr);
+  if (!match) return undefined;
+  const missing = match[1] as string;
+  return {
+    summary: `这个插件运行期要 ${missing},但它没被打进登记的单文件工件里。`,
+    steps: [
+      {
+        description:
+          `最常见的原因是**动态 require/import**(require(变量)、await import(拼出来的名字))——` +
+          "打包器在装载期看不见它,所以只能等到调用时才发作。改成静态 import 后重新 add 即可。",
+      },
+      {
+        description:
+          "内核运行插件时恒带 --no-install:缺包就是硬失败,**绝不会**在调用的那一刻替你联网装包" +
+          "(那等于把供应链面从装载期漏到调用期)。",
+      },
+      { description: "改成静态 import 后重新登记(同名即替换)", command: "a2 plugin add <你的插件目录>" },
+    ],
+    context: { missingPackage: missing },
   };
 }
 

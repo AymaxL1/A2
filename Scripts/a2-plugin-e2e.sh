@@ -8,13 +8,18 @@
 # 它在临时目录里现写一个零依赖单文件 `.ts`,`a2 plugin add` 装上,然后完全经 CLI 把它调通 ——
 # 全程没有任何构建步骤、没有 `bun install`、没有配置文件、没有装载审批。
 #
-# 五幕:
+# 六幕:
 #   ① 现场写 → add(**零闸**:一个确认器都没有也照样装上)→ 能力面立刻能看见 → 调通;
 #   ② dangerous 声明的工具:无确认器时默拒(退出码 2 + 指引);确认器上岗后批准 → 照常执行;
 #   ③ **红线**:插件在进程外(pid ≠ 内核 pid)、能力只经协议白名单(拿不到一个 `A2_*`)、
 #      工件只在登记区(源文件删掉照跑);
 #   ④ 卸载:能力当场消失,再调就是 unknown_capability;
-#   ⑤ 留痕:装/卸都进 NDJSON 审计日志,`a2 arbitration status` 查得到(装载零闸下唯一的可审计物)。
+#   ⑤ 留痕:装/卸都进 NDJSON 审计日志,`a2 arbitration status` 查得到(装载零闸下唯一的可审计物);
+#   ⑥ **依赖流(12 票)**:带 npm 依赖的**目录插件** add 时由内核自己 install+bundle 成单文件,
+#      删掉整个源目录后照常可调(离线证明);打不进的怪包(native addon)当场结构化拒绝。
+#
+# 12 票的两条口径:**不出网**(依赖是本脚本现打的本地 npm tarball,走 `file:` 依赖)、
+# **不写用户的 `~/.bun/install/cache`**(`BUN_INSTALL_CACHE_DIR` 钉在沙盒里)。
 #
 # ============================================================================
 # 红线(逐条落实在下面)
@@ -88,7 +93,7 @@ BOX="$(mktemp -d /tmp/a2pe-XXXXXX)"
 A2HOME="$BOX/a2home"
 WORKSPACE="$BOX/agent-workspace"     # agent 写插件的地方(**不是** A2_HOME)
 SUPPORT="$ROOT/kernel/test/support"
-mkdir -p "$A2HOME" "$WORKSPACE" "$BOX/xdg" "$BOX/state" "$BOX/emptybin" "$BOX/emptyconf"
+mkdir -p "$A2HOME" "$WORKSPACE" "$BOX/xdg" "$BOX/state" "$BOX/emptybin" "$BOX/emptyconf" "$BOX/bun-cache"
 SOCK="$A2HOME/run/kernel.sock"
 DAEMON_PID=""
 PROBE_PID=""
@@ -111,6 +116,8 @@ BOX_ENV=(
   A2_MIHOMO_CONTROLLER_PORT="$CTRL_PORT"
   A2_PROXY_WATCH_INTERVAL_MS="2000"
   A2_PLUGIN_TIMEOUT_MS="20000"
+  # 12 票:装依赖的包缓存钉死在沙盒里 —— 门禁跑一万遍,用户的 ~/.bun/install/cache 一个字节都不变。
+  BUN_INSTALL_CACHE_DIR="$BOX/bun-cache"
 )
 
 cleanup() {
@@ -290,6 +297,117 @@ assert_contains "$(cat "$AUDIT_LOG")" "plugin_removed" "5-3 卸插件同样留�
 ARB_JSON="$(a2 arbitration status --json 2>&1)"
 assert_contains "$ARB_JSON" "plugin_added" "5-4 经 a2 arbitration status 查得到(壳缺席时也查得到)"
 assert_contains "$ARB_JSON" "装载零闸" "5-5 留痕里写明了「这次没有经过任何确认」"
+
+# ---- ⑨b 幕⑥:依赖流 —— 目录插件装载期 install+bundle,删源目录仍可调(12 票)-----------
+echo
+echo "-- 幕 6:带 npm 依赖的目录插件 —— add 时 install+bundle 成单文件,删掉源目录照跑"
+
+# 依赖包:现打一个**真 npm tarball**(package/ 根 + package.json,与 registry 上的包同形状),
+# 经 file: 声明装进去 —— 走 bun install 的真实代码路径,但**不出网**。
+# 它自己也声明 lifecycle scripts:一旦被执行就会留下 DEP_*_RAN 标记(下面断言它们不存在)。
+DEPSRC="$BOX/dep-src"
+mkdir -p "$DEPSRC/package"
+cat > "$DEPSRC/package/package.json" <<'JSON'
+{ "name": "a2-e2e-dep", "version": "1.0.0", "main": "index.js",
+  "scripts": { "preinstall": "echo ran > DEP_PREINSTALL_RAN", "postinstall": "echo ran > DEP_POSTINSTALL_RAN" } }
+JSON
+cat > "$DEPSRC/package/index.js" <<'JS'
+module.exports = { stamp: () => "a2-e2e-dep@1.0.0" };
+JS
+
+PLUGDIR="$WORKSPACE/reporter"
+mkdir -p "$PLUGDIR"
+tar -czf "$PLUGDIR/a2-e2e-dep-1.0.0.tgz" -C "$DEPSRC" package
+
+# 插件目录自己的 package.json 也声明 lifecycle scripts —— 没有 --ignore-scripts 它们会在
+# add 那一刻以用户身份执行(02 票 spike 实测的安全发现)。ROOT_*_RAN 标记即判据。
+cat > "$PLUGDIR/package.json" <<'JSON'
+{ "name": "reporter", "version": "1.0.0", "private": true, "type": "module",
+  "scripts": { "preinstall": "echo ran > ROOT_PREINSTALL_RAN", "postinstall": "echo ran > ROOT_POSTINSTALL_RAN" },
+  "dependencies": { "a2-e2e-dep": "file:./a2-e2e-dep-1.0.0.tgz" } }
+JSON
+cat > "$PLUGDIR/index.ts" <<'TS'
+import dep from "a2-e2e-dep";
+const TOOLS = [
+  { name: "stamp", summary: "回报打进工件的依赖版本", dangerous: false,
+    parameters: [{ name: "note", type: "string", required: false, description: "随手记" }] },
+];
+const mode = process.argv[2];
+if (mode === "describe") {
+  console.log(JSON.stringify({ protocol: 1, name: "reporter", tools: TOOLS }));
+  process.exit(0);
+}
+if (mode === "call") {
+  const req = JSON.parse(await Bun.stdin.text());
+  console.log(JSON.stringify({ ok: true, output: {
+    stamp: dep.stamp(),
+    note: req.input.note ?? null,
+    pid: process.pid,
+    a2env: Object.keys(process.env).filter((k) => k.startsWith("A2_")),
+  } }));
+  process.exit(0);
+}
+process.exit(2);
+TS
+
+DEP_ADD_OUT="$(a2 plugin add "$PLUGDIR" --json 2>&1)"
+DEP_ADD_RC=$?
+assert_eq "$DEP_ADD_RC" "0" "6-1 目录插件 add 成功(内核自己 install + bundle,用户没跑过一条构建命令)"
+[ "$DEP_ADD_RC" -eq 0 ] || { echo "$DEP_ADD_OUT" | head -20; }
+DEP_ARTIFACT="$(printf '%s' "$DEP_ADD_OUT" | json_get result.plugin.artifact)"
+assert_eq "$DEP_ARTIFACT" "$A2HOME/plugins/reporter.js" "6-2 登记的是**打出来的单文件 .js**(源目录入口是 .ts)"
+
+# 登记区里只该有工件与清单:没有 node_modules、没有 lockfile、没有暂存件。
+# 幕④ 已经把 notes 卸掉了,所以此刻登记区里应当只剩清单与刚打出来的这个工件。
+REG_ENTRIES="$(ls -A "$A2HOME/plugins" | sort | tr '\n' ' ')"
+assert_eq "$REG_ENTRIES" "plugins.json reporter.js " \
+  "6-3 登记区里只有单文件工件与清单 —— 没有 node_modules、没有 lockfile、没有暂存件"
+
+# 源目录一个字节都没被写:没有 node_modules,也没有 lifecycle 脚本留下的标记。
+if [ -d "$PLUGDIR/node_modules" ]; then
+  bad "6-4 内核往用户的源目录里装了 node_modules"
+else
+  ok "6-4 源目录没被写(装依赖全程在内核自己的临时工作区里)"
+fi
+RAN_MARKERS="$(ls -A "$PLUGDIR" | grep '_RAN$' | tr '\n' ' ')"
+assert_eq "$RAN_MARKERS" "" "6-5 install 带 --ignore-scripts:插件目录**自己**的 preinstall/postinstall 一次都没跑"
+
+DEP_CALL_OUT="$(a2 capabilities call plugin.reporter.stamp --input '{"note":"打进去了吗"}' --json 2>&1)"
+assert_eq "$?" "0" "6-6 目录插件的工具经统一调用面调通"
+assert_eq "$(printf '%s' "$DEP_CALL_OUT" | json_get result.output.stamp)" "a2-e2e-dep@1.0.0" \
+  "6-7 依赖真的被内联进工件(结果里带着依赖自报的版本)"
+assert_eq "$(printf '%s' "$DEP_CALL_OUT" | json_get result.output.a2env)" "[]" \
+  "6-8 运行期无差别:与零依赖插件同一条路(照样一个 A2_* 都拿不到)"
+
+# **离线证明**:源目录连同 tarball 整个删掉,再调一次。
+rm -rf "$PLUGDIR"
+OFFLINE_OUT="$(a2 capabilities call plugin.reporter.stamp --json 2>&1)"
+assert_eq "$?" "0" "6-9 删掉整个源目录(含依赖 tarball)后照常可调 —— 运行期只依赖登记的那一个文件"
+assert_eq "$(printf '%s' "$OFFLINE_OUT" | json_get result.output.stamp)" "a2-e2e-dep@1.0.0" \
+  "6-10 而且行为一字不变"
+
+# 审计:依赖清单与"脚本被拦"进了 plugin_added 事件(装载零闸下唯一的可审计物)。
+assert_contains "$(cat "$AUDIT_LOG")" "a2-e2e-dep" "6-11 依赖清单进了审计事件"
+assert_contains "$(cat "$AUDIT_LOG")" "--ignore-scripts" "6-12 「lifecycle scripts 被跳过」也留了痕"
+
+# 打不进的怪包:native addon —— 产物不止一个文件即拒绝(判据是文件数,不是退出码)。
+NATIVEDIR="$WORKSPACE/nativeplug"
+mkdir -p "$NATIVEDIR"
+echo 'NOT-A-REAL-NATIVE-ADDON —— 只为触发 bundler 对 .node 的处理路径。' > "$NATIVEDIR/fake.node"
+cat > "$NATIVEDIR/package.json" <<'JSON'
+{ "name": "nativeplug", "version": "1.0.0", "private": true, "type": "module" }
+JSON
+cat > "$NATIVEDIR/index.ts" <<'TS'
+const addon = require("./fake.node");
+console.log(JSON.stringify({ protocol: 1, tools: [
+  { name: "x", summary: "x", dangerous: false, parameters: [] },
+], addon: typeof addon }));
+TS
+NATIVE_OUT="$(a2 plugin add "$NATIVEDIR" --json 2>&1)"
+assert_eq "$?" "5" "6-13 native addon 目录被拒(退出码 5)"
+assert_contains "$NATIVE_OUT" "不是单文件插件" "6-14 拒因是「产物不止一个文件」(02 spike:.node 不会让 build 失败)"
+assert_contains "$NATIVE_OUT" "native addon" "6-15 指引说清楚不支持什么、能怎么替代"
+assert_not_contains "$(a2 capabilities list --json 2>&1)" "plugin.nativeplug" "6-16 被拒的插件一个字节都没登记"
 
 # ---- ⑩ 红线自查 -----------------------------------------------------------------------
 echo
