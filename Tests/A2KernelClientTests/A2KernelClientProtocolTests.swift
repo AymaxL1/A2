@@ -6,6 +6,14 @@
 //   * 推送**入队不丢**(等响应期间到达的推送,之后还取得到);
 //   * `confirmation-pending` 把等待窗口**顺延**到内核承诺的时长(客户端不猜、不共享环境变量);
 //   * 帧在**多字节字符中间**被切开也照样解得开。
+//
+// **并行安全(09 票 CR 修的第 2 项)**:这套用例带真实等待,曾经在**默认并行**的 `swift test` 下必红 ——
+// 假内核跑在 `DispatchQueue.global()` 上,而并行的用例里有好几处 `Thread.sleep` 把线程池占住,
+// 假内核那段迟迟排不上、客户端在 0.4 秒的小窗口里先超时了。两处一起修:
+//   ① 假内核改用**专用 `Thread`**(`start()` 立刻就有一条真线程,不跟线程池抢);
+//   ② 时序断言按"**判据差**"给足余量 —— 断的是"有没有顺延",不是"快不快",
+//      所以正例余量拉到 5 秒以上、反例也留 1 秒,几百毫秒级的调度抖动影响不到判定。
+// 验证方式:默认并行(不带 `--no-parallel`)连跑 3 遍全绿,再按门禁口径 `--no-parallel` 跑一遍。
 
 import Foundation
 import Testing
@@ -15,9 +23,9 @@ import Testing
 @Suite("09 UDS 客户端协议逻辑")
 struct A2KernelClientProtocolTests {
 
-    /// 起一个后台线程扮演内核,主线程跑被测客户端;两边都结束后把内核那侧的失败抛出来。
+    /// 起一条**专用线程**扮演内核,主线程跑被测客户端;两边都结束后把内核那侧的失败抛出来。
     private func withFakeKernel(
-        configuration: A2KernelClient.Configuration = A2KernelClient.Configuration(requestTimeout: 2),
+        configuration: A2KernelClient.Configuration = A2KernelClient.Configuration(requestTimeout: 5),
         kernel kernelScript: @escaping (FakeKernel) throws -> Void,
         client clientScript: (A2KernelClient) throws -> Void
     ) throws {
@@ -26,17 +34,19 @@ struct A2KernelClientProtocolTests {
             transport: A2UnixSocketTransport.adopting(fd: fake.clientFD), configuration: configuration)
         let finished = DispatchSemaphore(value: 0)
         let box = ErrorBox()
-        DispatchQueue.global().async {
+        let thread = Thread {
             do { try kernelScript(fake) } catch { box.store(error) }
             finished.signal()
         }
+        thread.name = "fake-a2-kernel"
+        thread.start()
         defer {
             client.close()
             fake.close()
         }
         try clientScript(client)
-        // 只等**一次**(信号量只会被 signal 一次;在 defer 里再等一遍 = 每条用例白白多花 5 秒)。
-        #expect(finished.wait(timeout: .now() + 5) == .success, "假内核那侧没在 5 秒内收场")
+        // 只等**一次**(信号量只会被 signal 一次;在 defer 里再等一遍 = 每条用例白白多花几秒)。
+        #expect(finished.wait(timeout: .now() + 15) == .success, "假内核那侧没在 15 秒内收场")
         if let error = box.take() {
             Issue.record("假内核那侧失败:\(error)")
         }
@@ -49,15 +59,15 @@ struct A2KernelClientProtocolTests {
         func take() -> Error? { lock.lock(); defer { lock.unlock() }; return error }
     }
 
-    /// 一份真快照(读金标,不手捏)。
-    private func registerResult(connection: String = "conn-1") throws -> A2JSON {
-        .object([
-            "role": .string("confirm-agent"),
-            "connection": .string(connection),
-            "uid": .int(501),
-            "roles": .array([.string("confirm-agent")]),
-            "snapshot": try GoldenFixtures.json("kernel-snapshot.json"),
-        ])
+    /// 一份真快照的注册回执(读金标,不手捏;**用 Foundation 的对象,不经被测类型**)。
+    private func registerResult(connection: String = "conn-1") throws -> [String: Any] {
+        [
+            "role": "confirm-agent",
+            "connection": connection,
+            "uid": 501,
+            "roles": ["confirm-agent"],
+            "snapshot": try GoldenFixtures.object("kernel-snapshot.json"),
+        ]
     }
 
     // MARK: - 注册即快照
@@ -66,10 +76,10 @@ struct A2KernelClientProtocolTests {
     func registrationReturnsSnapshotInSameRoundTrip() throws {
         try withFakeKernel { kernel in
             let request = try kernel.readRequest()
-            #expect(request.op == "roles.register")
-            #expect(request.params?["role"] == .string("confirm-agent"))
-            #expect(request.params?["identity"]?.objectValue?["name"] == .string("a2-panel"))
-            try kernel.writeSuccess(id: request.id, result: try self.registerResult())
+            #expect(request.string("op") == "roles.register")
+            #expect(request.child("params")?.string("role") == "confirm-agent")
+            #expect(request.child("params")?.child("identity")?.string("name") == "a2-panel")
+            try kernel.writeSuccess(id: request.string("id") ?? "", result: try self.registerResult())
         } client: { client in
             let result = try client.registerRole(
                 .confirmAgent, identity: A2ClientIdentity(name: "a2-panel", version: "1.0.0"))
@@ -91,15 +101,15 @@ struct A2KernelClientProtocolTests {
     func pushesBeforeResponseAreQueuedNotMistakenForIt() throws {
         try withFakeKernel { kernel in
             let request = try kernel.readRequest()
-            try kernel.writePush(event: try GoldenFixtures.json("push-arbitration.json").objectValue!["event"]!)
-            try kernel.writePush(event: try GoldenFixtures.json("push-audit-denied.json").objectValue!["event"]!)
-            try kernel.writeSuccess(id: request.id, result: try self.registerResult())
+            try kernel.writePush(event: try GoldenFixtures.event(of: "push-arbitration.json"))
+            try kernel.writePush(event: try GoldenFixtures.event(of: "push-audit-denied.json"))
+            try kernel.writeSuccess(id: request.string("id") ?? "", result: try self.registerResult())
         } client: { client in
             let result = try client.registerRole(.subscriber, identity: A2ClientIdentity(name: "a2-panel"))
             #expect(result.connection == "conn-1")
             #expect(client.bufferedPushes.count == 2, "等响应期间到达的推送被丢了")
 
-            let audit = try client.nextPush(timeout: 1) { $0.event.kind == .audit }
+            let audit = try client.nextPush(timeout: 5) { $0.event.kind == .audit }
             guard case let .audit(_, event) = audit.event else { Issue.record("取错了事件族"); return }
             #expect(event.action == .denied)
             // 按条件挑走一条,其余仍在队里(顺序不因挑选而乱)。
@@ -112,7 +122,7 @@ struct A2KernelClientProtocolTests {
     func mismatchedResponseIdIsAProtocolViolation() throws {
         try withFakeKernel { kernel in
             _ = try kernel.readRequest()
-            try kernel.writeSuccess(id: "别人的请求-id", result: .object([:]))
+            try kernel.writeSuccess(id: "别人的请求-id", result: [String: Any]())
         } client: { client in
             #expect(throws: A2ClientError.self) {
                 _ = try client.request(op: A2KernelClient.Op.statusGet)
@@ -124,35 +134,36 @@ struct A2KernelClientProtocolTests {
 
     @Test("confirmation-pending 把等待窗口顺延到内核承诺的时长")
     func confirmationPendingExtendsTheDeadline() throws {
-        let pendingEvent = A2JSON.object([
-            "kind": .string("confirmation-pending"),
-            "at": .string("2026-08-05T04:10:00.000Z"),
-            "requestId": .string("__REQUEST_ID__"),
-            "timeoutMs": .int(2000),
-            "confirmation": try GoldenFixtures.json("pending-confirmation.json"),
-        ])
-        // 默认只等 0.4 秒;内核要拖 1 秒才回 —— 没有那条 pending 推送,这次调用必超时。
-        try withFakeKernel(configuration: A2KernelClient.Configuration(requestTimeout: 0.4, pendingGrace: 0.5)) { kernel in
+        // 判据差给足:默认只等 0.5 秒,内核拖 1.5 秒才回 —— 没有那条 pending 推送必超时;
+        // 有了它,截止时间被推到 6 + 1 = 7 秒之后,余量 5.5 秒,调度抖动影响不到判定。
+        try withFakeKernel(
+            configuration: A2KernelClient.Configuration(requestTimeout: 0.5, pendingGrace: 1.0)
+        ) { kernel in
             let request = try kernel.readRequest()
-            guard var members = pendingEvent.objectValue else { return }
-            members["requestId"] = .string(request.id)
-            try kernel.writePush(event: .object(members))
-            Thread.sleep(forTimeInterval: 1.0)
-            try kernel.writeSuccess(id: request.id, result: .object(["capability": .string("demo.wipe"), "output": .object([:])]))
+            var event = try GoldenFixtures.event(of: "push-confirmation-pending.json")
+            event["requestId"] = request.string("id") ?? ""
+            event["timeoutMs"] = 6000
+            try kernel.writePush(event: event)
+            Thread.sleep(forTimeInterval: 1.5)
+            try kernel.writeSuccess(
+                id: request.string("id") ?? "",
+                result: ["capability": "demo.wipe", "output": [String: Any]()])
         } client: { client in
             let response = try client.callCapability("demo.wipe")
-            #expect(response.isOK, "内核承诺了 2 秒窗口,客户端却没等到底")
+            #expect(response.isOK, "内核承诺了 6 秒窗口,客户端却没等到底")
             #expect(client.bufferedPushes.first?.event.kind == .confirmationPending)
         }
     }
 
     @Test("反证:没有 confirmation-pending 时,同样的拖延就是超时")
     func withoutPendingPushTheSameDelayTimesOut() throws {
-        try withFakeKernel(configuration: A2KernelClient.Configuration(requestTimeout: 0.4, pendingGrace: 0.5)) { kernel in
+        try withFakeKernel(
+            configuration: A2KernelClient.Configuration(requestTimeout: 0.5, pendingGrace: 1.0)
+        ) { kernel in
             let request = try kernel.readRequest()
-            Thread.sleep(forTimeInterval: 1.0)
+            Thread.sleep(forTimeInterval: 1.5)
             // 客户端此时已经放弃;写不写得进去都不影响断言(连接可能已关)。
-            try? kernel.writeSuccess(id: request.id, result: .object([:]))
+            try? kernel.writeSuccess(id: request.string("id") ?? "", result: [String: Any]())
         } client: { client in
             #expect(throws: A2ClientError.self) {
                 _ = try client.callCapability("demo.wipe")
@@ -166,13 +177,10 @@ struct A2KernelClientProtocolTests {
     func responseSplitInsideMultibyteCharacterStillDecodes() throws {
         try withFakeKernel { kernel in
             let request = try kernel.readRequest()
-            var frame = try JSONEncoder().encode(
-                A2JSON.object([
-                    "v": .int(1), "id": .string(request.id), "ok": .bool(true),
-                    "result": try self.registerResult(),
-                ]))
-            frame.append(0x0A)
-            let bytes = Array(frame)
+            let bytes = try FakeKernel.frameBytes([
+                "v": 1, "id": request.string("id") ?? "", "ok": true,
+                "result": try self.registerResult(),
+            ])
             // 找一个三字节字符(快照里全是中文),在它的第 1 与第 2 字节之间切开。
             guard let lead = bytes.firstIndex(where: { $0 >= 0xE0 }) else {
                 throw FakeKernel.FakeKernelError.setupFailed("样本里没有多字节字符,这条断言就白写了")
@@ -194,11 +202,12 @@ struct A2KernelClientProtocolTests {
     func resolveRoundTrip() throws {
         try withFakeKernel { kernel in
             let request = try kernel.readRequest()
-            #expect(request.op == "confirmations.resolve")
-            #expect(request.params?["decision"] == .string("approve"))
-            #expect(request.params?["reason"] == .string("我认得这个源"))
+            #expect(request.string("op") == "confirmations.resolve")
+            #expect(request.child("params")?.string("decision") == "approve")
+            #expect(request.child("params")?.string("reason") == "我认得这个源")
             try kernel.writeSuccess(
-                id: request.id, result: try GoldenFixtures.json("confirmation-resolve-result.json"))
+                id: request.string("id") ?? "",
+                result: try GoldenFixtures.object("confirmation-resolve-result.json"))
         } client: { client in
             let result = try client.resolveConfirmation(
                 "018f3b1c-1111-7c3e-9f2b-1d4e5f6a7b8d", decision: .approve, reason: "我认得这个源")
@@ -212,7 +221,8 @@ struct A2KernelClientProtocolTests {
         try withFakeKernel { kernel in
             let request = try kernel.readRequest()
             try kernel.writeFailure(
-                id: request.id, error: try GoldenFixtures.json("confirmation-error-unavailable.json"))
+                id: request.string("id") ?? "",
+                error: try GoldenFixtures.object("confirmation-error-unavailable.json"))
         } client: { client in
             do {
                 _ = try client.registerRole(.confirmAgent, identity: A2ClientIdentity(name: "a2-panel"))

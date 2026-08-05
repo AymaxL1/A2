@@ -381,6 +381,12 @@
       "why": "角色注册请求:加固字段(cdhash/团队 ID)**V1 收下但不校验**,同 UID 冒充是已知边界"
     },
     {
+      "file": "role-register-result.json",
+      "schema": "RoleRegisterResult",
+      "kind": "valid",
+      "why": "注册往返的回执:确认注册了什么(role/roles/连接 id/校验到的 uid)+ **同一次往返带回的全量快照**;一条连接两个角色兼有是合法组合(09 票补,此前只有 Schema 没有样本)"
+    },
+    {
       "file": "invalid-role-register-params-unknown-role.json",
       "schema": "RoleRegisterParams",
       "kind": "invalid",

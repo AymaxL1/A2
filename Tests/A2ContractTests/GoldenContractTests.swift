@@ -1,8 +1,10 @@
 // 09 票 —— 双端金标门禁的 Swift 半边。
 //
-// 三层断言,各挡一类漂移:
-//   ① **对账**:金标清单里的每一个 schema 名,必须落在「已镜像」或「有意不镜像」两张表之一,
-//      且两张表合起来恰好等于清单全集 —— 有人加了新报文族而 Swift 没跟,这一条当场红。
+// 分层断言,各挡一类漂移:
+//   ① **对账**:**已登记契约**(每份 JSON Schema 的 title = `CONTRACT_SCHEMAS` 一条)里的每一个名字,
+//      必须落在「已镜像」或「有意不镜像」两张表之一 —— 有人加了新报文族而 Swift 没跟,这一条当场红。
+//      **全集刻意不取金标清单**:清单只列有样本的,新契约"配了 schema 还没配样本"会整个溜过去
+//      (09 票 CR 抓到的盲区)。已登记但无样本的,另有一张带理由的记账表管着(空表最好)。
 //   ② **合法样本**:凡在镜像范围内的,必须解得动,且**往返后语义等价**(逐字段相等,不比键序)。
 //      少认一个字段、把 int 收成 double、把可选字段编成 null —— 都会在这一条上吵起来。
 //   ③ **非法样本**:必须解不动。invalid 金标是 TS 侧一条条为契约约束造的(空 steps、未知 kind、
@@ -17,7 +19,7 @@ struct GoldenContractTests {
 
     /// 消费下限:防"清单被砍了一半而断言照样全绿"。
     /// **只判下限**(与门禁里 swift test 用例数棘轮同一口径);加样本只管加,要调低必须是有意为之。
-    static let minimumValidSamples = 35
+    static let minimumValidSamples = 36
     static let minimumInvalidSamples = 11
 
     // MARK: - ① 对账
@@ -28,10 +30,11 @@ struct GoldenContractTests {
         #expect(index.samples.count > 0, "金标清单是空的 —— 这批断言等于没跑")
     }
 
-    @Test("金标清单的 schema 全集 ≡ 已镜像 ∪ 有意不镜像(新增契约没跟即红)")
-    func coverageTablePartitionsTheIndex() throws {
-        let index = try GoldenSampleLoader.loadIndex()
-        let listed = Set(index.samples.map(\.schema))
+    @Test("已登记契约全集 ≡ 已镜像 ∪ 有意不镜像(新增契约没跟即红)")
+    func coverageTablePartitionsTheRegistry() throws {
+        // **全集取「已登记契约」(每份 JSON Schema 的 title),不是金标清单** ——
+        // 后者只列有样本的,拿它当全集,"配了 schema 还没配样本"的新契约会整个溜过去(CR 抓到的盲区)。
+        let registered = try GoldenSampleLoader.registeredContracts()
         let mirrored = A2ContractCoverage.mirrored
         let unmirrored = A2ContractCoverage.unmirrored
 
@@ -39,30 +42,51 @@ struct GoldenContractTests {
         #expect(mirrored.isDisjoint(with: unmirrored),
                 "镜像表与豁免表有交集:\(mirrored.intersection(unmirrored).sorted())")
 
-        let unclassified = listed.subtracting(mirrored).subtracting(unmirrored)
-        let unclassifiedMessage = "金标里出现了两张表都没登记的契约 \(unclassified.sorted()) —— "
+        let unclassified = registered.subtracting(mirrored).subtracting(unmirrored)
+        let unclassifiedMessage = "已登记契约里出现了两张表都没登记的 \(unclassified.sorted()) —— "
             + "要么在 A2Contract 里建镜像,要么写进 A2UnmirroredContract 并给出理由"
         #expect(unclassified.isEmpty, Comment(rawValue: unclassifiedMessage))
 
-        // 反向:表里登记了、金标里却查无此名(改名/删除)。`mirroredWithoutGoldenSample` 是显式记账的例外。
-        let ghostsInMirror = mirrored.subtracting(listed).subtracting(
-            A2ContractCoverage.mirroredWithoutGoldenSample)
+        // 反向:表里登记了、契约登记表里却查无此名(改名/删除)。
+        let ghostsInMirror = mirrored.subtracting(registered)
         #expect(ghostsInMirror.isEmpty,
-                "镜像表登记了金标里不存在的契约名 \(ghostsInMirror.sorted()) —— 契约改名了?")
-        let ghostsInExemptions = unmirrored.subtracting(listed)
+                "镜像表登记了已登记契约里不存在的名字 \(ghostsInMirror.sorted()) —— 契约改名了?")
+        let ghostsInExemptions = unmirrored.subtracting(registered)
         #expect(ghostsInExemptions.isEmpty,
-                "豁免表登记了金标里不存在的契约名 \(ghostsInExemptions.sorted())")
+                "豁免表登记了已登记契约里不存在的名字 \(ghostsInExemptions.sorted())")
     }
 
-    @Test("每个已镜像契约都有合法金标样本(没有的显式记账)")
+    @Test("金标清单里的每个 schema 名都是已登记契约(样本不许指向查无此名的契约)")
+    func everyIndexedSchemaIsRegistered() throws {
+        let registered = try GoldenSampleLoader.registeredContracts()
+        let listed = Set(try GoldenSampleLoader.loadIndex().samples.map(\.schema))
+        #expect(listed.subtracting(registered).isEmpty,
+                "金标清单指向了没有 JSON Schema 的契约 \(listed.subtracting(registered).sorted())")
+    }
+
+    @Test("已登记但一份样本都没有的契约,必须显式记账(空表最好)")
+    func registeredContractsWithoutSamplesAreAccountedFor() throws {
+        let registered = try GoldenSampleLoader.registeredContracts()
+        let listed = Set(try GoldenSampleLoader.loadIndex().samples.map(\.schema))
+        let withoutSamples = registered.subtracting(listed)
+        let accounted = Set(A2ContractCoverage.registeredWithoutGoldenSample.keys)
+        let message = "「已登记但无金标样本」的清单变了:实际 \(withoutSamples.sorted()),"
+            + "记账 \(accounted.sorted())。"
+            + "补了样本 → 把那条账删掉(白捡一份静态覆盖);新契约还没配样本 → 补样本,或把理由写进记账表。"
+        #expect(withoutSamples == accounted, Comment(rawValue: message))
+        for (name, reason) in A2ContractCoverage.registeredWithoutGoldenSample {
+            #expect(!reason.isEmpty, "\(name) 记了账却没写理由")
+        }
+    }
+
+    @Test("每个已镜像契约都有合法金标样本(没有的必须在记账表里)")
     func everyMirroredContractHasAValidSample() throws {
         let index = try GoldenSampleLoader.loadIndex()
         let schemasWithValidSample = Set(index.samples.filter(\.isValid).map(\.schema))
         let uncovered = A2ContractCoverage.mirrored.subtracting(schemasWithValidSample)
-        let message = "「已镜像但金标无样本」的清单变了:实际 \(uncovered.sorted()),"
-            + "记账 \(A2ContractCoverage.mirroredWithoutGoldenSample.sorted())。"
-            + "金标补了样本 → 从记账里删掉(白捡一份覆盖);镜像新增了类型 → 补样本或补记账。"
-        #expect(uncovered == A2ContractCoverage.mirroredWithoutGoldenSample, Comment(rawValue: message))
+        let accounted = Set(A2ContractCoverage.registeredWithoutGoldenSample.keys)
+        let message = "这些已镜像契约没有合法样本、也没记账:\(uncovered.subtracting(accounted).sorted())"
+        #expect(uncovered.subtracting(accounted).isEmpty, Comment(rawValue: message))
     }
 
     @Test("金标目录与清单双向对齐:没有没登记的孤儿样本")

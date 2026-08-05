@@ -1,17 +1,18 @@
 // 09 票 —— 假内核(测试基建)。
 //
 // 用 `socketpair()` 在进程内造一对连上的 UDS:一端给被测客户端,另一端由测试**手写**协议行为。
-// 起真 daemon 那一关归活体烟测(`Scripts/a2-smoke-09.sh`);这一层要验的是**协议逻辑**——
+// 起真 daemon 那一关归活体烟测(`Scripts/a2-smoke-09.sh`);这一层要验的是**协议逻辑** ——
 // 相关性、推送分流、超时顺延、字节边界 —— 那些用真 daemon 反而难以精确构造(你没法让真内核
 // "在一个中文字的第二个字节处停一下")。
 //
-// 纪律(与 kernel/test/support/fake-client.ts 同款):**假件不复用被测代码的任何一行判据**。
-// 拆行、帧判别在这里手写一遍;客户端若把判别方式改歪了,这份假件会吵起来,而不是跟着一起歪。
+// **纪律:假件不 import 被测代码的任何一行**(与 `kernel/test/support/fake-client.ts` 同款)。
+// 本文件只用 Foundation:拆行手写,帧用 `JSONSerialization` 拼与解。
+// 09 票 CR 抓到过这条头注失实(当时 `readRequest` 用被测的 `A2RequestEnvelope` 解码)——**现已真正独立**。
+// 为什么值得较真:假件若用被测的编解码器造输入,同一个 bug 在编与解两侧**会互相抵消**,测试照绿;
+// 手写一遍,客户端把包封或帧判别写歪时这份假件才会跟它吵起来,而不是跟着一起歪。
 
 import Foundation
 import Darwin
-import Testing
-@testable import A2Contract
 
 /// 进程内的一对已连上的 UDS。
 final class FakeKernel {
@@ -39,18 +40,23 @@ final class FakeKernel {
         case setupFailed(String)
         case timedOut(String)
         case closed(String)
+        case malformed(String)
 
         var description: String {
             switch self {
             case let .setupFailed(detail): return "假内核起不来:\(detail)"
             case let .timedOut(detail): return "假内核等超时:\(detail)"
             case let .closed(detail): return "假内核那端断了:\(detail)"
+            case let .malformed(detail): return "假内核收到的不是一行 JSON 对象:\(detail)"
             }
         }
     }
 
-    /// 读客户端发来的一整行(手写拆行:找 `\n`,不认 `\r`)。
-    func readLine(timeout: TimeInterval = 2) throws -> Data {
+    /// 读客户端发来的一整行(**手写拆行**:找 `\n`,不认 `\r`,空行跳过)。
+    ///
+    /// 默认窗口给到 5 秒:并行跑测试时线程调度会有几百毫秒级的抖动,而这里等的是"客户端有没有发出来",
+    /// 不是被测的时序语义 —— 给足余量,免得把调度抖动读成协议错误。
+    func readLine(timeout: TimeInterval = 5) throws -> Data {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
             if let newline = pending.firstIndex(of: 0x0A) {
@@ -61,9 +67,11 @@ final class FakeKernel {
             }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { throw FakeKernelError.timedOut("等客户端的一行请求") }
-            var timeval = timeval(tv_sec: Int(remaining), tv_usec: Int32((remaining.truncatingRemainder(dividingBy: 1)) * 1_000_000))
-            if timeval.tv_sec == 0 && timeval.tv_usec == 0 { timeval.tv_usec = 1 }
-            _ = setsockopt(kernelFD, SOL_SOCKET, SO_RCVTIMEO, &timeval, socklen_t(MemoryLayout<Darwin.timeval>.size))
+            var window = timeval(
+                tv_sec: Int(remaining),
+                tv_usec: Int32(remaining.truncatingRemainder(dividingBy: 1) * 1_000_000))
+            if window.tv_sec == 0 && window.tv_usec == 0 { window.tv_usec = 1 }
+            _ = setsockopt(kernelFD, SOL_SOCKET, SO_RCVTIMEO, &window, socklen_t(MemoryLayout<timeval>.size))
             var chunk = [UInt8](repeating: 0, count: 8192)
             let count = chunk.withUnsafeMutableBytes { raw in Darwin.recv(kernelFD, raw.baseAddress, raw.count, 0) }
             if count > 0 { pending.append(contentsOf: chunk[0..<count]); continue }
@@ -73,9 +81,13 @@ final class FakeKernel {
         }
     }
 
-    /// 读一行并按请求包封解开(测试要看 op / params)。
-    func readRequest(timeout: TimeInterval = 2) throws -> A2RequestEnvelope {
-        try JSONDecoder().decode(A2RequestEnvelope.self, from: try readLine(timeout: timeout))
+    /// 读一行并按 JSON 对象解开(**用 Foundation 的 JSONSerialization,不碰被测的包封类型**)。
+    func readRequest(timeout: TimeInterval = 5) throws -> [String: Any] {
+        let line = try readLine(timeout: timeout)
+        guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+            throw FakeKernelError.malformed(String(decoding: line, as: UTF8.self))
+        }
+        return object
     }
 
     /// 写一段**原始字节**(要在多字节字符中间切开时用这个)。
@@ -91,26 +103,31 @@ final class FakeKernel {
         }
     }
 
-    /// 写一帧(自己补行尾)。
-    func writeFrame(_ json: A2JSON) throws {
-        var data = try JSONEncoder().encode(json)
+    /// 把一个 JSON 对象编成一帧的字节(含行尾)。
+    static func frameBytes(_ object: [String: Any]) throws -> [UInt8] {
+        var data = try JSONSerialization.data(withJSONObject: object)
         data.append(0x0A)
-        try writeRaw(Array(data))
+        return Array(data)
+    }
+
+    /// 写一帧(自己补行尾)。
+    func writeFrame(_ object: [String: Any]) throws {
+        try writeRaw(try Self.frameBytes(object))
     }
 
     /// 成功响应。
-    func writeSuccess(id: String, result: A2JSON) throws {
-        try writeFrame(.object(["v": .int(1), "id": .string(id), "ok": .bool(true), "result": result]))
+    func writeSuccess(id: String, result: Any) throws {
+        try writeFrame(["v": 1, "id": id, "ok": true, "result": result])
     }
 
     /// 失败响应。
-    func writeFailure(id: String, error: A2JSON) throws {
-        try writeFrame(.object(["v": .int(1), "id": .string(id), "ok": .bool(false), "error": error]))
+    func writeFailure(id: String, error: Any) throws {
+        try writeFrame(["v": 1, "id": id, "ok": false, "error": error])
     }
 
     /// 推送帧。
-    func writePush(id: String = "push-\(UUID().uuidString)", event: A2JSON) throws {
-        try writeFrame(.object(["v": .int(1), "id": .string(id), "push": .bool(true), "event": event]))
+    func writePush(id: String = "push-\(UUID().uuidString)", event: Any) throws {
+        try writeFrame(["v": 1, "id": id, "push": true, "event": event])
     }
 
     func close() {
@@ -121,6 +138,12 @@ final class FakeKernel {
     }
 
     deinit { close() }
+}
+
+/// JSON 对象的取值便捷式(测试断言用;同样只依赖 Foundation)。
+extension Dictionary where Key == String, Value == Any {
+    func string(_ key: String) -> String? { self[key] as? String }
+    func child(_ key: String) -> [String: Any]? { self[key] as? [String: Any] }
 }
 
 /// 金标样本(客户端这侧也读同一批文件:响应载荷用真数据,不用手捏的假快照)。
@@ -137,7 +160,19 @@ enum GoldenFixtures {
         try Data(contentsOf: goldenDirectory.appendingPathComponent(name))
     }
 
-    static func json(_ name: String) throws -> A2JSON {
-        try JSONDecoder().decode(A2JSON.self, from: try data(name))
+    /// 读成 Foundation 的 JSON 对象(**不经被测类型**)。
+    static func object(_ name: String) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: try data(name)) as? [String: Any] else {
+            throw FakeKernel.FakeKernelError.malformed(name)
+        }
+        return object
+    }
+
+    /// 取金标推送样本里的 `event` 载荷(测试要单独发某一族事件时用)。
+    static func event(of pushSample: String) throws -> [String: Any] {
+        guard let event = try object(pushSample).child("event") else {
+            throw FakeKernel.FakeKernelError.malformed("\(pushSample) 里没有 event")
+        }
+        return event
     }
 }

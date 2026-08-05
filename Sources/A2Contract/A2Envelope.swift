@@ -97,7 +97,8 @@ extension A2WireError: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         code = try container.decodeNonEmptyString(forKey: .code)
         message = try container.decodeNonEmptyString(forKey: .message)
-        detail = try container.decodeNonEmptyStringIfPresent(forKey: .detail)
+        // `detail` 在契约里是**纯 `z.string().optional()`**(没有 min(1))—— 空串是合法值,不许收严。
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
         guidance = try container.decodeIfPresent(A2Guidance.self, forKey: .guidance)
     }
 
@@ -173,7 +174,8 @@ extension A2ConfirmationError: Codable {
         }
         code = rawCode
         message = try container.decodeNonEmptyString(forKey: .message)
-        detail = try container.decodeNonEmptyStringIfPresent(forKey: .detail)
+        // 与 `WireError.detail` 同一个字段(本类型是它的 extend),同样不收严。
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
         // 必填 —— 这正是本类型存在的理由(「拒绝即指引」从注释变成契约)。
         guidance = try container.decode(A2Guidance.self, forKey: .guidance)
     }

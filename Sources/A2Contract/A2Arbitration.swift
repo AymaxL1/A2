@@ -394,10 +394,11 @@ extension A2AuditEvent: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         at = try container.decodeNonEmptyString(forKey: .at)
         action = try container.decode(A2AuditAction.self, forKey: .action)
-        capability = try container.decodeNonEmptyStringIfPresent(forKey: .capability)
-        confirmation = try container.decodeNonEmptyStringIfPresent(forKey: .confirmation)
+        // 这三个在契约里都是**纯 `z.string().optional()`**(没有 min(1)),照抄,不收严。
+        capability = try container.decodeIfPresent(String.self, forKey: .capability)
+        confirmation = try container.decodeIfPresent(String.self, forKey: .confirmation)
         client = try container.decodeIfPresent(A2AuditClient.self, forKey: .client)
-        detail = try container.decodeNonEmptyStringIfPresent(forKey: .detail)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
     }
 
     public func encode(to encoder: Encoder) throws {

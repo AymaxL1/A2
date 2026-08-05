@@ -7,6 +7,19 @@
 // 若 Swift 侧只按类型解码、不校验取值,那些 invalid 样本会**解得动** —— 双端门禁就漏了一格,
 // 而漏的正是"拒绝即指引里有一条空指引"这种真会伤到人的形状。故这里把约束做成可复用的判据。
 //
+// ## 用法铁律:**更严只允许出现在 TS 也严的地方**
+//
+// 本文件的每个 `decodeNonEmpty*` / `decodePositive*` 都只能用在**契约原文写了对应约束**的字段上:
+//   * `z.string().min(1)`      → `decodeNonEmptyString` / `decodeNonEmptyStringIfPresent`
+//   * `z.string()`(**没有 min**)→ 就用 `decode(String.self)` / `decodeIfPresent(String.self)`,**不许收严**
+//   * `z.array(X).min(1)`      → `decodeNonEmptyArray*`;元素也带 `min(1)` 时才用 `decodeNonEmptyStringArrayIfPresent`
+//   * `z.number().int().positive()` / `.nonnegative()` → 对应的整数判据
+//
+// 为什么这条要写成铁律(09 票 CR 抓到的硬违反):镜像比契约**严**,后果是**内核发得出、壳收不下** ——
+// 一条 `detail: ""` 的合法帧被 Swift 当场拒掉,整帧丢弃。那不是"更安全",那是自造一次不兼容:
+// 镜像的职责是**照抄**,收严与放松同样是漂移。反向(镜像比契约松)则由非法金标样本兜。
+// 两个方向都有断言守着,见 `Tests/A2ContractTests/OptionalStrictnessTests.swift`。
+//
 // **有意不做的**:不校验时间戳格式、不校验 id 形状、不拒绝未知字段。
 //   * 前两者 TS 侧也只要求非空字符串(`z.string().min(1)`),这边照抄,不自作主张更严;
 //   * 未知字段:TS 的 zod object 默认**剥掉**未知键而不是报错,Swift 侧对照物是"解码时忽略"。
@@ -47,6 +60,20 @@ extension KeyedDecodingContainer {
         guard let value = try decodeIfPresent([T].self, forKey: key) else { return nil }
         guard !value.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "数组不得为空")
+        }
+        return value
+    }
+
+    /// 解一个可选的非空字符串数组,且**每个元素也不得为空**
+    /// (对照 `z.array(z.string().min(1)).min(1).optional()` —— `cliAlias` 是唯一一处)。
+    ///
+    /// 元素级那道约束不是摆设:`cliAlias` 是 argv 的 token 序列,里面混进一个空串意味着
+    /// `a2 proxy "" add` —— 那条命令拼出来就是坏的,让它在解码时就吵出来。
+    func decodeNonEmptyStringArrayIfPresent(forKey key: Key) throws -> [String]? {
+        guard let value = try decodeNonEmptyArrayIfPresent([String].self, forKey: key) else { return nil }
+        guard !value.contains(where: \.isEmpty) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key, in: self, debugDescription: "数组元素不得为空串")
         }
         return value
     }

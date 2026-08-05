@@ -37,7 +37,8 @@ extension A2ProxyEndpoint: Codable {
         owner = try container.decode(A2MihomoOwner.self, forKey: .owner)
         controller = try container.decodeNonEmptyString(forKey: .controller)
         managed = try container.decode(Bool.self, forKey: .managed)
-        configPath = try container.decodeNonEmptyStringIfPresent(forKey: .configPath)
+        // 纯 `z.string().optional()`(没有 min(1)),照抄。
+        configPath = try container.decodeIfPresent(String.self, forKey: .configPath)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -95,7 +96,8 @@ extension A2ProxySupervisionEvent: Codable {
         kind = try container.decode(A2SupervisionEventKind.self, forKey: .kind)
         controller = try container.decodeNonEmptyString(forKey: .controller)
         owner = try container.decode(A2MihomoOwner.self, forKey: .owner)
-        detail = try container.decodeNonEmptyStringIfPresent(forKey: .detail)
+        // 纯 `z.string().optional()`(没有 min(1)),照抄。
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
         guidance = try container.decodeIfPresent(A2Guidance.self, forKey: .guidance)
     }
 
@@ -155,8 +157,9 @@ extension A2ProxySupervisionResult: Codable {
         checks = try container.decodeNonNegativeInt(forKey: .checks)
         target = try container.decodeIfPresent(A2ProxyEndpoint.self, forKey: .target)
         alive = try container.decodeIfPresent(Bool.self, forKey: .alive)
-        lastCheckAt = try container.decodeNonEmptyStringIfPresent(forKey: .lastCheckAt)
-        lastTransitionAt = try container.decodeNonEmptyStringIfPresent(forKey: .lastTransitionAt)
+        // 两个时刻字段同样是纯 `z.string().optional()`,照抄。
+        lastCheckAt = try container.decodeIfPresent(String.self, forKey: .lastCheckAt)
+        lastTransitionAt = try container.decodeIfPresent(String.self, forKey: .lastTransitionAt)
         logPath = try container.decodeNonEmptyString(forKey: .logPath)
         events = try container.decode([A2ProxySupervisionEvent].self, forKey: .events)
     }

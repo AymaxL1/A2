@@ -100,7 +100,8 @@ extension A2CapabilityDescriptor: Codable {
         summary = try container.decodeNonEmptyString(forKey: .summary)
         // 参数表**可以为空**(无参能力),与 `z.array(...)`(无 min)一致。
         parameters = try container.decode([A2ParameterSpec].self, forKey: .parameters)
-        cliAlias = try container.decodeNonEmptyArrayIfPresent([String].self, forKey: .cliAlias)
+        // 契约是 `z.array(z.string().min(1)).min(1).optional()` —— **元素也带 min(1)**,两级都要镜像。
+        cliAlias = try container.decodeNonEmptyStringArrayIfPresent(forKey: .cliAlias)
     }
 
     public func encode(to encoder: Encoder) throws {
