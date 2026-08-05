@@ -1,0 +1,22 @@
+{
+  "name": "hello",
+  "artifact": "/Users/someone/.a2/plugins/hello.ts",
+  "source": "/Users/someone/work/hello.ts",
+  "addedAt": "2026-08-05T04:20:00.000Z",
+  "tools": [
+    {
+      "name": "greet",
+      "summary": "打个招呼",
+      "dangerous": false,
+      "parameters": [
+        {
+          "name": "who",
+          "type": "string",
+          "required": true,
+          "description": "跟谁打招呼"
+        }
+      ]
+    }
+  ],
+  "capabilities": ["plugin.hello.greet"]
+}

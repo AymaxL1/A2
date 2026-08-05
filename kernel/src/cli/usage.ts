@@ -22,6 +22,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   arbitration status   dangerous 三层仲裁面:确认器在不在场、在途确认、审计事件(见 a2 arbitration --help)
   service …            常驻服务:install / uninstall / status(见 a2 service --help)
   mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
+  plugin …             插件装载:add <路径> / list / remove <名字>(见 a2 plugin --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
   help                 打印本帮助
   version              打印版本
@@ -180,6 +181,74 @@ export const ARBITRATION_USAGE = `a2 arbitration —— dangerous 三层仲裁�
 
 退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 6 参数不合契约`;
 
+/**
+ * 插件面的帮助。**它同时是插件协议的规格书**:北极星是「agent 现场写插件」,
+ * 而一个 agent 手上通常只有这台机器上的这个 bin —— 它必须能只读这一屏就写出一个能用的插件。
+ * 所以下面那段例子是可以逐字抄走就跑的,不是示意。
+ */
+export const PLUGIN_USAGE = `a2 plugin —— 插件装载(零依赖单文件 .ts,现场写完当场可用)
+
+用法:
+  a2 [--json] plugin add <路径> [--name <名字>]   登记一个插件(即时生效,无任何确认闸)
+  a2 [--json] plugin list                        列出已登记插件与它们的能力 id
+  a2 [--json] plugin remove <名字>                卸载(它的能力当场从注册表消失)
+
+装上之后**怎么调**:与内置能力同一个调用面 —— 没有 a2 plugin call 这回事。
+  a2 capabilities call plugin.<插件名>.<工具名> --input '{"参数":"值"}' --json
+
+命名:能力 id 恒为 plugin.<插件名>.<工具名>。插件名默认取文件名(去扩展名),--name 可覆写;
+名字与工具名的取值域都是 [a-z0-9][a-z0-9_-]*。同名再 add = 替换(工件换掉,id 不变)。
+
+内核 → 插件的协议(exec 一次一调,一次调用一个进程):
+  <内核> --no-install <工件> describe      stdout 一行 JSON:{"protocol":1,"tools":[…]}
+  <内核> --no-install <工件> call          stdin 一行 {"tool":"…","input":{…}};stdout 一行结果
+退出码即成败(词表封闭):
+  0  成功           stdout 是 {"ok":true,"output":<任意 JSON>}
+  2  报文读不懂     内核发来的调用报文不合协议(正常永不出现)
+  3  业务失败       stdout 是 {"ok":false,"error":{"message":"…","detail":"…"}}
+  4  未知工具       describe 说有、call 说没有(清单与实现漂了)
+  其余非零 = 没跑成(未捕获异常会让运行时以 1 退出,栈在 stderr 里)。
+stdout 只放那一行 JSON,调试信息一律写 stderr —— 内核两条流是分开收的。
+
+工具声明(parameters 与内置能力同一套纯数据形):
+  {"name":"…","summary":"…","dangerous":false,
+   "parameters":[{"name":"…","type":"string|number|boolean|object|array",
+                  "required":true,"description":"…","allowedValues":["…"]}]}
+dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(无确认器在场即默拒);
+声明为假的按 normal 登记(内核无从知道你的工具是不是只读,所以不会替你降到 safe)。
+
+一个可以逐字抄走的最小插件(存成 hello.ts,然后 a2 plugin add ./hello.ts):
+  const TOOLS = [
+    { name: "greet", summary: "打个招呼", dangerous: false,
+      parameters: [{ name: "who", type: "string", required: true, description: "跟谁打招呼" }] },
+  ];
+  const mode = process.argv[2];
+  if (mode === "describe") {
+    console.log(JSON.stringify({ protocol: 1, tools: TOOLS }));
+    process.exit(0);
+  }
+  if (mode === "call") {
+    const req = JSON.parse(await Bun.stdin.text());
+    if (req.tool === "greet") {
+      console.log(JSON.stringify({ ok: true, output: { hello: req.input.who } }));
+      process.exit(0);
+    }
+    console.log(JSON.stringify({ ok: false, error: { message: "未知工具" } }));
+    process.exit(4);
+  }
+  process.exit(2);
+
+边界(V1 显式不做,不是遗漏):
+  * 插件**没有事件面、没有常驻态** —— 不能主动推事件,也不能跨调用保存内存状态(要存就自己写文件);
+  * 插件是**进程外子进程**,能力只经本协议进出;内核不把自己的坐标(A2_HOME 等)传给它;
+  * 运行期**不联网装包**(内核固定带 --no-install)。import 了没打进来的包 = 调用时硬失败;
+  * 带 npm 依赖的**目录插件**(装载期 install + bundle)尚未交付,本版只收零依赖单文件。
+
+环境变量:
+  A2_PLUGIN_TIMEOUT_MS   describe/call 的超时窗口(默认 15000)。超时即杀,不等不猜
+
+退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 5 装载或调用没成 / 6 插件说的话不合协议`;
+
 /** 域名 → 该域的用法文本。域子命令面统一从这里取(没登记的域退回顶层帮助)。 */
 export const DOMAIN_USAGE: Record<string, string> = {
   proxy: PROXY_USAGE,
@@ -256,6 +325,17 @@ export function domainUsageOutcome(
     steps: [
       { description: `打印 ${domain} 面用法`, command: `a2 ${domain} --help` },
       { description: "列出本内核实际提供的能力(含风险档与参数)", command: "a2 capabilities list --json" },
+    ],
+  });
+}
+
+/** 插件面的用法错:指引指向协议规格(帮助)与"先看看现在装了什么"。 */
+export function pluginUsageOutcome(message: string): CommandOutcome {
+  return usageOutcome(message, {
+    usage: PLUGIN_USAGE,
+    steps: [
+      { description: "打印插件协议与最小例子", command: "a2 plugin --help" },
+      { description: "看看现在都装了什么", command: "a2 plugin list --json" },
     ],
   });
 }

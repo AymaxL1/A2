@@ -63,7 +63,7 @@ public enum A2PanelProjection {
 
     /// 叠加一条推送事件,返回壳该做的事。
     ///
-    /// 六族全部有分支,**一族都不许默默吞掉** —— 未知族在解码层就已经被拒
+    /// 七族全部有分支,**一族都不许默默吞掉** —— 未知族在解码层就已经被拒
     /// (`A2KernelEvent` 的 `kind` 是封闭词表,有 invalid 金标守着),所以这里的 switch 是穷尽的。
     public static func apply(_ event: A2KernelEvent, to state: inout A2PanelState) -> A2PanelEffect {
         switch event {
@@ -126,8 +126,18 @@ public enum A2PanelProjection {
 
         case let .capability(_, capabilityEvent):
             // **只对代理域重读**:内核只对 normal/dangerous 发这一族,而壳的菜单只投影 `proxy.*`。
-            //   别的域(将来的插件能力)改了状态与本菜单无关,不必白跑一趟。
+            //   别的域(插件能力)改了状态与本菜单无关,不必白跑一趟。
             return capabilityEvent.capability.hasPrefix("proxy.") ? .refreshProxy : .none
+
+        case let .capabilitySet(_, change):
+            // 能力全集变了(agent 装/卸了一个插件,11 票)。壳**整份替换**自己那张表 ——
+            //   载荷里带的就是变化后的全集,不必按 added/removed 做加减法(那是内核已经算好的账)。
+            //
+            //   **菜单不会因此多出一项**:菜单只投影 `proxy.*`(有断言钉着),插件能力要进菜单
+            //   得是壳的一次显式改动。但这张表还是要跟上 —— 确认器呈现 dangerous 请求时
+            //   要按 id 找 manifest,而插件工具**照样会走仲裁**(它与内置能力是同一种东西)。
+            state.capabilities = change.capabilities
+            return .none
         }
     }
 }

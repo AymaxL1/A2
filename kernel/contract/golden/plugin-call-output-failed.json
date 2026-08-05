@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "message": "这件事没办成",
+    "detail": "插件自己给的细节"
+  }
+}

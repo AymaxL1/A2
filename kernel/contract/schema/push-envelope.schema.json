@@ -345,7 +345,9 @@
                     "subscriber_left",
                     "peer_rejected",
                     "peer_unverified",
-                    "backpressure_dropped"
+                    "backpressure_dropped",
+                    "plugin_added",
+                    "plugin_removed"
                   ]
                 },
                 "capability": {
@@ -539,6 +541,221 @@
             "kind",
             "at",
             "capability"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "capability-set"
+            },
+            "at": {
+              "type": "string",
+              "minLength": 1
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "added",
+                    "replaced",
+                    "removed"
+                  ]
+                },
+                "plugin": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "added": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": [
+                          "safe",
+                          "normal",
+                          "dangerous"
+                        ]
+                      },
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "parameters": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "object",
+                                "array"
+                              ]
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "allowedValues": {
+                              "minItems": 1,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type",
+                            "required",
+                            "description"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "cliAlias": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "risk",
+                      "summary",
+                      "parameters"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": [
+                          "safe",
+                          "normal",
+                          "dangerous"
+                        ]
+                      },
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "parameters": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "object",
+                                "array"
+                              ]
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "allowedValues": {
+                              "minItems": 1,
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type",
+                            "required",
+                            "description"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "cliAlias": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "risk",
+                      "summary",
+                      "parameters"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "action",
+                "plugin",
+                "added",
+                "removed",
+                "capabilities"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "at",
+            "capabilities"
           ],
           "additionalProperties": false
         }

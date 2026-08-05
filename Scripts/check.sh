@@ -9,7 +9,7 @@
 # 「换引擎而接口不变」是同一种安排:任何记着这条命令的人/脚本/文档都不必改。
 #
 # ============================================================================
-# 引擎(10 票起):**TS 门禁四件套**
+# 引擎(10 票起 TS 四件套;11 票加了插件那一步,现为五件套)
 # ============================================================================
 #   ① `bun test`(kernel/)  —— CLI 面为主战场:argv 进、stdout JSON / 退出码出。
 #                              **契约金标的 TS 半边**在这一步里(`contract-golden.test.ts`)。
@@ -17,7 +17,10 @@
 #                              + 客户端协议逻辑 + 壳纯逻辑 + **壳快照**(离屏渲染 × 入库 golden)。
 #   ③ 旗舰 e2e              —— `Scripts/a2-flagship-e2e.sh`:真 `a2` bin + 假 mihomo + 壳的真代码路径,
 #                              旗舰链零打断 / dangerous 三收场 / 壳退出仅断连 / 显式还原。
-#   ④ `.app` 出包           —— `Scripts/build-app.sh`:以 **a2-panel** 身份组 bundle + ad-hoc 签名,
+#   ④ 插件 e2e(11 票)      —— `Scripts/a2-plugin-e2e.sh`:agent **现场写**一个零依赖单文件插件 →
+#                              `a2 plugin add` 零闸装上 → 经 CLI 全链调用 → dangerous 两分支 →
+#                              进程外 + 协议白名单红线断言 → 卸载 → 留痕。
+#   ⑤ `.app` 出包           —— `Scripts/build-app.sh`:以 **a2-panel** 身份组 bundle + ad-hoc 签名,
 #                              并核验包结构与签名(证书 / TCC / 公证是人工项,顺延不阻塞)。
 #
 #   另加两条**便宜且能挡真事**的静态关:`bun x tsc --noEmit`(TS 类型漂移)与
@@ -71,7 +74,7 @@ run_step() {  # $1=名字  $2=日志文件  剩下=命令
 }
 
 echo "========================================"
-echo " PROJECT_AA check.sh —— TS 门禁四件套"
+echo " PROJECT_AA check.sh —— TS 门禁五件套"
 echo " ROOT = $ROOT"
 echo "========================================"
 
@@ -123,7 +126,7 @@ fi
 echo " swift = $SWIFT_BIN"
 echo " 版本  = $("$SWIFT_BIN" --version 2>/dev/null | head -1)"
 echo " bun   = $BUN_BIN($("$BUN_BIN" --version 2>/dev/null))"
-echo " 引擎  = bun test + swift test + 旗舰 e2e + .app 出包"
+echo " 引擎  = bun test + swift test + 旗舰 e2e + 插件 e2e + .app 出包"
 echo "========================================"
 
 # ---- ⓪ 静态关:TS 类型 ------------------------------------------------------------------
@@ -164,12 +167,44 @@ run_step "① bun test(内核 CLI 面 + 契约金标 TS 半边)" "$BUILD/bun-tes
 run_step "② swift test(契约金标 Swift 半边 + 客户端协议 + 壳纯逻辑 + 壳快照)" "$BUILD/swift-test.log" \
   "$SWIFT_BIN" test --scratch-path "$BUILD/spm" --no-parallel
 
+# ---- ②b 内核产物新鲜度守卫(11 票 CR 尾款 a)---------------------------------------------
+# ③④ 两步的被测体优先取 `kernel/dist/a2`(**编译产物**),取不到才回落源码入口。这个"优先"是静默的,
+#   于是产物比 `kernel/src` 旧的时候,e2e 验的是**上一版内核**而门禁照绿 —— 一次真实的假绿风险。
+# 判据:产物存在且不比 `kernel/src` / `package.json` / `bun.lock` 里任何一个文件旧。陈旧即**当场重建**
+#   (`bun build --compile`,十几秒),而不是"报个错让人自己想起来"。产物不入库,重建没有副作用。
+# 只编译、不复跑产物那一遍测试:那是 `kernel/scripts/build.sh` 的活(再花 80 秒),门禁不为它买单。
+DIST_BIN="$ROOT/kernel/dist/a2"
+STALE_REASON=""
+if [ ! -x "$DIST_BIN" ]; then
+  STALE_REASON="产物不存在"
+else
+  # `find -newer` 逐个比:src 下、或 package.json / bun.lock 里,只要有一个比产物新就算陈旧。
+  NEWER_FILES="$(find "$ROOT/kernel/src" "$ROOT/kernel/package.json" "$ROOT/kernel/bun.lock" \
+                   -type f -newer "$DIST_BIN" -print 2>/dev/null | head -5)"
+  [ -n "$NEWER_FILES" ] && STALE_REASON="比产物新的文件:$(echo "$NEWER_FILES" | tr '\n' ' ')"
+fi
+if [ -n "$STALE_REASON" ]; then
+  echo
+  echo "==== ②b 内核产物新鲜度(陈旧,重建中)===="
+  echo "  $STALE_REASON"
+  run_step "②b 重建 kernel/dist/a2(产物陈旧,e2e 不许验旧内核)" "$BUILD/kernel-build.log" \
+    env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"
+else
+  echo
+  echo "==== ②b 内核产物新鲜度 ===="
+  step_pass "②b kernel/dist/a2 不比 kernel/src 旧(e2e 验的是当前这版内核)"
+fi
+
 # ---- ③ 旗舰 e2e ------------------------------------------------------------------------
 run_step "③ 旗舰 e2e(真 a2 bin + 假 mihomo + 壳的真代码路径)" "$BUILD/flagship-e2e.log" \
   bash "$ROOT/Scripts/a2-flagship-e2e.sh"
 
-# ---- ④ `.app` 出包(a2-panel 身份 + ad-hoc 签名)----------------------------------------
-run_step "④ .app 出包(a2-panel · ad-hoc 签名 · 包结构核验)" "$BUILD/build-app.log" \
+# ---- ④ 插件 e2e(11 票)-----------------------------------------------------------------
+run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dangerous 两分支 → 进程外红线)" \
+  "$BUILD/plugin-e2e.log" bash "$ROOT/Scripts/a2-plugin-e2e.sh"
+
+# ---- ⑤ `.app` 出包(a2-panel 身份 + ad-hoc 签名)----------------------------------------
+run_step "⑤ .app 出包(a2-panel · ad-hoc 签名 · 包结构核验)" "$BUILD/build-app.log" \
   bash "$ROOT/Scripts/build-app.sh" --output "$BUILD/app"
 
 # ---- 收口 ------------------------------------------------------------------------------
@@ -179,14 +214,16 @@ BUN_COUNT="$(sed -E $'s/\033\\[[0-9;]*m//g' "$BUILD/bun-test.log" 2>/dev/null \
   | grep -Eo 'Ran [0-9]+ tests' | tail -1 | grep -Eo '[0-9]+' || true)"
 SWIFT_COUNT="$(grep -Eo 'with [0-9]+ tests? passed|Test run with [0-9]+ tests?' "$BUILD/swift-test.log" 2>/dev/null | tail -1 | grep -Eo '[0-9]+' || true)"
 FLAGSHIP_COUNT="$(grep -Eo 'PASS=[0-9]+' "$BUILD/flagship-e2e.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+PLUGIN_COUNT="$(grep -Eo 'PASS=[0-9]+' "$BUILD/plugin-e2e.log" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
 
 echo
 echo "========================================"
-echo " 四件套明细(人读;判据是步的成败)"
+echo " 五件套明细(人读;判据是步的成败)"
 echo "   ① bun test        : ${BUN_COUNT:-?} 条"
 echo "   ② swift test      : ${SWIFT_COUNT:-?} 条"
 echo "   ③ 旗舰 e2e        : ${FLAGSHIP_COUNT:-?} 条"
-echo "   ④ .app 出包       : 结构 + ad-hoc 签名核验"
+echo "   ④ 插件 e2e        : ${PLUGIN_COUNT:-?} 条"
+echo "   ⑤ .app 出包       : 结构 + ad-hoc 签名核验"
 echo "----------------------------------------"
 echo " 结果: 步 PASS=$STEPS_OK  FAIL=$STEPS_FAIL"
 if [ "$STEPS_FAIL" -eq 0 ]; then

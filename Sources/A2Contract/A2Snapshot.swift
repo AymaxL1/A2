@@ -105,7 +105,7 @@ extension A2RoleRegisterResult: Codable {
     }
 }
 
-/// 增量事件的六族判别值(对照 `KernelEventSchema` 的 `kind`)。
+/// 增量事件的七族判别值(对照 `KernelEventSchema` 的 `kind`;11 票起是七族)。
 public enum A2KernelEventKind: String, Sendable, Codable, Equatable, CaseIterable {
     /// 仲裁面变了(整份 state,推给全体)。
     case arbitration
@@ -119,6 +119,8 @@ public enum A2KernelEventKind: String, Sendable, Codable, Equatable, CaseIterabl
     case supervision
     /// 有人改了状态,带能力自己的 output(推给全体)。
     case capability
+    /// **能调的东西本身变了**(装/卸插件,11 票):带变化后的全集,拿到就整份替换(推给全体)。
+    case capabilitySet = "capability-set"
 }
 
 /// 增量推送的事件族(对照 `KernelEventSchema`,按 `kind` 判别的联合)。
@@ -132,6 +134,7 @@ public enum A2KernelEvent: Sendable, Equatable {
     case audit(at: String, audit: A2AuditEvent)
     case supervision(at: String, supervision: A2ProxySupervisionEvent)
     case capability(at: String, capability: A2CapabilityEvent)
+    case capabilitySet(at: String, capabilities: A2CapabilitySetEvent)
 
     public var kind: A2KernelEventKind {
         switch self {
@@ -141,10 +144,11 @@ public enum A2KernelEvent: Sendable, Equatable {
         case .audit: return .audit
         case .supervision: return .supervision
         case .capability: return .capability
+        case .capabilitySet: return .capabilitySet
         }
     }
 
-    /// 事件发生时刻(六族都有)。
+    /// 事件发生时刻(七族都有)。
     public var at: String {
         switch self {
         case let .arbitration(at, _): return at
@@ -153,6 +157,7 @@ public enum A2KernelEvent: Sendable, Equatable {
         case let .audit(at, _): return at
         case let .supervision(at, _): return at
         case let .capability(at, _): return at
+        case let .capabilitySet(at, _): return at
         }
     }
 }
@@ -160,6 +165,7 @@ public enum A2KernelEvent: Sendable, Equatable {
 extension A2KernelEvent: Codable {
     private enum CodingKeys: String, CodingKey {
         case kind, at, state, request, requestId, timeoutMs, confirmation, audit, supervision, capability
+        case capabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -188,6 +194,10 @@ extension A2KernelEvent: Codable {
         case .capability:
             self = .capability(
                 at: at, capability: try container.decode(A2CapabilityEvent.self, forKey: .capability))
+        case .capabilitySet:
+            self = .capabilitySet(
+                at: at,
+                capabilities: try container.decode(A2CapabilitySetEvent.self, forKey: .capabilities))
         }
     }
 
@@ -210,6 +220,8 @@ extension A2KernelEvent: Codable {
             try container.encode(supervision, forKey: .supervision)
         case let .capability(_, capability):
             try container.encode(capability, forKey: .capability)
+        case let .capabilitySet(_, capabilities):
+            try container.encode(capabilities, forKey: .capabilities)
         }
     }
 }

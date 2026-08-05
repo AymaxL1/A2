@@ -106,6 +106,56 @@ export class CapabilityRegistry {
     return this.#ordered.map((capability) => capability.descriptor);
   }
 
+  /**
+   * **运行期**登记(11 票:`a2 plugin add` 让能力全集在运行期变化)。
+   *
+   * 与构造器那条「重复 id 直接抛」的分别是有意的,不是两套标准:
+   *   * 构造器登记的是**内核自己的**能力,重复只可能是内核代码写错了 —— 启动即失败最省事;
+   *   * 这里登记的是**外来的**能力(agent 现场写的插件),重复是一种**可预期的输入**,
+   *     必须变成一条带指引的结构化错误交回去,而不是掀翻正在跑的 daemon。
+   *
+   * **全或无**:一个插件的多个工具里只要有一个 id 撞了,整批都不登记(半装的插件比没装更难排错)。
+   */
+  register(capabilities: Capability[]): WireError | undefined {
+    for (const capability of capabilities) {
+      const id = capability.descriptor.id;
+      if (this.#byId.has(id)) {
+        return {
+          code: ErrorCode.invalidParams,
+          message: `能力 id 已被占用:${id}`,
+          detail: "同名工具已经登记过了。插件的能力 id 形如 `plugin.<插件名>.<工具名>`,换个插件名即可避开。",
+          guidance: {
+            summary: "换一个插件名再装,或先卸掉占着这个 id 的那个插件。",
+            steps: [
+              { description: "看看现在都装了什么", command: "a2 plugin list --json" },
+              { description: "换个名字装", command: "a2 plugin add <路径> --name <别的名字>" },
+            ],
+            context: { capability: id },
+          },
+        };
+      }
+    }
+    for (const capability of capabilities) {
+      this.#ordered.push(capability);
+      this.#byId.set(capability.descriptor.id, capability);
+    }
+    return undefined;
+  }
+
+  /** 运行期注销(`a2 plugin remove`)。返回真的被摘掉的那批 manifest;不认识的 id 静默略过。 */
+  unregister(ids: string[]): CapabilityDescriptor[] {
+    const removed: CapabilityDescriptor[] = [];
+    for (const id of ids) {
+      const capability = this.#byId.get(id);
+      if (!capability) continue;
+      this.#byId.delete(id);
+      const index = this.#ordered.indexOf(capability);
+      if (index >= 0) this.#ordered.splice(index, 1);
+      removed.push(capability.descriptor);
+    }
+    return removed;
+  }
+
   describe(id: string): CapabilityDescriptor | undefined {
     return this.#byId.get(id)?.descriptor;
   }

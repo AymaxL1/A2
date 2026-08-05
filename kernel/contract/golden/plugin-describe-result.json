@@ -1,0 +1,25 @@
+{
+  "protocol": 1,
+  "name": "hello",
+  "tools": [
+    {
+      "name": "greet",
+      "summary": "打个招呼",
+      "dangerous": false,
+      "parameters": [
+        {
+          "name": "who",
+          "type": "string",
+          "required": true,
+          "description": "跟谁打招呼"
+        }
+      ]
+    },
+    {
+      "name": "wipe",
+      "summary": "假装擦掉点什么",
+      "dangerous": true,
+      "parameters": []
+    }
+  ]
+}

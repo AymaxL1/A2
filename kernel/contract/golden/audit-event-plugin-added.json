@@ -1,0 +1,5 @@
+{
+  "at": "2026-08-05T04:20:00.000Z",
+  "action": "plugin_added",
+  "detail": "插件 hello 登记成功,工具 2 个(plugin.hello.greet、plugin.hello.wipe)。装载零闸:本次没有经过任何确认(ADR 0011)。"
+}

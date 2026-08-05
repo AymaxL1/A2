@@ -12,6 +12,7 @@ import { daemonRunCommand } from "./daemon.ts";
 import { domainCommand } from "./domain.ts";
 import { mihomoCommand } from "./mihomo.ts";
 import { emitOutcome, type CommandOutcome } from "./outcome.ts";
+import { pluginCommand } from "./plugin.ts";
 import { serviceCommand } from "./service.ts";
 import { statusCommand } from "./status.ts";
 import { USAGE, helpOutcome, usageOutcome } from "./usage.ts";
@@ -54,6 +55,11 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   }
   if (command === "mihomo") {
     return await mihomoCommand(args, resolvePaths());
+  }
+  // 插件装载面(11 票)。**装载零闸**:这条路上没有任何确认闸 —— 危险性只在调用层把关
+  // (`a2 capabilities call plugin.…` 撞上 dangerous 声明时自动走三层仲裁)。
+  if (command === "plugin") {
+    return await pluginCommand(args, resolvePaths());
   }
   if (command === "daemon") {
     if (args[0] !== "run" || args.length > 1) {

@@ -194,6 +194,67 @@ public struct A2CapabilityEvent: Sendable, Equatable {
     }
 }
 
+/// 「**能力全集变了**」事件的载荷(对照 `CapabilitySetEventSchema`,11 票)。
+///
+/// 与 `A2CapabilityEvent` 是两件事:那条说"有人改了状态",这条说"**能调的东西本身变了**"
+/// (agent 现场装/卸了一个插件)。载荷里带**变化后的全集**,所以客户端拿到就整份替换 ——
+/// 不必自己按 added/removed 做加减法(与 `arbitration` 事件"整份推"同一种处置)。
+///
+/// **壳(a2-panel)不会因此长出新菜单项**:菜单只投影 `proxy.*`(有断言钉着)。
+/// 它镜像这条事件是为了**能把整帧解开**:未知 kind 会让 `A2KernelEvent` 解码失败、整帧被丢弃。
+public struct A2CapabilitySetEvent: Sendable, Equatable {
+    public let action: A2PluginAction
+    public let plugin: String
+    public let added: [A2CapabilityDescriptor]
+    public let removed: [String]
+    public let capabilities: [A2CapabilityDescriptor]
+
+    public init(
+        action: A2PluginAction, plugin: String, added: [A2CapabilityDescriptor],
+        removed: [String], capabilities: [A2CapabilityDescriptor]
+    ) {
+        self.action = action
+        self.plugin = plugin
+        self.added = added
+        self.removed = removed
+        self.capabilities = capabilities
+    }
+}
+
+/// 插件装载动作(对照 `PluginActionSchema`,**词表封闭**:未知取值必须解码失败,有 invalid 金标守着)。
+public enum A2PluginAction: String, Sendable, Codable, Equatable, CaseIterable {
+    /// 头一回装上。
+    case added
+    /// 同名再装 = 替换(工件换掉,插件名不变)。
+    case replaced
+    /// 卸掉:它的能力当场从注册表消失。
+    case removed
+}
+
+extension A2CapabilitySetEvent: Codable {
+    private enum CodingKeys: String, CodingKey { case action, plugin, added, removed, capabilities }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        action = try container.decode(A2PluginAction.self, forKey: .action)
+        plugin = try container.decodeNonEmptyString(forKey: .plugin)
+        // 三张表都**可以为空**(卸载时 added 为空、首装时 removed 为空),与契约的 `z.array(...)` 一致。
+        added = try container.decode([A2CapabilityDescriptor].self, forKey: .added)
+        // 元素带 min(1)、数组本身可空:头一回装插件时 removed 就是空的。
+        removed = try container.decodeStringArrayWithNonEmptyElements(forKey: .removed)
+        capabilities = try container.decode([A2CapabilityDescriptor].self, forKey: .capabilities)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(action, forKey: .action)
+        try container.encode(plugin, forKey: .plugin)
+        try container.encode(added, forKey: .added)
+        try container.encode(removed, forKey: .removed)
+        try container.encode(capabilities, forKey: .capabilities)
+    }
+}
+
 extension A2CapabilityEvent: Codable {
     private enum CodingKeys: String, CodingKey { case capability, risk, output }
 

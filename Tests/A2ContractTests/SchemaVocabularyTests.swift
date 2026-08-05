@@ -92,6 +92,13 @@ struct SchemaVocabularyTests {
             in: "audit-event.schema.json", "AuditAction")
     }
 
+    @Test("插件装载动作词表(11 票:added / replaced / removed,没有第四种)")
+    func pluginActionVocabulary() throws {
+        try expectVocabulary(
+            Set(A2PluginAction.allCases.map(\.rawValue)), of: "action",
+            in: "capability-set-event.schema.json", "PluginAction")
+    }
+
     @Test("角色词表")
     func clientRoleVocabulary() throws {
         try expectVocabulary(

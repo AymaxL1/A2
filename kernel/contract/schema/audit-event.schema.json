@@ -23,7 +23,9 @@
         "subscriber_left",
         "peer_rejected",
         "peer_unverified",
-        "backpressure_dropped"
+        "backpressure_dropped",
+        "plugin_added",
+        "plugin_removed"
       ]
     },
     "capability": {

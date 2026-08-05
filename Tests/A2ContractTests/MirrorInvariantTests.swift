@@ -132,15 +132,19 @@ struct MirrorInvariantTests {
 
     // MARK: - 六族事件
 
-    @Test("增量事件恰好六族,判别值逐字对齐契约")
-    func kernelEventFamiliesAreExactlySix() {
+    /// 这条断言的期望值是**手写的字面量**,所以每加一族都得有人来改它 —— 那正是它存在的意义:
+    /// 事件族是壳的状态机依据,多一族少一族都该是一次**可审阅的动作**,而不是随手加个 case 就过去了。
+    /// (11 票加了第七族 `capability-set`:能力全集变了。)
+    @Test("增量事件恰好七族,判别值逐字对齐契约")
+    func kernelEventFamiliesAreExactlySeven() {
         let kinds = Set(A2KernelEventKind.allCases.map(\.rawValue))
         #expect(kinds == [
             "arbitration", "confirmation", "confirmation-pending", "audit", "supervision", "capability",
+            "capability-set",
         ], "事件族变了:\(kinds.sorted())")
     }
 
-    @Test("六份推送金标各自落到正确的事件族")
+    @Test("七份推送金标各自落到正确的事件族")
     func pushGoldensMapToTheirFamily() throws {
         let expectations: [(file: String, kind: A2KernelEventKind)] = [
             ("push-arbitration.json", .arbitration),
@@ -149,6 +153,7 @@ struct MirrorInvariantTests {
             ("push-audit-denied.json", .audit),
             ("push-supervision-down.json", .supervision),
             ("push-capability.json", .capability),
+            ("push-capability-set.json", .capabilitySet),
         ]
         for expectation in expectations {
             let push = try JSONDecoder().decode(A2PushEnvelope.self, from: golden(expectation.file))

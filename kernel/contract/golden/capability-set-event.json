@@ -1,0 +1,48 @@
+{
+  "action": "added",
+  "plugin": "hello",
+  "added": [
+    {
+      "id": "plugin.hello.greet",
+      "risk": "normal",
+      "summary": "打个招呼",
+      "parameters": [
+        {
+          "name": "who",
+          "type": "string",
+          "required": true,
+          "description": "跟谁打招呼"
+        }
+      ]
+    }
+  ],
+  "removed": [],
+  "capabilities": [
+    {
+      "id": "demo.echo",
+      "risk": "safe",
+      "summary": "回显一条消息(只读,直通;用于验证调用闭环)",
+      "parameters": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true,
+          "description": "要回显的文本"
+        }
+      ]
+    },
+    {
+      "id": "plugin.hello.greet",
+      "risk": "normal",
+      "summary": "打个招呼",
+      "parameters": [
+        {
+          "name": "who",
+          "type": "string",
+          "required": true,
+          "description": "跟谁打招呼"
+        }
+      ]
+    }
+  ]
+}

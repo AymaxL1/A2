@@ -14,6 +14,8 @@ import {
   ConfirmationResolveParamsSchema,
   ErrorCode,
   Op,
+  PluginAddParamsSchema,
+  PluginRemoveParamsSchema,
   RequestEnvelopeSchema,
   RoleRegisterParamsSchema,
   encodeFrame,
@@ -26,8 +28,25 @@ import {
   type OpOutcome,
   type RequestEnvelope,
 } from "../contract/wire.ts";
+import {
+  addPlugin,
+  listPlugins,
+  removePlugin,
+  type PluginHostContext,
+} from "../plugin/host.ts";
 import type { ClientConnection } from "./hub.ts";
 import { statusSnapshot, type KernelRuntime } from "./runtime.ts";
+
+/** 插件宿主要的那四样,全在运行态里现成 —— op 层只负责把它们凑到一起。 */
+function pluginContext(runtime: KernelRuntime): PluginHostContext {
+  return {
+    paths: runtime.paths,
+    registry: runtime.registry,
+    audit: runtime.audit,
+    hub: runtime.hub,
+    env: runtime.env,
+  };
+}
 
 type OpHandler = (
   request: RequestEnvelope,
@@ -95,6 +114,23 @@ const HANDLERS: Record<string, OpHandler> = {
     }
     // 注册表只管"能力吐了什么"(output),线上的 result 形状由 op 层拼(带上 capability 便于对号)。
     return opSuccess({ capability: params.data.capability, output: outcome.result });
+  },
+
+  // MARK: 插件面(11 票)——**装载零闸**:这三条不经任何仲裁,与 `capabilities.call` 的 dangerous 分支
+  // 是两回事(ADR 0011:装载不设闸,危险性只在**调用层**把关)。留痕由 host 自己发(审计 + 能力增量)。
+
+  [Op.pluginAdd]: async (request, runtime) => {
+    const params = PluginAddParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return invalidParams("plugin.add", params.error.message);
+    return await addPlugin(pluginContext(runtime), params.data);
+  },
+
+  [Op.pluginList]: (_request, runtime) => listPlugins(pluginContext(runtime)),
+
+  [Op.pluginRemove]: async (request, runtime) => {
+    const params = PluginRemoveParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return invalidParams("plugin.remove", params.error.message);
+    return await removePlugin(pluginContext(runtime), params.data.plugin);
   },
 
   [Op.rolesRegister]: (request, runtime, connection) => {

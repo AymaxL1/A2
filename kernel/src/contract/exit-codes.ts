@@ -71,6 +71,15 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.proxyOperationFailed:
     case ErrorCode.systemProxyFailed:
     case ErrorCode.subscriptionFailed:
+    // 插件面同档:进程真的起来了、协议也走通了,是**这次调用**没成(异常/非零退出/超时),
+    // 或者**这次装载**没成(文件不在、不是零依赖单文件)。
+    //
+    // **超时为什么不归 3**:退出码 3 的语义是「人没点」(确认器在场却没人做决定,08 票裁的唯一产出面)。
+    // 插件卡住与人没点是两件事,agent 的下一步也完全不同(改插件/加大超时 vs 去催人),
+    // 合流只会让"重试还是别重试"这个判断变糊。这条是 11 票的显式取舍,不是遗漏。
+    case ErrorCode.pluginFailed:
+    case ErrorCode.pluginTimeout:
+    case ErrorCode.pluginLoadFailed:
       return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:
@@ -87,6 +96,11 @@ export function exitCodeForErrorCode(code: string): number {
     // 长连接协议面的两条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活。
     case ErrorCode.confirmationUnknown:
     case ErrorCode.roleNotRegistered:
+    // 插件说的话不合协议(describe 输出坏了 / 退出码不在词表 / 清单里有的工具它自己不认)——
+    // 与 `unknown_capability` 同档:这条请求本身不成立,要改的是插件而不是参数。
+    case ErrorCode.pluginProtocolError:
+    // 指名道姓的那个插件没登记过 —— 同 `unknown_capability`。
+    case ErrorCode.unknownPlugin:
       return ExitCode.protocolError;
     default:
       return ExitCode.protocolError;

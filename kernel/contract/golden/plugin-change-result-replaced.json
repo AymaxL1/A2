@@ -1,0 +1,27 @@
+{
+  "action": "replaced",
+  "plugin": {
+    "name": "hello",
+    "artifact": "/Users/someone/.a2/plugins/hello.ts",
+    "source": "/Users/someone/work/hello.ts",
+    "addedAt": "2026-08-05T04:22:00.000Z",
+    "tools": [
+      {
+        "name": "greet",
+        "summary": "换了个实现",
+        "dangerous": false,
+        "parameters": []
+      }
+    ],
+    "capabilities": ["plugin.hello.greet"]
+  },
+  "added": [
+    {
+      "id": "plugin.hello.greet",
+      "risk": "normal",
+      "summary": "换了个实现",
+      "parameters": []
+    }
+  ],
+  "removed": ["plugin.hello.greet", "plugin.hello.wipe"]
+}

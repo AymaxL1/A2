@@ -78,6 +78,20 @@ extension KeyedDecodingContainer {
         return value
     }
 
+    /// 解一个字符串数组:**数组本身可以为空,元素不得为空串**(对照 `z.array(z.string().min(1))`)。
+    ///
+    /// 与上面那条的分别在于**空数组合不合法**:`cliAlias` 带 `.min(1)`(有别名就至少一个 token),
+    /// 而 11 票的 `removed`(本次注销的能力 id)天然可以为空 —— 头一回装插件时它就是空的。
+    /// 松紧照抄契约,收严与放松同样是漂移(见 `OptionalStrictnessTests` 的口径)。
+    func decodeStringArrayWithNonEmptyElements(forKey key: Key) throws -> [String] {
+        let value = try decode([String].self, forKey: key)
+        guard !value.contains(where: \.isEmpty) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key, in: self, debugDescription: "数组元素不得为空串")
+        }
+        return value
+    }
+
     /// 解一个正整数(对照 `z.number().int().positive()`)。
     func decodePositiveInt(forKey key: Key) throws -> Int {
         let value = try decode(Int.self, forKey: key)

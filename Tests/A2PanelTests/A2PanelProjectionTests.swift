@@ -9,7 +9,7 @@ import A2Contract
 import A2Panel
 import A2PanelFixtures
 
-@Suite("10 事件投影(快照即基线 + 六族增量 + 断线即离场)")
+@Suite("10 事件投影(快照即基线 + 七族增量 + 断线即离场)")
 struct A2PanelProjectionTests {
 
     // ---- 装置 ----
@@ -196,6 +196,24 @@ struct A2PanelProjectionTests {
         _ = A2PanelProjection.apply(.capability(at: "t", capability: event), to: &state)
         #expect(state.proxy == before,
                 "壳不许自己去删本地那一条 —— 它只该重读,然后照内核给的清单显示")
+    }
+
+    @Test("11 capability-set 事件:能力全集整份替换,但菜单不因此多出一项")
+    func capabilitySetEventReplacesTheWholeTable() {
+        var state = A2PanelProjection.base(from: Self.snapshot())
+        let before = state.capabilities
+        let plugged = A2CapabilityDescriptor(
+            id: "plugin.hello.greet", risk: .normal, summary: "打个招呼", parameters: [])
+        let event = A2CapabilitySetEvent(
+            action: .added, plugin: "hello", added: [plugged], removed: [],
+            capabilities: before + [plugged])
+
+        let effect = A2PanelProjection.apply(.capabilitySet(at: "t", capabilities: event), to: &state)
+
+        // 整份替换:客户端不做加减法(内核已经算好了全集)。
+        #expect(state.capabilities == before + [plugged])
+        // 没有额外效应:插件能力**不进菜单**(菜单只投影 proxy.*,由另一条断言钉着)。
+        #expect(effect == .none)
     }
 
     // ========================================================================

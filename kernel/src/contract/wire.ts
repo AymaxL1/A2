@@ -182,6 +182,26 @@ export const ErrorCode = {
   systemProxyUnsupported: "system_proxy_unsupported",
   /** 订阅拉取/物化/清单读写没成(含「清单文件损坏,拒绝读写以免覆盖既有数据」)。 */
   subscriptionFailed: "subscription_failed",
+
+  // MARK: 插件宿主(11 票)—— exec 一次一调的三种收场 + 装载面两码
+  //
+  // 三条收场码是**按「谁该改什么」分的**,不是按错误发生在哪一层分的:
+  //   * `plugin_protocol_error` —— 插件**说的话不合协议**(describe 输出坏了、退出码不在词表、
+  //     清单里有的工具它自己不认)。要改的是插件的代码,agent 拿到它就该回去改文件再 `a2 plugin add`。
+  //   * `plugin_failed` —— 插件**跑了但没跑成**(未捕获异常、进程被信号打断、非零退出且不在词表)。
+  //   * `plugin_timeout` —— 插件在超时窗口内没有交出结果,已被杀掉。
+  // 三条都归退出码 5(「路走通了、事没办成」)吗?不 —— 见 `exit-codes.ts`:协议错归 6,
+  // 另两条归 5。**超时不归 3**:退出码 3 的语义是「人没点」(确认器在场却没人做决定),
+  // 插件卡住与人没点是两件事,agent 的下一步也不同(改插件 vs 去催人)。
+  pluginProtocolError: "plugin_protocol_error",
+  /** 插件进程跑了但没跑成(未捕获异常 / 被信号打断 / 非零退出)。 */
+  pluginFailed: "plugin_failed",
+  /** 插件在超时窗口内没有交出结果,已被杀掉(fail-closed:不等、不猜)。 */
+  pluginTimeout: "plugin_timeout",
+  /** `a2 plugin add` 没装上:文件不在、不是零依赖单文件、describe 不合协议、名字非法。 */
+  pluginLoadFailed: "plugin_load_failed",
+  /** 指名道姓的那个插件没登记过(`a2 plugin remove` 的对象不存在)。 */
+  unknownPlugin: "unknown_plugin",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -240,6 +260,18 @@ export const Op = {
   rolesRegister: "roles.register",
   /** 确认器对一条待确认请求做决定(批准/拒绝)。**只有注册过 confirm-agent 的连接能发**。 */
   confirmationsResolve: "confirmations.resolve",
+
+  // MARK: 插件面(11 票)—— 装载零闸,仲裁只在调用层
+  //
+  // 三条都走 daemon 而不是 CLI 本地办:**能力注册表住在 daemon 进程里**,装载就是往那张表上加东西
+  // (04 票「唯一调用面」的直接推论)。所以 `a2 plugin add` 与 `a2 capabilities call` 同一条路。
+
+  /** 登记一个零依赖单文件插件(即时生效,无确认闸;审计事件推给订阅者)。 */
+  pluginAdd: "plugin.add",
+  /** 列出已登记插件(机读:工件路径、装载时刻、工具清单、派生出的能力 id)。 */
+  pluginList: "plugin.list",
+  /** 卸掉一个插件(它的能力当场从注册表消失)。 */
+  pluginRemove: "plugin.remove",
 } as const;
 export type Op = (typeof Op)[keyof typeof Op];
 
@@ -1043,6 +1075,14 @@ export const AuditActionSchema = z.enum([
    * 所以丢掉中间那些增量不会让它错乱(这正是"全量快照 + 增量"模型的兜底)。
    */
   "backpressure_dropped",
+  /**
+   * **装了一个插件**(11 票)。装载本身**零闸**(ADR 0011:同 UID 威胁模型下装载审批不新增任何防御,
+   * 只给「agent 现场写插件」加摩擦),所以留痕就是这条路上唯一的可审计物 —— 它必须发得出去、写得进日志。
+   * 同名再装(替换)也记这一条,`detail` 里写明替换了什么。
+   */
+  "plugin_added",
+  /** 卸了一个插件:它的能力当场从注册表消失。 */
+  "plugin_removed",
 ]);
 export type AuditAction = z.infer<typeof AuditActionSchema>;
 
@@ -1082,6 +1122,144 @@ export const CapabilityEventSchema = z.object({
 });
 export type CapabilityEvent = z.infer<typeof CapabilityEventSchema>;
 
+// MARK: - 插件宿主(11 票)
+//
+// 这一节定的是**两条完全不同的接口**,放在一起是为了让它们的分界一眼可见(ADR 0011 第一条):
+//
+//   ① **内核 → 插件**(`Plugin*` 那几个):exec 一次一调。内核经自带运行时(`BUN_BE_BUN`)把插件
+//      拉起为子进程,`describe` 出清单、`call` 走 stdin/stdout JSON、**退出码即成败**。
+//      这几份 schema 是**写给插件作者(多半是 agent)看的契约**:导出成 JSON Schema 之后,
+//      agent 不必读本仓库的代码就能现场写一个插件。
+//   ② **agent → 内核**(`PluginRecord` / `PluginListResult` / `PluginChangeResult`):
+//      `a2 plugin add|list|remove` 的机读面,与别的子命令同一种包封。
+//
+// 一条不在 schema 里、但同样是契约的事实:**插件是进程外子进程,能力只经协议白名单**
+// (ADR 0011 红线,旧「插件不得 import Host*」的等价物)。它的活体断言在 `test/cli-plugin.test.ts`:
+// 插件回报的 pid ≠ 内核 pid、插件环境里一个 `A2_*` 都没有(内核不把自己的坐标递出去)。
+
+/** 插件协议版本。插件在 `describe` 里自报,与内核对不上就拒装(不猜、不兼容旧形状)。 */
+export const PLUGIN_PROTOCOL_VERSION = 1;
+
+/**
+ * 插件自报的一个工具。
+ *
+ * `parameters` 用的就是内置能力那套 `ParameterSpec`(**纯数据**,04 票为此有意不把 zod 塞进 manifest)——
+ * 于是插件工具与内置能力在 `a2 capabilities list` 里长得一模一样,agent 不必分辨"这条是不是插件"。
+ *
+ * `dangerous` 是**声明**,不是判断:内核不猜一个工具危不危险,只照它说的办
+ * (声明为真 → 调用时自动走三层仲裁)。声明为假的一律按 `normal` 登记而**不是** `safe` ——
+ * 内核无从知道插件的工具是不是只读,把写当读会让状态变化不广播;反过来只是多发一条事件。
+ */
+export const PluginToolSpecSchema = z.object({
+  name: z.string().min(1),
+  summary: z.string().min(1),
+  dangerous: z.boolean(),
+  parameters: z.array(ParameterSpecSchema),
+});
+export type PluginToolSpec = z.infer<typeof PluginToolSpecSchema>;
+
+/** 插件被 `describe` 调用时写到 stdout 的那一行 JSON。 */
+export const PluginDescribeResultSchema = z.object({
+  protocol: z.literal(PLUGIN_PROTOCOL_VERSION),
+  /** 插件自报的名字(仅供人读与排错;**登记用的名字由 `a2 plugin add` 定**,免得两处打架)。 */
+  name: z.string().min(1).optional(),
+  /** 至少一个工具:一个工具都不提供的插件装了也没用,不如当场拒掉并给指引。 */
+  tools: z.array(PluginToolSpecSchema).min(1),
+});
+export type PluginDescribeResult = z.infer<typeof PluginDescribeResultSchema>;
+
+/** 内核写到插件 stdin 的那一行 JSON(`call` 时)。 */
+export const PluginCallRequestSchema = z.object({
+  tool: z.string().min(1),
+  /** 已按 manifest 校验过的入参(参数按名取值)。缺省等价于空对象。 */
+  input: z.record(z.string(), JsonValueSchema),
+});
+export type PluginCallRequest = z.infer<typeof PluginCallRequestSchema>;
+
+/**
+ * 插件 `call` 时写到 stdout 的那一行 JSON。**退出码与它必须一致**(退出码是判据,这一行是内容):
+ * exit=0 配 `ok:true`,exit=3 配 `ok:false`。不一致时内核以退出码为准并把这条不一致写进 detail。
+ */
+export const PluginCallOutputSchema = z.union([
+  z.object({ ok: z.literal(true), output: JsonValueSchema }),
+  z.object({
+    ok: z.literal(false),
+    error: z.object({ message: z.string().min(1), detail: z.string().optional() }),
+  }),
+]);
+export type PluginCallOutput = z.infer<typeof PluginCallOutputSchema>;
+
+/**
+ * 一条已登记的插件。**登记的是 add 那一刻的 describe 快照**:内核把工件复制进
+ * `<A2_HOME>/plugins/`,此后只认那一份 —— 改了源文件不会偷偷生效,重新 `a2 plugin add` 才生效。
+ * 好处是"内核此刻提供哪些能力"永远等于"最后一次 add 时看到的",不会因为有人编辑了源文件而漂。
+ */
+export const PluginRecordSchema = z.object({
+  name: z.string().min(1),
+  /** 登记区里那份工件的绝对路径(内核只拉起它)。 */
+  artifact: z.string().min(1),
+  /** add 时那个源文件的绝对路径(只作记账:改它不影响已登记的工件)。 */
+  source: z.string().min(1),
+  addedAt: z.string().min(1),
+  tools: z.array(PluginToolSpecSchema),
+  /** 派生出的能力 id(`plugin.<插件名>.<工具名>`)。机读面直接给,省得客户端自己拼命名规则。 */
+  capabilities: z.array(z.string().min(1)),
+});
+export type PluginRecord = z.infer<typeof PluginRecordSchema>;
+
+/** `plugin.list` 的 result。`directory` 是登记区(agent 免猜)。 */
+export const PluginListResultSchema = z.object({
+  directory: z.string().min(1),
+  plugins: z.array(PluginRecordSchema),
+});
+export type PluginListResult = z.infer<typeof PluginListResultSchema>;
+
+/** 装载面的三种变化。`replaced` = 同名再装(id 不变、工件换掉),与订阅的 upsert 同一种语义。 */
+export const PluginActionSchema = z.enum(["added", "replaced", "removed"]);
+export type PluginAction = z.infer<typeof PluginActionSchema>;
+
+/** `plugin.add` / `plugin.remove` 的 result:变化后的那条记录 + 本次真的进出了哪些能力。 */
+export const PluginChangeResultSchema = z.object({
+  action: PluginActionSchema,
+  plugin: PluginRecordSchema,
+  /** 本次新登记的能力(remove 时为空)。 */
+  added: z.array(CapabilityDescriptorSchema),
+  /** 本次注销的能力 id(add 时只有"替换掉的那批"会非空)。 */
+  removed: z.array(z.string().min(1)),
+});
+export type PluginChangeResult = z.infer<typeof PluginChangeResultSchema>;
+
+/**
+ * 「**能力全集变了**」事件(11 票新增的第七族)。与 `capability` 事件是两件事:
+ * 那条说"有人改了状态",这条说"**能调的东西本身变了**"。
+ *
+ * 载荷里既有增量(`added` / `removed`)也有**变化后的全集**(`capabilities`)。带全集是有意的:
+ * 快照里的 `capabilities` 就是这张表,客户端收到本事件后**整份替换**即可,不必自己做加减法 ——
+ * 与 `arbitration` 事件"整份推"同一种处置(它们都只有几十个标量,增量记账不值那个复杂度)。
+ */
+export const CapabilitySetEventSchema = z.object({
+  action: PluginActionSchema,
+  /** 引起这次变化的插件名。 */
+  plugin: z.string().min(1),
+  added: z.array(CapabilityDescriptorSchema),
+  removed: z.array(z.string().min(1)),
+  /** 变化后的能力全集(与 `KernelSnapshot.capabilities` 同一形状、同一顺序)。 */
+  capabilities: z.array(CapabilityDescriptorSchema),
+});
+export type CapabilitySetEvent = z.infer<typeof CapabilitySetEventSchema>;
+
+/** `plugin.add` 的 params。`path` 必须是**绝对路径**(CLI 侧按自己的 cwd 展开后再发)。 */
+export const PluginAddParamsSchema = z.object({
+  path: z.string().min(1),
+  /** 覆写登记名(缺省取文件名去扩展名)。取值受限:`[a-z0-9][a-z0-9_-]*`。 */
+  name: z.string().min(1).optional(),
+});
+
+/** `plugin.remove` 的 params。 */
+export const PluginRemoveParamsSchema = z.object({
+  plugin: z.string().min(1),
+});
+
 /**
  * 注册那一刻回给客户端的**全量快照**。之后的变化一律走增量推送(`KernelEvent`)。
  *
@@ -1099,7 +1277,10 @@ export type CapabilityEvent = z.infer<typeof CapabilityEventSchema>;
  */
 export const KernelSnapshotSchema = z.object({
   status: StatusResultSchema,
-  /** 能力全集(11 票插件装上后这张表会变,届时随 `capabilities` 事件推增量)。 */
+  /**
+   * 能力全集。**11 票起这张表在运行期会变**(装/卸插件),变化随 `capability-set` 事件整份推一次 ——
+   * 客户端拿到就替换,不必自己做加减法。
+   */
   capabilities: z.array(CapabilityDescriptorSchema),
   arbitration: ArbitrationStateSchema,
   /** 存活监督的当下观测 + 最近事件(07 票的形状原样复用)。 */
@@ -1114,6 +1295,9 @@ export type KernelSnapshot = z.infer<typeof KernelSnapshotSchema>;
  *   * `confirmation` —— **只推给 confirm-agent**(带 input);
  *   * `confirmation-pending` —— **只推给发起那次调用的那条连接**(告诉它"我转给人了,最多等这么久");
  *   * 其余 —— 推给全体已注册连接(确认器 + 订阅者)。
+ *
+ * 11 票加了第七族 `capability-set`(能力全集变了)。它与 `capability` 一字之差却是两件事:
+ * 后者说"有人改了状态",前者说"**能调的东西本身变了**"。
  */
 export const KernelEventSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -1145,6 +1329,11 @@ export const KernelEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("capability"),
     at: z.string().min(1),
     capability: CapabilityEventSchema,
+  }),
+  z.object({
+    kind: z.literal("capability-set"),
+    at: z.string().min(1),
+    capabilities: CapabilitySetEventSchema,
   }),
 ]);
 export type KernelEvent = z.infer<typeof KernelEventSchema>;

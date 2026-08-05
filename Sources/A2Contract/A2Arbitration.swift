@@ -330,6 +330,10 @@ public enum A2AuditAction: String, Sendable, Codable, Equatable, CaseIterable {
     case peerUnverified = "peer_unverified"
     /// 推送积压超限,该连接被判定为**慢消费者**并断连(它重连会拿到新的全量快照)。
     case backpressureDropped = "backpressure_dropped"
+    /// **装了一个插件**(11 票)。装载零闸(ADR 0011),所以这条留痕是那条路上唯一的可审计物。
+    case pluginAdded = "plugin_added"
+    /// 卸了一个插件:它的能力当场从注册表消失。
+    case pluginRemoved = "plugin_removed"
 }
 
 /// 审计事件里的客户端事实(对照 `AuditClientSchema`)。

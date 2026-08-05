@@ -517,6 +517,78 @@
       "schema": "ConfirmationError",
       "kind": "invalid",
       "why": "仲裁类拒绝**不带 guidance 就是违约** —— 这条样本是 04 票 CR 那处「注释说必填、schema 说可选」的了结"
+    },
+    {
+      "file": "plugin-describe-result.json",
+      "schema": "PluginDescribeResult",
+      "kind": "valid",
+      "why": "内核 → 插件那条接口:插件被 describe 时吐的工具清单(参数用的就是内置能力那套 ParameterSpec)"
+    },
+    {
+      "file": "invalid-plugin-describe-result-no-tools.json",
+      "schema": "PluginDescribeResult",
+      "kind": "invalid",
+      "why": "一个工具都不提供的插件装了也没用 —— tools 至少一条,当场拒装比装上再报「无能力」强"
+    },
+    {
+      "file": "plugin-call-request.json",
+      "schema": "PluginCallRequest",
+      "kind": "valid",
+      "why": "内核写给插件 stdin 的那一行:工具名 + 已按 manifest 校验过的入参"
+    },
+    {
+      "file": "plugin-call-output-ok.json",
+      "schema": "PluginCallOutput",
+      "kind": "valid",
+      "why": "插件成功时写回 stdout 的那一行(配退出码 0)"
+    },
+    {
+      "file": "plugin-call-output-failed.json",
+      "schema": "PluginCallOutput",
+      "kind": "valid",
+      "why": "插件业务失败时写回 stdout 的那一行(配退出码 3;message/detail 由内核原样传给 agent)"
+    },
+    {
+      "file": "plugin-record.json",
+      "schema": "PluginRecord",
+      "kind": "valid",
+      "why": "一条登记记录:工件在登记区、source 只作记账、tools 是 add 那一刻的 describe 快照"
+    },
+    {
+      "file": "plugin-list-result.json",
+      "schema": "PluginListResult",
+      "kind": "valid",
+      "why": "`a2 plugin list --json` 的 result:登记区 + 全部记录"
+    },
+    {
+      "file": "plugin-change-result-replaced.json",
+      "schema": "PluginChangeResult",
+      "kind": "valid",
+      "why": "同名再 add = 替换:removed 是被注销的旧能力 id,added 是新上岗的那批"
+    },
+    {
+      "file": "capability-set-event.json",
+      "schema": "CapabilitySetEvent",
+      "kind": "valid",
+      "why": "能力全集变了:增量(added/removed)与**变化后的全集**一起给,客户端拿到就整份替换"
+    },
+    {
+      "file": "invalid-capability-set-event-unknown-action.json",
+      "schema": "CapabilitySetEvent",
+      "kind": "invalid",
+      "why": "装载动作词表封闭:只有 added / replaced / removed"
+    },
+    {
+      "file": "push-capability-set.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "推送帧:第七族 `capability-set`(与 `capability` 一字之差 —— 那条说状态变了,这条说**能调的东西变了**)"
+    },
+    {
+      "file": "audit-event-plugin-added.json",
+      "schema": "AuditEvent",
+      "kind": "valid",
+      "why": "装载零闸下唯一的可审计物:装插件这件事本身的留痕(11 票新增的两个 AuditAction 之一)"
     }
   ]
 }

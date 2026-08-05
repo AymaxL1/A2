@@ -1,0 +1,6 @@
+{
+  "tool": "greet",
+  "input": {
+    "who": "a2"
+  }
+}

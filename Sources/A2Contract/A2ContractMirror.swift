@@ -45,8 +45,13 @@ public enum A2MirroredContract: String, Sendable, CaseIterable {
     case confirmationResolveParams = "ConfirmationResolveParams"
     case confirmationResolveResult = "ConfirmationResolveResult"
 
-    // 增量事件的载荷(六族里唯一带自定义 output 的那一族)。
+    // 增量事件的载荷(七族里唯一带自定义 output 的那一族)。
     case capabilityEvent = "CapabilityEvent"
+
+    // 11 票新增的第七族:能力全集变了(装/卸插件)。**镜像它不是因为壳要展示插件**
+    // (菜单只投影 `proxy.*`,有断言钉着),而是因为 `A2KernelEvent` 的未知 kind 会让**整帧解码失败**——
+    // 壳不镜像它就会在用户装第一个插件的那一刻开始丢帧。
+    case capabilitySetEvent = "CapabilitySetEvent"
 
     /// 解码 → 重编码。金标往返断言用它:重编码后的 JSON 必须与原样本**语义等价**
     /// (逐字段相等,不比键序)。少一个字段、多一个字段、类型漂了,都会在那一步吵起来。
@@ -74,6 +79,7 @@ public enum A2MirroredContract: String, Sendable, CaseIterable {
         case .confirmationResolveParams: return try Self.roundTrip(A2ConfirmationResolveParams.self, data)
         case .confirmationResolveResult: return try Self.roundTrip(A2ConfirmationResolveResult.self, data)
         case .capabilityEvent: return try Self.roundTrip(A2CapabilityEvent.self, data)
+        case .capabilitySetEvent: return try Self.roundTrip(A2CapabilitySetEvent.self, data)
         }
     }
 
@@ -120,6 +126,15 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
     case systemProxyStatusResult = "SystemProxyStatusResult"
     case systemProxyChangeResult = "SystemProxyChangeResult"
 
+    // 11 票的插件面。前三条是**内核 ↔ 插件**那条接口(壳根本不在那条链上),
+    // 后三条是 `a2 plugin …` 的 CLI 机读面。
+    case pluginDescribeResult = "PluginDescribeResult"
+    case pluginCallRequest = "PluginCallRequest"
+    case pluginCallOutput = "PluginCallOutput"
+    case pluginRecord = "PluginRecord"
+    case pluginListResult = "PluginListResult"
+    case pluginChangeResult = "PluginChangeResult"
+
     /// 为什么不镜像。**每一条都要能经得起问**:理由是"壳不消费"或"CLI 自己的输出面",
     /// 不是"来不及写"。真到 10 票发现壳要投影某一条,就把它挪进 `A2MirroredContract` 并补断言。
     public var reason: String {
@@ -141,6 +156,10 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
         case .proxyConfigResult, .proxyModeResult, .proxyNodeSelectResult, .proxyLatencyResult,
              .subscriptionChangeResult, .systemProxyStatusResult, .systemProxyChangeResult:
             return "代理域的写面/测速面 result:壳发起后只看成败与随后的 capability 事件,output 里的细节不进菜单模型,更不必 typed。"
+        case .pluginDescribeResult, .pluginCallRequest, .pluginCallOutput:
+            return "**内核 ↔ 插件**那条接口(exec 一次一调)的报文:两端都是内核与插件子进程,壳不在这条链上,一个字节都不经手。它们登记成契约是为了让写插件的 agent 有机器可读的规格,不是为了给 Swift 客户端消费。"
+        case .pluginRecord, .pluginListResult, .pluginChangeResult:
+            return "`a2 plugin add|list|remove` 的 CLI 机读面。壳不装插件也不列插件 —— 它只需要知道「能调的东西变了」,那走已镜像的 `CapabilitySetEvent`(快照 capabilities 同一形状)。"
         }
     }
 }

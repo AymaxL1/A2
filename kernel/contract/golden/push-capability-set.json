@@ -1,0 +1,30 @@
+{
+  "v": 1,
+  "id": "018f3b1c-9999-7c3e-9f2b-1d4e5f6a7b8d",
+  "push": true,
+  "event": {
+    "kind": "capability-set",
+    "at": "2026-08-05T04:20:00.000Z",
+    "capabilities": {
+      "action": "added",
+      "plugin": "hello",
+      "added": [
+        {
+          "id": "plugin.hello.greet",
+          "risk": "normal",
+          "summary": "打个招呼",
+          "parameters": []
+        }
+      ],
+      "removed": [],
+      "capabilities": [
+        {
+          "id": "plugin.hello.greet",
+          "risk": "normal",
+          "summary": "打个招呼",
+          "parameters": []
+        }
+      ]
+    }
+  }
+}
