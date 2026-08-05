@@ -33,6 +33,7 @@ import type { KernelPaths } from "../runtime/paths.ts";
 import { describePlugin } from "./protocol.ts";
 import {
   PLUGIN_NAME_PATTERN,
+  STAGING_PREFIX,
   capabilityIdsOf,
   ensurePluginsDir,
   pluginCapabilities,
@@ -248,7 +249,9 @@ async function registerArtifact(
 ): Promise<OpOutcome> {
   const { source, name, extension, directory, artifactSource, previousRecords, bundle } = params;
   const artifact = path.join(directory, `${name}${extension}`);
-  const staging = path.join(directory, `.staging-${name}-${crypto.randomUUID()}${extension}`);
+  // 前缀取自 `store.ts` 的常量:**造暂存件的人与扫暂存件的人必须认同一个前缀**,
+  // 各写各的字面量就会出现"扫不到的遗留物"(而那正是尾款 d 要根治的东西)。
+  const staging = path.join(directory, `${STAGING_PREFIX}${name}-${crypto.randomUUID()}${extension}`);
 
   try {
     await copyFile(artifactSource, staging);
