@@ -161,8 +161,37 @@ test("人类面自足:随包静态文本那份可以原样当声明用(版本、
 
   expect(text).toContain(`a2 ${about.version}`);
   expect(text).toContain("外部程序声明");
-  expect(text).toContain("/opt/a2/NOTICE-external-programs.txt");
+  expect(text).toContain(NOTICE_FILE_NAME);
+  expect(text).toContain(GPL_LICENSE_FILE_NAME);
   expect(text).toContain("升级");
+});
+
+// CR 必修 1b:这段输出会被原样落成随包的 NOTICE —— 打绝对路径就等于把**组装机**的
+// 临时目录烙进每一份分发物。人类面只说"与 a2 同目录",机读面才给展开后的绝对路径。
+test("人类面**不打绝对路径**:同一份字节要能当随包声明用,不能带组装机的目录", () => {
+  const text = renderAbout(buildAbout("/private/tmp/a2-assemble-XYZ"));
+
+  expect(text).not.toContain("/private/tmp/a2-assemble-XYZ");
+  expect(text).toContain("与 a2 同目录");
+  // 机读面反过来:路径必须是展开后的绝对路径(此刻这台机器上的脚本要用)。
+  expect(buildAbout("/private/tmp/a2-assemble-XYZ").noticeFiles[0]!.path).toBe(
+    `/private/tmp/a2-assemble-XYZ/${NOTICE_FILE_NAME}`,
+  );
+});
+
+test("两份文本都在时,声明里不该出现「不在此处」(那句话是给单文件直接下载的人看的)", async () => {
+  const dir = await mkdtemp("/tmp/a2about-");
+  try {
+    await writeFile(path.join(dir, NOTICE_FILE_NAME), "声明", "utf8");
+    await writeFile(path.join(dir, GPL_LICENSE_FILE_NAME), "GPL", "utf8");
+
+    expect(renderAbout(buildAbout(dir))).not.toContain("不在此处");
+    // 反过来:少一份时那句提示必须在(它才是"你还缺一份"的唯一提示)。
+    await rm(path.join(dir, GPL_LICENSE_FILE_NAME));
+    expect(renderAbout(buildAbout(dir))).toContain("不在此处");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("about 不接受多余参数:用法错(退出码 1)+ 指引指向那条正确写法", async () => {

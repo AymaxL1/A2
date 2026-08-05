@@ -663,9 +663,9 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 
 | 面 | 断言落点 |
 |---|---|
-| `a2 about`(GPL 义务) | `cli-about.test.ts` 13 条 + 金标样本 `about-result.json` / `invalid-about-bundled-gpl-binary.json`(`bundled` 恒 false 是契约层的承诺) |
-| 安装脚本 | `install-script.test.ts` 16 条(被测体是真的 `Scripts/install.sh`,渠道是回环 `Bun.serve` 与本地目录两种夹具) |
-| 发布元数据与组装脚本 | `release-manifest.test.ts` 14 条(结构约束 / 摘要对照系统 `shasum` / 每工件一行的格式约定 / TS 与 `install.sh` 的两处字面量对账 / 组装脚本真跑一遍 + 真产物自检) |
+| `a2 about`(GPL 义务) | `cli-about.test.ts` 15 条 + 金标样本 `about-result.json` / `invalid-about-bundled-gpl-binary.json`(`bundled` 恒 false 是契约层的承诺) |
+| 安装脚本 | `install-script.test.ts` 18 条(被测体是真的 `Scripts/install.sh`,渠道是回环 `Bun.serve` 与本地目录两种夹具) |
+| 发布元数据与组装脚本 | `release-manifest.test.ts` 16 条(结构约束 / 摘要对照系统 `shasum` / 每工件一行的格式约定 / TS 与 `install.sh` 的两处字面量对账 / 组装脚本真跑一遍 + 真产物自检) |
 | agent 指引物 | `docs-agent-guide.test.ts` 7 条(见上表 #1–#4) |
 
 **全表统计更新**:22 条顺延中 **已兑现 14 条**(顺延 07 五条 + 顺延 10 两条 + **顺延 13 七条**),

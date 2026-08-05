@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { UPGRADE_POLICY } from "../src/runtime/about.ts";
 import {
   KERNEL_TARGETS,
   RELEASE_CHANNEL_PLACEHOLDER,
@@ -231,6 +232,44 @@ test("元数据文件名两处一致(脚本按它取元数据)", () => {
   expect(/METADATA_FILE="([^"]+)"/.exec(script)![1]).toBe(RELEASE_METADATA_FILE);
 });
 
+/** 从一个 sh 脚本里抠出 `uname` 的映射表:`Darwin) os_key="darwin"` / `arm64|aarch64) arch="arm64"`。 */
+function unameMapOf(script: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const match of script.matchAll(/^\s*([\w|_.-]+)\)\s*(?:os|arch)(?:_key)?="([a-z0-9]+)"/gm)) {
+    for (const pattern of (match[1] as string).split("|")) map[pattern] = match[2] as string;
+  }
+  return map;
+}
+
+// CR 必修 4:`install.sh::detect_platform` 与 `release-assemble.sh::host_platform` 各写了一遍
+// uname 映射。两处漂了的后果很具体:组装机自认为是 A 平台、装的人自认为是 B 平台,
+// 于是"包里有没有你的平台"这个判断在两边给出不同答案。
+test("uname 映射两处一致:安装脚本与组装脚本认的是同一套 <os>-<arch>", () => {
+  const installer = unameMapOf(readFileSync(INSTALLER, "utf8"));
+  const assemble = unameMapOf(readFileSync(ASSEMBLE, "utf8"));
+
+  expect(Object.keys(installer).length).toBeGreaterThan(0);
+  expect(assemble).toEqual(installer);
+  // 顺带钉住"aarch64 与 arm64 是同一个键"这条真实世界的写法差异(Linux 报前者)。
+  expect(installer["aarch64"]).toBe("arm64");
+  expect(installer["x86_64"]).toBe("x64");
+});
+
+// CR 必修 6:票面框 4 说「升级永远显式」三处成文**并各有断言** —— 前两处早有断言
+// (`a2 about` 的 upgrade 字段、安装脚本结束时的提示),第三处(分发 runbook)此前只是散文。
+test("「升级永远显式 / 无静默更新」三处落点都在文:about、安装脚本、分发 runbook", () => {
+  const runbook = readFileSync(path.join(REPO, "docs/runbooks/distribution.md"), "utf8");
+  const installer = readFileSync(INSTALLER, "utf8");
+
+  expect(UPGRADE_POLICY).toContain("升级永远显式");
+  expect(UPGRADE_POLICY).toContain("不做静默更新");
+  expect(installer).toContain("升级永远显式");
+  expect(runbook).toContain("升级永远显式");
+  expect(runbook).toContain("没有静默更新");
+  // runbook 还必须写清"升级 = 重跑脚本"这条动作,否则那句口号没有落点。
+  expect(runbook).toMatch(/显式重跑/);
+});
+
 // MARK: - ③ 组装脚本真跑一遍
 
 async function runAssemble(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -319,6 +358,17 @@ test.skipIf(!existsSync(DIST_BIN))(
     expect(notice).toContain("外部程序声明");
     expect(notice).toContain("GPL-3.0");
     expect(notice).toContain("永不进程内链接");
+
+    // CR 必修 1c:**随包 NOTICE ≡ 包里那个 a2 的 about 输出**,逐字节。
+    // 「声明不是手抄的」这句承诺此前只靠组装顺序保证,现在是一条断言。
+    const proc = Bun.spawn({ cmd: [path.join(out, "a2-darwin-arm64"), "about"], stdout: "pipe" });
+    expect(await new Response(proc.stdout).text()).toBe(notice);
+
+    // CR 必修 1a/1b:GPL 全文先就位,所以声明里不该说「不在此处」;
+    // 也不该烙进**组装机**的绝对路径(那份文本要发给别人)。
+    expect(notice).not.toContain("不在此处");
+    expect(notice).not.toContain(out);
+    expect(notice).toContain("与 a2 同目录");
   },
   60_000,
 );

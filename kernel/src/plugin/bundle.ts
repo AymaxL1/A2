@@ -617,13 +617,14 @@ function overflowError(
   source: string,
 ): WireError {
   const which = result.overflow === "stderr" ? "stderr" : "stdout";
+  const limit = formatBytes(limitBytes);
   return loadError(
-    `${step}时工具链输出超过上限(${which} 超过 ${Math.round(limitBytes / 1024)}KiB):${source}`,
+    `${step}时工具链输出超过上限(${which} 超过 ${limit}):${source}`,
     tail(result.stderr || result.stdout),
     source,
     {
       summary:
-        `内核给工具链的两条流各设了 ${Math.round(limitBytes / 1024)}KiB 上限 —— ` +
+        `内核给工具链的两条流各设了 ${limit} 上限 —— ` +
         "输出到这个量级说明装/打过程本身出了不对劲的事(死循环的 postinstall、把整棵依赖树打印出来的构建脚本…)," +
         "而不是「输出多了一点」。到顶即杀,内核不会把自己的内存交给一个插件的构建过程说了算。",
       steps: [
@@ -638,6 +639,16 @@ function overflowError(
       context: { path: source, stream: which, limitBytes: String(limitBytes) },
     },
   );
+}
+
+/**
+ * 字节数的人类写法(13 票 CR 必修 5:4MiB 别渲成「4096KiB」)。
+ * 单位取**最大的那个还说得通的**,测试用的极小上限则原样报字节数。
+ */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))}MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KiB`;
+  return `${bytes} 字节`;
 }
 
 function installGuidance(source: string): Guidance {

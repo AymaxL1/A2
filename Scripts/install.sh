@@ -101,14 +101,19 @@ fetch_to() {  # $1=来源 $2=落点
   esac
 }
 
+# 校验工具**开工前就探好**(13 票 CR 必修 3)。此前这段探测写在 `sha256_of` 里,而它总是在
+# `$( )` 里被调用 —— 子壳里的 `die` 只杀得掉子壳,外面照跑:于是一台没有 shasum 的机器会
+# **先下完 60MiB 再死**,而且死在一个看不懂的地方。判据前置、一次探清,缺工具当场停。
+HASH_CMD=""
+if command -v shasum >/dev/null 2>&1; then
+  HASH_CMD="shasum -a 256"
+elif command -v sha256sum >/dev/null 2>&1; then
+  HASH_CMD="sha256sum"
+fi
+
 sha256_of() {  # $1=文件 → stdout 小写十六进制
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | cut -d' ' -f1
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    die "找不到 shasum / sha256sum —— 没有校验手段就不装(纪律①)。"
-  fi
+  # shellcheck disable=SC2086 —— HASH_CMD 是我们自己拼的两三个词,要按词拆开。
+  $HASH_CMD "$1" | cut -d' ' -f1
 }
 
 # ---- 平台探测 --------------------------------------------------------------------
@@ -133,13 +138,21 @@ detect_platform() {
 # **先看后删**(纪律⑤):判据全是**文件是否存在**,不调 launchctl / systemctl、不改任何系统状态。
 do_uninstall() {
   a2_home="${A2_HOME:-$HOME/.a2}"
+  # systemd user 单元的位置**与内核同源**(13 票 CR 必修 2):`src/service/unit.ts` 尊重
+  # `XDG_CONFIG_HOME`,这里只查 `~/.config` 就会在改过位的 Linux 机器上看不见那些 unit ——
+  # 「先看后删」于是被绕过,bin 被删掉、unit 却还挂着,而收拾它的工具正是刚被删掉的那个。
+  # 两条都查(XDG 与默认位):判据宁可宽,不可漏。
+  xdg_config="${XDG_CONFIG_HOME:-$HOME/.config}"
   blockers=""
   for unit in \
     "$HOME/Library/LaunchAgents/com.a2.kernel.plist" \
     "$HOME/Library/LaunchAgents/com.a2.mihomo.plist" \
+    "$xdg_config/systemd/user/com.a2.kernel.service" \
+    "$xdg_config/systemd/user/com.a2.mihomo.service" \
     "$HOME/.config/systemd/user/com.a2.kernel.service" \
     "$HOME/.config/systemd/user/com.a2.mihomo.service"
   do
+    case "$blockers" in *"  $unit"*) continue ;; esac   # XDG 就是默认位时别列两遍
     [ -f "$unit" ] && blockers="$blockers  $unit
 "
   done
@@ -184,6 +197,11 @@ if [ "$ACTION" = "uninstall" ]; then
 fi
 
 # ---- 安装 ------------------------------------------------------------------------
+# 没有校验手段就不装(纪律①)——在**任何下载之前**停,而不是下完 60MiB 才发现。
+[ -n "$HASH_CMD" ] \
+  || die "找不到 shasum / sha256sum —— 没有办法校验下载物,拒绝安装。
+装一个(如 coreutils)之后重试,或者直接下载单文件 a2 并自行核对发布元数据里的摘要。"
+
 PLATFORM="$(detect_platform)"
 
 if [ -z "$METADATA_SOURCE" ]; then

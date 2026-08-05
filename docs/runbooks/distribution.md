@@ -127,7 +127,7 @@ a2 service install  # 装成系统托管的常驻服务
 | **自检** | 落位前先 `a2 version` 跑一次 | 连自报版本都做不到的东西不该进你的 PATH |
 | **原子落位** | 先写同目录临时名再 `mv` | 替换正在被执行的 bin 也不会撕成两半 |
 | **幂等** | 同版本重跑：**不下载**、不改动、退出 0，指引照打 | 重跑一条安装命令不该有任何代价 |
-| **升级** | = **显式重跑脚本**（或直接换掉那个单文件） | **没有静默更新**：不留定时任务、不后台自查版本（[ADR 0006](../adr/0006-local-first-no-cloud.md) 暂缓清单） |
+| **升级永远显式** | = **显式重跑脚本**（或直接换掉那个单文件） | **没有静默更新**：不留定时任务、不后台自查版本（[ADR 0006](../adr/0006-local-first-no-cloud.md) 暂缓清单）。同一句口径另有两处落点——`a2 about` 的 `upgrade` 字段与安装脚本结束时的提示，**三处各有断言**（`kernel/test/release-manifest.test.ts` ▸ 三处落点都在文） |
 | **不碰系统托管** | 装完只**打印** `a2 service install`，绝不替你 launchctl | 系统状态的改变永远由用户显式发起（ADR 0008 第 6 条） |
 
 ### 3.1 【人工项】发布渠道未定
@@ -205,13 +205,26 @@ a2 service install   # 幂等，会把 unit 收敛到新位置
 
 ---
 
-## 8. 【人工项】清单（分发相关）
+## 8. 【人工项】清单 —— **分发相关的完整并集**
 
-| # | 事情 | 缺什么条件 |
-|---|---|---|
-| 1 | **确定发布渠道**并把两处占位符改掉 | 一个真实的托管位置（remote / 对象存储 / Releases） |
-| 2 | **Linux 实机跑一遍**：装、`a2 service install`（systemd user）、`a2 mihomo install`、旗舰链 | 一台 Linux 机器。交叉编译产物已能产出且文件头正确，但本机跑不了它 |
-| 3 | 真开发者证书签 `A2 Panel.app` + 公证 | 见 [签名与授权 runbook](signing-and-authorization.md) |
-| 4 | 首次 TCC / 通知授权（对 `com.a2.panel`） | 真人点弹窗 |
-| 5 | 在干净机器上装一次**真 mihomo** 跑旗舰链 | 一台没跑着用户自己 mihomo 的机器（本机那份是施工红线，绝不触碰） |
-| 6 | 发布前冒烟 checklist（装 / 升级 / 回滚 / 卸载各走一遍） | 上面 1、2 就位之后 |
+> 这一节是**唯一一份齐的**：13 票之前，这些条目散在四处（本文 §7 的渠道备忘、签名 runbook §4、
+> 路线图 Phase 1 的 5 条表、以及各票 nightlog）。**明早验收按这一份走**；每条都注了原始落点，
+> 要追出处照着翻即可。
+>
+> 与路线图那 5 条人工项的关系：第 3、4、5 条是**同一件事的两处登记**（那 5 条属 Phase 1 遗留），
+> 其余是 13 票落地后才出现的。别重复计数。
+
+| # | 事情 | 缺什么条件 / 谁来做 | 原始落点 |
+|---|---|---|---|
+| 1 | **确定发布渠道**，把 `RELEASE_CHANNEL_PLACEHOLDER`（TS）与 `DEFAULT_RELEASE_BASE`（`install.sh`）两处占位符改掉 | 一个真实的托管位置（remote / 对象存储 / Releases）。两处有对账断言逼着同时改 | 本文 §3.1 |
+| 2 | **Linux 实机跑一遍**：装、`a2 service install`（systemd user）、`a2 mihomo install`、旗舰链 | 一台 Linux 机器。交叉编译产物已能产出且 ELF 文件头正确，但**本机跑不了它** | 本文 §1.1；路线图「Linux 口径」 |
+| 3 | 真开发者证书签 `A2 Panel.app` + 公证 | 付费 Developer ID；换身份只改 `AA_CODESIGN_IDENTITY` 一个 env | [签名 runbook](signing-and-authorization.md) §3；路线图 5 条之第 1、2 条 |
+| 4 | 首次 TCC / 通知授权（**对 `com.a2.panel`**） | 真人双击 `.app` 点弹窗 | [签名 runbook](signing-and-authorization.md) §5；路线图 5 条之第 3 条 |
+| 5 | 在干净机器上装一次**真 mihomo** 跑旗舰链 | 一台没跑着用户自己 mihomo 的机器（本机那份是施工红线，绝不触碰） | `kernel/test/swift-parity-map.md` 10 票 G 组；路线图 Phase 1 判据 3 的「缺口」 |
+| 6 | 发布前冒烟 checklist（装 / 升级 / 回滚 / 卸载各走一遍） | 上面 1、2 就位之后 | 路线图 Phase 3 |
+| 7 | **换证书那天**手工跑一次 `AA_CODESIGN_IDENTITY="NONEXISTENT" bash Scripts/build-app.sh`，确认它 exit≠0 且说明了原因 | 旧门禁的 APP11（签名身份 seam 必须 fail-closed）随旧引擎退场，**新门禁没有等价断言** | [签名 runbook](signing-and-authorization.md) §4 |
+| 8 | 裁定 **`a2` bin 自身的签名 / 公证形态** | 它走单文件下载、不吃 `.app` 的签名链；Gatekeeper 会不会拦一个下载来的裸可执行，要等渠道定了才谈得上 | 本文 §0 表；签名 runbook §0 |
+| 9 | **Homebrew Formula**（V1 明确**不做**，列此以免被当成漏项） | 先要 #1；再要 tap 仓库与"每次发版更新 formula" 的流程 | 本文 §7 |
+
+**另外两条不属分发、但同批顺延的**（列此免得验收时以为漏了）：真 Codex 经 `a2 … --json` + `prefix_rule`
+跑一遍旗舰操作、换源 dangerous 的真机点验（人真的点那个按钮）——两条都在路线图 Phase 1 的 5 条表里。

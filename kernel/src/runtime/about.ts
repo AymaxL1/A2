@@ -171,12 +171,21 @@ export function renderAbout(about: AboutResult): string {
     "",
     about.declaration,
     "",
-    "── 随包静态文本 ──────────────────────────────────────",
+    "── 随包静态文本(与 a2 同目录)────────────────────────",
     "",
   ];
   for (const file of about.noticeFiles) {
     lines.push(`  ${file.name}  ${file.purpose}`);
-    lines.push(`    ${file.path}${file.present ? "" : "  (不在此处 —— 单文件直接下载时可从发布页单独取)"}`);
+    // **人类面只说相对位置,不打绝对路径**(13 票 CR 必修 1b):这段输出会被组装脚本原样落成
+    // 随包的 `NOTICE-external-programs.txt` —— 打绝对路径就等于把**组装机**的临时目录
+    // (`/private/tmp/…`)烙进每一份分发物,而那条路径在用户机器上毫无意义、也不该被看见。
+    // 机读面(`--json` 的 `noticeFiles[].path`)仍给展开后的绝对路径:那是给此刻这台机器上的
+    // 脚本/agent 用的,不进分发物。
+    lines.push(
+      file.present
+        ? "    与 a2 同目录,已就位"
+        : "    **不在此处** —— 单文件直接下载时可从发布页单独取",
+    );
   }
   lines.push("", "── 升级 ──────────────────────────────────────────────", "", `  ${about.upgrade}`);
   return lines.join("\n");

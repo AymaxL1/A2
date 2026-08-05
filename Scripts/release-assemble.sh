@@ -121,6 +121,13 @@ for platform in "${TARGET_LIST[@]}"; do
 done
 
 # ---- ② 随包静态文本:`a2 about` 的输出原样落盘 -------------------------------------
+# **顺序有讲究**(13 票 CR 必修 1a):GPL 全文必须**先**拷进来,`a2 about` 才可能说出
+# 「与 a2 同目录,已就位」。反过来的话,随包 NOTICE 会自述「GPL 全文不在此处」,
+# 而那份全文就躺在它旁边 —— 一份自己打自己脸的法律声明。
+cp "$ROOT/docs/legal/LICENSE-mihomo-GPL-3.0.txt" "$OUTPUT/" || die "拷 GPL 全文失败"
+cp "$ROOT/Scripts/install.sh" "$OUTPUT/install.sh" || die "拷安装脚本失败"
+chmod 755 "$OUTPUT/install.sh" || die "给 install.sh 加执行位失败"
+
 # 优先用**包里那个本机 bin**(它就是用户将来跑的那一份);本次没产出本机平台时回落源码入口 ——
 # 两者是同一份源码渲染出来的同一段文字,但用 bin 更能证明"这份包里的 a2 说得出这段话"。
 NOTICE="$OUTPUT/NOTICE-external-programs.txt"
@@ -135,10 +142,6 @@ else
   echo "-- 声明文本:由源码入口产出(本次没有本机平台的产物)"
 fi
 [ -s "$NOTICE" ] || die "声明文本是空的 —— GPL 义务的随包落点不能是个空文件"
-
-cp "$ROOT/docs/legal/LICENSE-mihomo-GPL-3.0.txt" "$OUTPUT/" || die "拷 GPL 全文失败"
-cp "$ROOT/Scripts/install.sh" "$OUTPUT/install.sh" || die "拷安装脚本失败"
-chmod 755 "$OUTPUT/install.sh"
 
 # ---- ③ 版本号:问 bin 自己(单一来源)---------------------------------------------
 if [ -n "$HOST_ASSET" ] && [ -x "$OUTPUT/$HOST_ASSET" ]; then
@@ -175,7 +178,26 @@ if [ "$SELF_CHECK" = "1" ]; then
   PRESENT_COUNT="$(printf '%s' "$ABOUT_JSON" | grep -o '"present":true' | wc -l | tr -d ' ')"
   [ "$PRESENT_COUNT" = "2" ] \
     || die "自检:包里的 a2 只看见 $PRESENT_COUNT 份随包静态文本(应为 2)—— 声明文本没落对位置"
-  echo "-- 自检通过:包里的 a2 看得见 NOTICE 与 GPL 全文两份静态文本"
+
+  # **随包 NOTICE ≡ 包里那个 a2 此刻的 about 输出**(13 票 CR 必修 1c)。
+  # 「同一份字节」这句话是本票的核心承诺(声明不是手抄的),那就把它验成字节级的:
+  # 重跑一次 about,与落盘那份 `cmp`。顺序装错、渲染改了、有人手改过 NOTICE —— 都在这里现形。
+  # 落在**发布包外面**:包里多一个文件会让下一次 `render-release-manifest` 报「不认识的文件」。
+  RECHECK="$(mktemp "${TMPDIR:-/tmp}/a2-notice-recheck-XXXXXX")"
+  "$OUTPUT/$HOST_ASSET" about >"$RECHECK" || die "自检:重跑 a2 about 失败"
+  cmp -s "$RECHECK" "$NOTICE" || {
+    rm -f "$RECHECK"
+    die "自检:随包 NOTICE 与包里 a2 的 about 输出不是同一份字节"
+  }
+  rm -f "$RECHECK"
+
+  # 内容自检(13 票 CR 必修 1d):随包声明里不许出现「不在此处」——
+  # 那句话的意思是"这份文本旁边没有 GPL 全文",而发布包里它就在旁边。
+  grep -q "不在此处" "$NOTICE" \
+    && die "自检:随包 NOTICE 里出现「不在此处」—— 它在自述随包文本缺失,而它们就在同目录"
+  grep -q "$OUTPUT" "$NOTICE" \
+    && die "自检:随包 NOTICE 里烙进了组装机的绝对路径($OUTPUT)—— 那条路径对用户毫无意义"
+  echo "-- 自检通过:两份静态文本就位、NOTICE 与 about 输出逐字节相同、无组装机路径"
 fi
 
 # ---- 收口 ------------------------------------------------------------------------

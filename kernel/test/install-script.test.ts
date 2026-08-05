@@ -17,7 +17,7 @@
 //   * 不 launchctl:卸载路径的"服务还挂着吗"判据是**文件在不在**,不调任何 supervisor。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -407,4 +407,48 @@ test("卸载:没有挂在系统上的东西时删掉 bin,再跑一次是幂等�
   expect(second.stdout).toContain("未作改动");
   // 数据不替用户删,但要说清楚在哪。
   expect(first.stdout).toContain("rm -rf");
+});
+
+// MARK: - 13 票 CR 修复:两处会让"先看后删"与"校验"落空的洞
+
+test("CR 2:systemd unit 在 **XDG_CONFIG_HOME** 下也算数(内核就是按 XDG 写的)", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  await runInstaller([], { base, uname: { s: "Darwin", m: "arm64" } });
+  // 改过位的 Linux 用户:unit 落在 $XDG_CONFIG_HOME/systemd/user,而不是 ~/.config 下。
+  const xdg = path.join(box, "xdg");
+  await mkdir(path.join(xdg, "systemd", "user"), { recursive: true });
+  await writeFile(path.join(xdg, "systemd", "user", "com.a2.kernel.service"), "[Unit]\n");
+
+  const result = await runInstaller(["--uninstall"], { extraEnv: { XDG_CONFIG_HOME: xdg } });
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("com.a2.kernel.service");
+  expect(result.stderr).toContain("a2 service uninstall");
+  expect(existsSync(installedBin())).toBe(true);
+});
+
+test("CR 3:没有 shasum / sha256sum 时**开工前**就停 —— 绝不先下完 60MiB 再死", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  // 一个只有"够跑这个脚本"的 PATH:校验工具**故意不给**。
+  const lean = path.join(box, "lean-bin");
+  await mkdir(lean, { recursive: true });
+  for (const tool of [
+    "sh", "uname", "mktemp", "cp", "mv", "rm", "chmod", "mkdir", "grep", "sed",
+    "cut", "cat", "curl", "wc", "tr", "head",
+  ]) {
+    const real = Bun.which(tool);
+    if (real) symlinkSync(real, path.join(lean, tool));
+  }
+
+  // 本机就是 darwin-arm64,所以这条用**真** uname(假 uname 得挂在 PATH 上,而这里的 PATH 是被
+  // 整个换掉的 —— 那正是被测的条件:一台缺校验工具的机器)。
+  const result = await runInstaller([], { base, extraEnv: { PATH: lean } });
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("没有办法校验下载物");
+  // 判据是**渠道那侧一次资产请求都没有**:失败要发生在下载之前。
+  expect(hits["a2-darwin-arm64"] ?? 0).toBe(0);
+  expect(existsSync(installedBin())).toBe(false);
 });
