@@ -399,6 +399,165 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 `getpeereid(socket.fd)` 直接返回真实 UID/GID(501/20,与 `id -u`/`id -g` 吻合)。所以内核**不必**为了取凭据
 而换掉 `Bun.listen`(那会牵动每连接状态 `socket.data` 的整套写法)。`_handle?.fd` 仍留作兜底。
 
+## 10 票收口:壳原子切换(**本表在此收账,不许留悬账**)
+
+本票是蓝图第⑤步,`Scripts/check/` 整棵(15 模块 / 429 条 PASS)与 `Tests/AA*`(182 条 `@Test`)
+随旧 Swift 逻辑面一并退场。前面各票已登记的族不再重复;本节把**此前没有任何登记的那几族**逐条落定,
+并在末尾给出全表统计。
+
+### A. `Tests/AAAgentTestKitTests` 七套(89 条 @Test)+ `Scripts/check/agent-e2e.sh`(A-E2E 组)—— 整族**顺延**
+
+| 旧套件 | 条数 | 处置 | 去处 |
+|---|---|---|---|
+| `AAAgentCoreConformanceTests`(端口协议/消息归一/中断策略) | 8 | 顺延 | agent-delegation spec 修订指令第 2 条 |
+| `ClaudeAdapterTests`(stream-json 归一,读 01 spike 真样本) | 10 | 顺延 | 同上 |
+| `CodexAdapterTests`(exec JSON 归一,读 02 spike 真样本) | 13 | 顺延 | 同上 |
+| `AgentTaskTests`(任务状态机 / 工作区 / 报告) | 23 | 顺延 | 同上 |
+| `AgentWatchdogTests`(看门狗与取消) | 13 | 顺延 | 同上 |
+| `AgentLaunchAssemblerTests`(命令行组装 / CODEX_HOME) | 11 | 顺延 | 同上 |
+| `SystemAgentPortTests`(**真进程** / 进程组 / 反孤儿) | 11 | 顺延 | 同上 |
+| `Scripts/check/agent-e2e.sh`(`aa-agent` CLI × 假 agent 全链 + 反孤儿信号两路径) | 21 | 顺延 | 同上 |
+
+**为什么是顺延而不是淘汰**:05 票裁定「agent-delegation 审批**收敛到内核统一仲裁**;
+**执行器将来在内核内以 TS 重生**」,01 票已把这四条修订指令写进 `.scratch/agent-delegation/spec.md` 文末。
+这 89 + 21 条描述的是**执行器的行为规范**(怎么归一 Claude/Codex 的输出、任务状态机怎么走、
+看门狗与反孤儿怎么保证),重生时逐条兑现它们正是那份 spec 的活儿。
+
+⚠️ **这是全表里唯一一处「顺延的去处不是本效应的某张票」**,如实记明白:
+本 spec 的迁移六步表里**没有** agent-delegation 的位置(Out of Scope 也没列它 —— 那是一处遗漏,
+本票撞上了)。所以这批账现在挂在 agent-delegation 那份 spec 上,**排期未定**。
+要不要为它单立一张票,是编排者/用户的决定,不是本票能裁的。
+
+### B. 14 票菜单栏轻壳:`MenuModelConformanceTests`(2 条)+ `Scripts/check/menubar.sh`(MB 组 5 条)
+
+| # | 旧断言 | 处置 | 新落点 |
+|---|---|---|---|
+| MB-1 | 覆盖面与可追溯性(结论行 `MENUBAR_ASSERT1`):04 票 In 清单六项全覆盖 + 每项追溯到**真注册表**里存在的能力 + 认领即绑定 + 反向核对 + 参数过集中校验 | **映射(判据更强)** | 拆成 5 条独立断言(`A2PanelTests` ▸ 可追溯 / ▸ 无空头认领 / ▸ 六项逐项覆盖(参数化)/ ▸ 反向核对 / ▸ 豁免表诚实),**外加**旗舰 e2e 的 `PANEL_COVERAGE`:对账对象从「同进程的假注册表」换成**真的跑着的那个内核** |
+| MB-2 | 三态如实反映(结论行 `MENUBAR_ASSERT2`) | **映射(扩到四态)** | ▸ 状态①/②/③ 各一条 + **新增** ▸ 状态④(与内核断连)—— 新架构才有的一态,而且是用户最容易误读的一态 |
+| MB-3 | 快照产物有效性(尺寸由模型算得出来、PNG 可解码) | 映射 | `A2PanelSnapshotTests` ▸ 快照尺寸由模型算得出来 + ▸ 快照确定性 |
+| MB-4 | golden 比对(像素 ≤ 容差 + 模型文本逐字节) | 映射 | ▸ 四种主要状态逐张与 golden 一致(参数化;**判据搬进 `swift test`**,shell 中间层退役) |
+| MB-5 | dangerous 从菜单路径发起仍走确认(`AA_MENU_CLICK_PROBE` 起真宿主点真 NSMenuItem) | **合并 + 改判** | 旧断言靠两个 `#if AA_TESTING` 的 env seam(`AA_MENU_PROMPT_AUTO` / `AA_MENU_CLICK_PROBE`)去点真菜单项。新架构里「菜单项 → 能力调用」这条路由**在协议层就是同一个出口**,而 dangerous 是否走仲裁**由内核裁**、与调用方是谁无关(`cli-capabilities.test.ts` ▸ 裸 UDS 直连绕开 CLI 仍默拒已经证过)。旗舰 e2e 的确认链跑的正是壳的真代码路径。**代价如实记**:「人点了那一项、AppKit 真的把 action 发出去了」这一步没有自动化断言 —— 那是 GUI 交互,归人工项 |
+| MB-6 | 两个 `#if AA_TESTING` env seam「13 票分发前须处置」 | **淘汰(前提没了)** | 新壳里**一个测试专用 seam 都没有**(人的替身住在 `a2-panel-probe` 这个独立可执行里,不进 products、不进 `.app`)。13 票那条待办随之销账 |
+
+### C. `Scripts/check/app-bundle.sh`(APP 组 10 条)
+
+| # | 旧断言 | 处置 | 新落点 |
+|---|---|---|---|
+| APP-1 | production 档 `.app` 结构:Info.plist / `MacOS/aahost` / `MacOS/aa` / 资源 bundle / 内核可执行 | **部分映射 + 部分淘汰** | 映射:`build-app.sh` APP1(主可执行就位)。**淘汰**:`aa` 与内核资源 bundle 那三条 —— 前提没了(CLI 归内核 bin 走单文件分发;不再分发 GPL 二进制) |
+| APP-2 | Info.plist 键:bundle id / CFBundleExecutable / LSUIElement | 映射(更严) | APP2 / APP3 / APP4 / APP5(多验一条**显示名**「A2 Panel」,spec 命名节钉死) |
+| APP-3 | `codesign -dv` 主可执行与内核签名信息 | 部分映射 | APP7(签名标识符);内核那半边随 GPL 二进制淘汰 |
+| APP-4 | `codesign --verify --strict` 通过 | 映射 | APP6 |
+| APP-5 | e2e 档 `.app` 内 `aahost` 真起得来、UDS/能力面/`install-cli` 全链 | **淘汰(前提没了)** | `.app` 里已无 CLI、无内嵌内核;壳的活体那一关由旗舰 e2e 承担(它跑的是壳的真代码路径)。**代价如实记**:「双击 `.app` 真能起来并挂上状态栏」没有自动化断言 —— 那要 GUI 会话,归人工项 |
+| APP-6 | 内核 argv 的绝对路径确实在 `.app` 内(`Bundle.module` 落点结论的运行时证明) | **淘汰(前提没了)** | 不再随包分发内核,没有落点问题可证。实测结论留在 git 历史与 `build-app.sh` 的历史注释里 |
+| APP-7 | 随包 GPL-3.0 全文完整(SHA-256 现算现比) | **改判** | 不再随包分发二进制 → 义务面收缩为「调用外部程序」(ADR 0007 修订版)。全文移到 `docs/legal/`,声明落点改为 `a2 about`(顺延 13)+ `A2AboutWindow.declaration`(静态文本) |
+| APP-8 | `.app` 内全部 Mach-O 已签且身份一致 | **映射(改判为结构红线)** | APP8:包里**只该有一个** Mach-O —— 多一个就说明有人悄悄改了分发形态(把「都签了」升级成「不该有第二个」) |
+| APP-9 | `aa proxy license` 报出的内核版本与 `MIHOMO-VERSION.txt` 一致 | **顺延 13** | `proxy.license` 能力随 GPL 义务面收缩淘汰(07 票 H 组已登记);版本单一来源已搬到 `kernel/contract/MIHOMO-VERSION.txt`,`cli-mihomo.test.ts` ▸ 锁版元数据同源 守着 |
+| APP-10 | 子进程红线原文经能力面暴露 | 顺延 13 | 同上,落点改为 `a2 about` 的随包静态文本 |
+
+### D. `Scripts/check/architecture-and-cli.sh`(四组)
+
+| 组 | 旧断言 | 处置 | 新落点 |
+|---|---|---|---|
+| 3(49 条 PASS) | **架构铁律**:`PluginProxy` / `AAAgentCore` / `AAAgentSystem` 不 import 任何 `Host*`;反孤儿钩子的依赖闭包守卫 | **改判(同一条精神,新的载体)** | 旧铁律护的是「插件域不得依赖宿主」。新架构里那条边界由**进程边界**承担:插件是进程外子进程、只经协议白名单拿能力(ADR 0011);壳这侧的对位物是 `Package.swift` 的依赖图本身(`A2Panel` 零 AppKit、`A2Contract` 零依赖)+ `A2PanelTests` ▸ 菜单只投影 proxy 域。**11 票要为插件侧立新的结构断言**(那是它的面) |
+| 4(7 条) | `aa --help` 逐码打印退出码语义表 | 合并 | `usage.ts` 的 USAGE 里仍有整行退出码表;`cli-basics.test.ts` ▸ help --json 断言帮助可机读(04 票 C 组已登记同款) |
+| 5(8 条) | `aa docs agents-md` 接入片段(prefix_rule / require_escalated / capabilities call / pending / exit code) | **顺延 13** | 04 票 C 组已标顺延 13(agent 指引物随分发工件走)。**注意其中两条已作废**:`capabilities result <request-id>` 与 `"pending":true` —— pending 态整体淘汰(见「有意的契约变更」6),重写指引时不许照抄 |
+| 6(约 12 条) | `aa install-cli` 幂等 / 覆盖 / canonical 化 / `--uninstall` | **淘汰(前提没了)** | `aa` 已退场;CLI 就是内核 bin `a2` 自己,分发形态改判为**单文件下载 + curl 安装脚本**(ADR 0008 / spec 分发节),没有「把 `.app` 里的 CLI 链进 PATH」这回事了。安装脚本的断言归 **13 票** |
+
+### E. `Scripts/check/unit-and-domain.sh`(96 条 `assert_contains`)
+
+**整组合并**,不另计数。按本表开头的记账口径:它 grep 的**就是** `swift test` 输出里那些 `@Test` 的名字
+(`Tests/README.md` 与 `RegistryConformanceTests.swift` 头注都成文写着这条隐形契约),
+一条行为的两个投影算**一条**。那 96 条对应的 `@Test` 已在 04/06/07 票各组逐条落定。
+新门禁里这一层**结构性地消失了**:判据就是 `swift test` 本身的红绿,不再有「shell 侧 grep 用例名」
+这条会漂的中间层(改一个 `@Test` 名不再等于改门禁)。
+
+### F. `Scripts/check/flagship-e2e.sh`(FS 组)—— 兑现 07 票 G 组标「顺延 10」的四条
+
+| # | 旧断言 | 处置 | 新落点 |
+|---|---|---|---|
+| FS1 | 旗舰链四步(on → 切模式 → 选节点 → 更新订阅)在**同一宿主实例**上成功 | **映射** | `Scripts/a2-flagship-e2e.sh` 幕 1(1-2 … 1-7):同一个 daemon、同一条壳连接,四步逐条断退出码 + 改后读回 |
+| FS2 | 全链零 GUI 打断的三条证据(确认档位 / 无 `[confirm]` 行 / 无 pending) | **映射(判据更强)** | 1-12:确认器**真的在场**(不是被 env 短路),而链上**只弹了一次**(dangerous 换源那次)。旧断言证的是「没弹窗」,新断言证的是「该弹的弹了、不该弹的一次都没弹」——反证更硬 |
+| FS3 | 反向对照:dangerous 换源确实触发确认且 deny 挡住 | **映射(三收场并存)** | 幕 2(批准)/ 幕 3(拒绝,`confirmation_denied`)/ 幕 4(无确认器,`confirmation_unavailable`)—— 旧的一条 deny 分支现在有三种对位物 |
+| FS4 | 全链只经 `aa`:argv 逐行核对 + UDS 流量对账 | **改判** | 「只经 CLI」在新架构里是**结构事实**:agent 只有 `a2 … --json` 一条路(内核里没有第二条通路,08 票 N-9 的结构性断言守着)。对账的对象换成了更有意义的一个:**壳发出去的请求数**(`PANEL_IDLE: before==after`)—— 证的是「零轮询」,那才是新拓扑下会被搞砸的东西 |
+| FS5 | `aa docs agents-md` 提到的能力 id 都真实存在 | 顺延 13 | 同 D 组第 5 行 |
+
+### G. `Scripts/check/mihomo-real-e2e.sh`(MK 6 条 + MK2 7 条)—— **淘汰(前提没了)+ 一条如实的能力损失**
+
+06 票 A 组已把这两组逐条改判(锁版校验从「比对随包物」→「比对下载物」;
+「宿主退出回收内核」→ 反过来的「卸内核 pid 不变」)。本票只补一条**记账**:
+
+> **旧门禁跑的是一个真 mihomo 二进制,新门禁跑的是假件。**
+> 于是「**真** mihomo 接受 a2 渲染的那份 `config.yaml`」「**真** mihomo 的 `PATCH /configs` /
+> `PUT /proxies` / `GET /group/<n>/delay` 与我们的客户端对得上」这两条事实,此后**没有任何自动化断言**。
+> 假 mihomo 忠实复刻的是我们**以为**的那套 REST 语义 —— 它验不了「我们以为的」对不对。
+> 这不是本票制造的缺口(06 票起 mihomo 就不随包了),但**在这里才第一次没有兜底**。
+> 落定:**顺延到人工项**,与 5 条人工项同批 —— 在干净机器上装一次真 mihomo 跑一遍旗舰链。
+> 要提前做需要用户裁定(本机跑着用户自己的 mihomo,是最硬的施工红线)。
+
+### H. 门禁基建(`bootstrap` / `build` / `swift-test` / `test-support` / `finalize`)
+
+不是行为断言,是脚手架。逐条对位:
+
+| 旧 | 新 |
+|---|---|
+| `bootstrap.sh` 的 swift 工具链探测(`dump-package` rc=0) | `check.sh` 同一条判据、同一个候选顺序,原样保留 |
+| `build.sh` 两档构建(`-DAA_TESTING` / `-DAA_E2E`)+ 零 warning | 新壳**没有任何编译期 seam** → 只剩一档;零 warning 成了 `check.sh` 的 ⓪b 步 |
+| `swift-test.sh`(把 `swift test` 记作一条断言) | `check.sh` 的 ② 步(同样按**步**判红绿,不按用例数 —— 理由与旧脚本头注逐字相同:否则每加一个 `@Test`,总数就漂一次) |
+| `test-support.sh` 的宿主生命周期助手(`teardown_hosts` / `wait_host_ready`) | **淘汰**:没有 GUI 宿主要起停了。旗舰 e2e 的 daemon 生命周期由它自己的 trap 管 |
+| `finalize.sh` 的清场核验(R 组:无残留宿主 / stub / 孤儿 + 用户 mihomo pid 前后一致 + 未污染真实 AppSupport) | **映射(判据换了落点)** | 旗舰 e2e 的红线自查段(R-1 真实 `~/.a2` 不存在 / R-2 全程无用户 mihomo 端口 / R-3 只对 `com.a2.*` 说过话)+ 沙盒本身(一切落临时 `A2_HOME`,`pkill -9 -f "$BOX"` 按本次独有路径精确回收) |
+
+### I. 10 票本次退场那批的统计
+
+按**族**统计(逐条明细在上面各表;条数按旧仓的可数断言口径):
+
+| 处置 | 族数 | 代表 |
+|---|---|---|
+| 映射 | 14 | MB-1…MB-4、APP-2/4/8、FS1/FS2/FS3、E 组 96 条的 `@Test` 本体、finalize 清场 |
+| 合并 | 3 | 组 4(帮助退出码表)、E 组(shell grep 层整组)、MB-5 |
+| 淘汰 | 8 | APP-1 的三条 / APP-5 / APP-6 / MB-6 / 组 6(install-cli)/ `test-support.sh` / MK·MK2 / 组 3(改判为进程边界) |
+| 顺延 | 4 | A 组(agent-delegation 89+21 条)、组 5 与 FS5(顺延 13)、APP-9/APP-10(顺延 13)、G 组的真 mihomo 实测(顺延人工项) |
+
+### J. 全表(04–10 票)累计
+
+统计口径:数的是各表「处置」列**有值的行**;按首关键词归类(`映射(形态改判)` / `映射(判据更强)` /
+`部分映射 + …` 一律计入 `映射`,`合并 + 改判` 计入 `合并`)。各票的「自己的新账」表(05 票 C / 06 票 C /
+07 票 H·I / 08 票 A / 10 票 H·I)没有「处置」列 —— 它们登记的是**新建行为**,不是旧断言的去向,故不进本统计。
+
+| 处置 | 行数 | 说明 |
+|---|---|---|
+| 映射 | 100 | 旧行为在新侧有对应断言(其中 9 处明写「判据更强 / 形态改判」) |
+| 合并 | 12 | 被另一条更强的断言覆盖 |
+| 淘汰 | 13 | 只属旧实现细节,或**前提被拆掉了**(逐条成文,不许只写「不要了」) |
+| 改判 | 4 | 同一个位置换了一条**相反**或**同精神不同载体**的承诺(如「宿主退出回收内核」→「卸内核 pid 不变」) |
+| 保留实现,无活体断言 | 2 | 代码在、判断在、注释成文,但缺一层故障注入假件(S-15 / SP-7) |
+| 顺延 | 22 | 见下表 |
+| **合计** | **153 行** | |
+
+**22 条顺延的去处(本票逐条核对,`已兑现` 的那些不再是悬账)**:
+
+| 去处 | 行数 | 状态 |
+|---|---|---|
+| 顺延 07(含 05 票改标的 2 条) | 5 | **已兑现**(07 票代理控制面落地时逐条登记) |
+| 顺延 10 | 2 | **已兑现**(本票 F 组 FS1 / FS2) |
+| 顺延 13 | 7 | **未兑现**:agent 指引物(`docs agents-md`)、`a2 about` 的 GPL 声明与子进程红线、锁版版本报出面 —— 全随分发工件走 |
+| 顺延(agent-delegation spec) | 8 | **未兑现,且去处不是本效应的票**(见 A 组末尾的 ⚠️) |
+
+另有两条**不在表格里的顺延**(散文形态,一并记此免得漏账):G 组「真 mihomo 的 REST 语义与配置兼容性」
+顺延人工项;08 票 B 组「Linux `SO_PEERCRED` 实机验证」顺延人工项。
+
+**收口结论**:旧仓的可数行为断言**全部落定**,没有一条"没提过"。未兑现的 15 条表内顺延各有明确去处
+(13 票 7 条 / agent-delegation 8 条),其中 agent-delegation 那 8 条的**排期未定** ——
+那是本票撞到的一处 spec 遗漏,已在 A 组如实记明。
+
+**四条做不到项**(全表汇总,与 5 条人工项同批考虑):
+1. 写盘失败类故障注入(S-15 / SP-7)—— 07 票记;
+2. Linux `SO_PEERCRED` 未实机验证 —— 08 票记;
+3. mihomo 侧无活体冒烟(真 supervisor 拉起真 mihomo)—— 06 票记;
+4. **真 mihomo 的 REST 语义与配置兼容性**(本票 G 组)、**GUI 交互本身**(点菜单项 / 双击 `.app` /
+   Touch ID 弹窗)—— 本票记。
+
+---
+
 ## 有意的契约变更(不是丢失,是改判 —— 逐条有出处)
 
 1. **`--json` 输出一律是包封**。旧 `aa` 的 list/describe/call 直接打裸 payload(`{"capabilities":[…]}`、
