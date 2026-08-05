@@ -6,6 +6,8 @@ import { ExitCode } from "../contract/exit-codes.ts";
 import { ErrorCode, failureResponse, successResponse } from "../contract/wire.ts";
 // 帮助文本里的默认端口从常量插值 —— 帮助与实现是同一个数,改常量不会留下一句过时的散文。
 import { A2_MIHOMO_CONTROLLER_PORT } from "../mihomo/paths.ts";
+// 随包静态文本的文件名同理:帮助里写的名字与安装脚本/组装脚本落的是同一个常量。
+import { GPL_LICENSE_FILE_NAME, NOTICE_FILE_NAME } from "../runtime/about.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { renderWireError, type CommandOutcome } from "./outcome.ts";
 
@@ -24,6 +26,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
   plugin …             插件装载:add <路径> / list / remove <名字>(见 a2 plugin --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
+  about                版本、许可与外部程序声明(GPL 义务落点;不经 daemon)
   help                 打印本帮助
   version              打印版本
 
@@ -273,6 +276,27 @@ dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(�
 
 退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 5 装载或调用没成 / 6 插件说的话不合协议`;
 
+export const ABOUT_USAGE = `a2 about —— 版本、许可与外部程序声明(GPL 义务的必有落点)
+
+用法:
+  a2 [--json] about                打印版本、许可、外部程序声明与随包静态文本的落点
+
+不接受任何参数,也**不经 daemon** —— 声明必须在 daemon 没装、没跑、装坏了的时候一样读得到
+(ADR 0007 修订版:义务落点不依赖任何 UI,也不依赖任何常驻进程)。
+
+它说了什么:
+  * a2 本体的许可口径(不含也不链接任何 GPL 代码);
+  * 调用的**外部**程序 mihomo:GPL-3.0、锁定版本、源码获取地址、发布渠道;
+  * **不随包分发**:a2 的任何分发物都不含 mihomo 二进制,它由你的显式命令获取;
+  * **独立子进程红线**的原文:只以独立子进程 + 本地 REST 控制面调用,永不进程内链接;
+  * 随包静态文本(与 a2 同目录)在不在:${NOTICE_FILE_NAME} 与 ${GPL_LICENSE_FILE_NAME};
+  * 升级口径:**没有静默更新**,升级永远是显式动作。
+
+同一份声明的另外两个呈现面:发布包里的 ${NOTICE_FILE_NAME}(本命令的输出原样落盘)、
+菜单栏壳「A2 Panel」的关于页(可选呈现面,不是义务落点)。
+
+退出码:0 成功 / 1 用法错 / 6 输出不合契约(内部错,正常永不出现)`;
+
 /** 域名 → 该域的用法文本。域子命令面统一从这里取(没登记的域退回顶层帮助)。 */
 export const DOMAIN_USAGE: Record<string, string> = {
   proxy: PROXY_USAGE,
@@ -360,6 +384,17 @@ export function pluginUsageOutcome(message: string): CommandOutcome {
     steps: [
       { description: "打印插件协议与最小例子", command: "a2 plugin --help" },
       { description: "看看现在都装了什么", command: "a2 plugin list --json" },
+    ],
+  });
+}
+
+/** about 面的用法错:指引指向本面帮助与那条不带参数的正确写法。 */
+export function aboutUsageOutcome(message: string): CommandOutcome {
+  return usageOutcome(message, {
+    usage: ABOUT_USAGE,
+    steps: [
+      { description: "打印版本、许可与外部程序声明", command: "a2 about" },
+      { description: "同一份声明的机读形态", command: "a2 about --json" },
     ],
   });
 }

@@ -109,7 +109,7 @@ workspace-write 沙箱下 `aa` 连宿主 UDS 是否放行。本 spike 只有结�
 | 1 | 装 Xcode + 签发 Apple Development 证书 | 不变（前置条件），但签的对象是 **`A2 Panel.app`**（bundle id `com.a2.panel`）；内核 bin `a2` 走单文件下载分发，不吃 .app 签名链 |
 | 2 | 用真证书重签 `.app` + 重跑门禁 | 对 `A2 Panel.app` 出包 + 跑 TS 门禁。**自动部分 10 票已完成**：`Scripts/build-app.sh` 一条命令出包 + ad-hoc 签名 + 8 条结构/签名核验，已进门禁；剩下的是**换真身份**这一步（`AA_CODESIGN_IDENTITY` 一个 env） |
 | 3 | 首次 TCC / 通知授权点头 | 归**确认器**：`a2-panel` 以确认器角色呈现 Touch ID / 通知，授权仪式在它身上做一次。**对着 `com.a2.panel` 做**（旧 id `com.aa.host` 从未授过权，10 票换 id 的代价此刻恰好是零） |
-| 4 | 真 Codex 经 `aa docs agents-md` + `prefix_rule` 完成旗舰操作 | 对 **`a2 … --json`** 重跑同一场景 |
+| 4 | 真 Codex 经 `aa docs agents-md` + `prefix_rule` 完成旗舰操作 | 对 **`a2 … --json`** 重跑同一场景（指引物已由 13 票重写为 [docs/agents/a2-cli.md](agents/a2-cli.md)，那条打印指引的命令随 `aa` 退场） |
 | 5 | 换源 dangerous 真机点验（真弹窗批准/拒绝两分支） | 对**确认器**重跑：带外确认的批准/拒绝两分支。**协议链已自动化**（旗舰 e2e 幕 2/3 跑的是壳的真代码路径），人工项只剩「**人真的点了那个按钮**」这一步 |
 
 **真 mihomo 那条缺口的一个候选补法（10 票 CR 建议，2026-08-05 记，尚未实现、需用户裁定）**：
@@ -118,7 +118,9 @@ workspace-write 沙箱下 `aa` 连宿主 UDS 是否放行。本 spike 只有结�
 `kernel/test/support/fake-mihomo` 这份假件（今天假件复刻的是我们**以为**的 REST 语义，它验不了「我们以为的」对不对）。
 **需用户裁定才能做**：本机跑着用户自己的 mihomo（施工红线是绝不触碰），这一幕只能在用户指定的另一份二进制上跑。
 
-**Linux 口径**：交叉编译产物与 systemd 代码路径属当下承诺、进门禁（单元级）；**Linux 实机端到端验收未裁**，默认随人工项节奏顺延（如需提前由用户裁定）。
+**Linux 口径**：交叉编译产物与 systemd 代码路径属当下承诺、进门禁（单元级）；**Linux 实机端到端验收未裁**，默认随人工项节奏顺延（如需提前由用户裁定）。13 票现场实测：`--target=bun-linux-x64` 能产出合法 ELF（95MiB，`file` 报 `ELF 64-bit LSB executable, x86-64`），但**本机跑不了它** —— 只验到「能产出 + 文件头对」。
+
+**13 票落地后新增的分发类人工项**（**不并入上面 5 条**：那 5 条是 Phase 1 的遗留，这几条属 Phase 3 发布工程，逐条见[分发 runbook §8](runbooks/distribution.md)）：①**确定发布渠道**（仓库无 remote；安装脚本里现在是一个注定连不上的 `.invalid` 占位地址 + 当场失败的明确指引，不是一个看起来能用的假地址）；②Linux 实机跑一遍装 / `a2 service install` / 旗舰链；③发布前冒烟 checklist（装 / 升级 / 回滚 / 卸载各走一遍）。
 
 ## Phase 2 — 宠物 + 提醒（原 §8 原生化改写清点）
 
@@ -135,10 +137,11 @@ workspace-write 沙箱下 `aa` 连宿主 UDS 是否放行。本 spike 只有结�
 ## Phase 3 — 发布工程（首个对外分发前）
 
 - **分发渠道（2026-08-04 裁定）**：V1 = **单文件直接下载 + curl 安装脚本**；Homebrew Formula 列后续；`a2-panel.app` 随附带包。
+  **2026-08-05（13 票）落地情况**：安装脚本（`Scripts/install.sh`）、发布包组装（`Scripts/release-assemble.sh`）与发布元数据（`a2-release.json`：版本、各工件 SHA-256、**mihomo 锁定版**）已实现并进门禁（断言用回环/本地夹具，不出网）；**缺的只是渠道本身**——见[分发 runbook](runbooks/distribution.md)。Homebrew 的后续渠道备忘在同一篇 §7。
 - **签名/公证**：`a2-panel.app` 走 Developer ID 分发链 + 公证流水线脚本化；内核 bin 的签名形态随渠道另定（Phase 1 出口后按实际分发物排）。
 - **自更新**：Sparkle 自更新（EdDSA key、appcast、**用户确认更新**——不做静默）的适用面限于 `.app`；`a2` bin 的升级是显式命令（不做静默更新，[ADR 0006](adr/0006-local-first-no-cloud.md) 的暂缓清单继续）。
 - **迁移/备份与失败恢复**（原 §10-4 后移至此）。
-- **GPL 义务落地（2026-08-04 改写）**：`a2 about` 子命令 + 随包静态文本声明「调用外部 GPL-3.0 程序 mihomo」+ 许可与源码获取指引；关于页降级为同一份文本的可选呈现面；**内核重签校验已废除**（[ADR 0007](adr/0007-mihomo-subprocess-gpl-compliance.md) 修订）。义务落点不依赖 UI，故**不再是 Phase 3 才能履行的事**——随内核 bin 一并交付。
+- **GPL 义务落地（2026-08-04 改写）**：`a2 about` 子命令 + 随包静态文本声明「调用外部 GPL-3.0 程序 mihomo」+ 许可与源码获取指引；关于页降级为同一份文本的可选呈现面；**内核重签校验已废除**（[ADR 0007](adr/0007-mihomo-subprocess-gpl-compliance.md) 修订）。义务落点不依赖 UI，故**不再是 Phase 3 才能履行的事**——随内核 bin 一并交付。**2026-08-05（13 票）已交付**：`a2 about`（不经 daemon）、随包 `NOTICE-external-programs.txt`（该命令的输出原样落盘）与 `LICENSE-mihomo-GPL-3.0.txt`；发布元数据的 schema 强制这两份文本各恰好一份——**少一份就生成不出元数据**。
 - 冒烟与人工可审计 checklist（安装/升级/回滚/卸载，原 §9.2 发布前清单的保留项）按新分发物重写。
 
 ## 排期外（继续暂缓）

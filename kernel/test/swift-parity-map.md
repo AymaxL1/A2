@@ -541,15 +541,15 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 |---|---|---|
 | 顺延 07(含 05 票改标的 2 条) | 5 | **已兑现**(07 票代理控制面落地时逐条登记) |
 | 顺延 10 | 2 | **已兑现**(本票 F 组 FS1 / FS2) |
-| 顺延 13 | 7 | **未兑现**:agent 指引物(`docs agents-md`)、`a2 about` 的 GPL 声明与子进程红线、锁版版本报出面 —— 全随分发工件走 |
+| 顺延 13 | 7 | **已兑现**(13 票分发工件落地时逐条销账,明细见文末「13 票收口」一节) |
 | 顺延(agent-delegation spec) | 8 | **未兑现,且去处不是本效应的票**(见 A 组末尾的 ⚠️) |
 
 另有两条**不在表格里的顺延**(散文形态,一并记此免得漏账):G 组「真 mihomo 的 REST 语义与配置兼容性」
 顺延人工项;08 票 B 组「Linux `SO_PEERCRED` 实机验证」顺延人工项。
 
-**收口结论**:旧仓的可数行为断言**全部落定**,没有一条"没提过"。未兑现的 15 条表内顺延各有明确去处
-(13 票 7 条 / agent-delegation 8 条),其中 agent-delegation 那 8 条的**排期未定** ——
-那是本票撞到的一处 spec 遗漏,已在 A 组如实记明。
+**收口结论**:旧仓的可数行为断言**全部落定**,没有一条"没提过"。~~未兑现的 15 条表内顺延~~
+**(2026-08-05 13 票更新:顺延 13 的 7 条已全部兑现,剩 8 条)** 各有明确去处,
+其中 agent-delegation 那 8 条的**排期未定** —— 那是本票撞到的一处 spec 遗漏,已在 A 组如实记明。
 
 **四条做不到项**(全表汇总,与 5 条人工项同批考虑):
 1. 写盘失败类故障注入(S-15 / SP-7)—— 07 票记;
@@ -634,3 +634,39 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
    (**因为那时根本没有确认器,不存在「用户点了拒绝」**)。**08 票补上 `confirmation_denied` 之后,那条旧断言
    有了真正的对位物**(▸ add 被确认器拒绝),两条并存:同一条能力,无人在场与有人不同意是两种收场,
    各有各的报文与指引。退出码不变,旧的退出码判据不受影响。
+
+---
+
+## 13 票收口:顺延 13 的 7 条逐条销账(2026-08-05)
+
+10 票收口时表内还剩 15 条未兑现的顺延,其中 **7 条挂在 13 票(分发工件)**。本节逐条落定 ——
+**全部兑现,一条不留**。
+
+| # | 原表位置 | 旧断言 | 新落点(可跑的那条) |
+|---|---|---|---|
+| 1 | 04 票 C 组 | `aa docs agents-md` 含 capabilities / dangerous / exit code 三段接入片段 | **改判为文档 + 对账断言**:指引物是 `docs/agents/a2-cli.md`(命令形态随 `aa` 退场);`docs-agent-guide.test.ts` ▸ 退出码表与 `exit-codes.ts` 逐值对得上 / ▸ dangerous 三条收场与「无 `--yes` 旁路」都写明 |
+| 2 | 07 票 G 组 FS5 | `aa docs agents-md` 提到的能力 id 都真实存在 | **映射(判据更强)**:`docs-agent-guide.test.ts` ▸ 指引里提到的每一个能力 id,在**真的跑着的内核**(起 daemon 取 `capabilities list`)里都存在。旧断言对的是同进程的清单,新断言对的是活体注册表 |
+| 3 | 10 票 D 组 组 5(8 条) | 接入片段逐条 grep(prefix_rule / require_escalated / capabilities call / **pending** / exit code) | **部分映射 + 部分淘汰**:能力调用、退出码、dangerous 口径映射到上面两条;`capabilities result <request-id>` 与 `"pending":true` **已作废**(pending 态整体淘汰,见「有意的契约变更」6),故不重写、反而立了一条**反向断言**:▸ 已作废的旧接入片段不许出现在指引里 |
+| 4 | 10 票 F 组 FS5 | 同 #2(F 组重复登记的那一行) | 同 #2 |
+| 5 | 07 票 H 组 | `proxy.license` 能力(GPL 义务经能力面暴露) | **改判为 CLI 子命令**:`a2 about`(**不经 daemon** —— 义务落点不许依赖一个可能没装、没跑的进程)。`cli-about.test.ts` ▸ GPL 义务:声明里有外部程序、许可证、源码获取地址与发布渠道 / ▸ 不依赖 daemon:一个字节的状态都不写 |
+| 6 | 10 票 C 组 APP-9 | `aa proxy license` 报出的内核版本与 `MIHOMO-VERSION.txt` 一致 | **映射**:`cli-about.test.ts` ▸ 锁版同源:about 报的 mihomo 版本 = `MIHOMO-VERSION.txt` 里那一版(期望值从那份实测记录现读,不经 `pin.ts`);另有 `release-manifest.test.ts` ▸ mihomo 锁定版进元数据且与实测记录同源 —— 06 票安装档的版本源自此在**发布元数据**里也有一份 |
+| 7 | 10 票 C 组 APP-10 | 子进程红线原文经能力面暴露 | **映射(落点换成 `a2 about` 的静态文本)**:`cli-about.test.ts` ▸ 独立子进程红线的原文出现在声明里(断言逐字含「独立子进程」「永不进程内链接」),而同一份字节随发布包落成 `NOTICE-external-programs.txt`(`release-assemble.sh` 的自检确认包里那个 a2 看得见它) |
+
+**顺带说明两条本节没有、也不该有的账**:
+* 10 票 B 组 MB-6(两个 `#if AA_TESTING` env seam「13 票分发前须处置」)**在 10 票就已销账** ——
+  新壳里一个测试专用 seam 都没有,本票无事可做;
+* 10 票 D 组第 6 行(`aa install-cli` 约 12 条)是**淘汰**不是顺延,但它那句"安装脚本的断言归 13 票"
+  本票兑现了:`kernel/test/install-script.test.ts`(16 条,平台探测 / 摘要校验 fail-closed / 幂等 /
+  升级显式 / PATH 提示 / 卸载先看后删)。
+
+### 13 票自己的新账(不属旧断言的去向,不进上面的统计)
+
+| 面 | 断言落点 |
+|---|---|
+| `a2 about`(GPL 义务) | `cli-about.test.ts` 13 条 + 金标样本 `about-result.json` / `invalid-about-bundled-gpl-binary.json`(`bundled` 恒 false 是契约层的承诺) |
+| 安装脚本 | `install-script.test.ts` 16 条(被测体是真的 `Scripts/install.sh`,渠道是回环 `Bun.serve` 与本地目录两种夹具) |
+| 发布元数据与组装脚本 | `release-manifest.test.ts` 14 条(结构约束 / 摘要对照系统 `shasum` / 每工件一行的格式约定 / TS 与 `install.sh` 的两处字面量对账 / 组装脚本真跑一遍 + 真产物自检) |
+| agent 指引物 | `docs-agent-guide.test.ts` 7 条(见上表 #1–#4) |
+
+**全表统计更新**:22 条顺延中 **已兑现 14 条**(顺延 07 五条 + 顺延 10 两条 + **顺延 13 七条**),
+未兑现 8 条(全部是 agent-delegation,排期未定,去处不是本效应的票)。

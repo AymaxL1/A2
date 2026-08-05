@@ -13,7 +13,7 @@
 import { statSync } from "node:fs";
 import { copyFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { bundleDirectoryPlugin, type BundleReport } from "./bundle.ts";
+import { bundleDirectoryPlugin, sweepStaleBuildAreas, type BundleReport } from "./bundle.ts";
 import type { Capability, CapabilityRegistry } from "../capability/registry.ts";
 import {
   ErrorCode,
@@ -205,6 +205,9 @@ async function addPluginSerially(
   const directory = ensurePluginsDir(context.paths);
   // 上一次崩在半路留下的暂存工件,在这里清掉(登记区里只该有正式工件与清单)。
   await sweepStagingArtifacts(context.paths);
+  // 同理清掉**系统临时目录**里遗留的构建区(13 票补的 12 票 CR 尾款 a)——
+  // 那边一个残骸就是一棵 node_modules,比登记区的暂存件贵得多。
+  await sweepStaleBuildAreas().catch(() => []);
 
   // **装载期流水线**:目录插件在这里被打成单文件(12 票)。临时工作区在系统临时目录下,
   // 用完即弃 —— `~/.a2` 里永远不会出现 node_modules。
@@ -420,10 +423,20 @@ async function removePluginSerially(
   }
 
   const removedDescriptors = context.registry.unregister(capabilityIdsOf(record));
-  await writePluginManifest(
-    context.paths,
-    read.records.filter((entry) => entry.name !== name),
-  );
+  try {
+    await writePluginManifest(
+      context.paths,
+      read.records.filter((entry) => entry.name !== name),
+    );
+  } catch (error) {
+    // **与 add 对称的回滚**(13 票补的 12 票 CR 尾款 c)。清单没落盘 = 重启后这个插件还在,
+    // 而能力已经从注册表上摘了 —— 那就是"这次调不动、重启又能调"的幽灵态,恰是 add 那侧
+    // 花了力气避免的东西。写盘失败(盘满 / 只读 / 权限)时把能力原样放回去,当作什么都没发生。
+    context.registry.register(pluginCapabilities(record, context.env));
+    return opFailure(
+      loadError(`写插件清单失败:${String(error)}`, "清单没改成,已把该插件的能力放回注册表。", name),
+    );
+  }
   // 工件删不掉不该让卸载失败(它已经不在清单里、也不在注册表里了)——留个孤儿文件比留个半卸状态强。
   await rm(record.artifact, { force: true }).catch(() => {});
 

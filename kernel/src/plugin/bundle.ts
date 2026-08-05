@@ -38,12 +38,12 @@
 // 只有 `bun run` 会跑它;而我们这条流水线一次 `bun run` 都没有。所以纪律①(不执行插件代码)
 // 靠 `--ignore-scripts` 就已经完整,再删用户的配置文件只会让"为什么我的配置没生效"变成谜。
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { copyFileSync, mkdirSync, readdirSync, statSync, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ErrorCode, type Guidance, type WireError } from "../contract/wire.ts";
-import { captureProcess } from "./spawn.ts";
+import { OUTPUT_LIMIT_BYTES, captureProcess, type CaptureResult } from "./spawn.ts";
 
 /**
  * 装载期工具链(install / build)的超时窗口。
@@ -54,6 +54,23 @@ import { captureProcess } from "./spawn.ts";
  */
 export const BUILD_TIMEOUT_ENV = "A2_PLUGIN_BUILD_TIMEOUT_MS";
 const DEFAULT_BUILD_TIMEOUT_MS = 180_000;
+
+/**
+ * 临时工作区的名字前缀。**造它的人与扫它的人必须认同一个常量**(与登记区的 `STAGING_PREFIX`
+ * 同一条教训:各写各的字面量就会出现"扫不到的遗留物")。
+ */
+export const BUILD_AREA_PREFIX = "a2-plugin-build-";
+
+/**
+ * 多老的构建区算"遗留"(13 票补的 12 票 CR 尾款 a)。
+ *
+ * 判据必须是**年龄**,不能是"存在即删":同一台机器上可能有另一个 daemon(另一个 `A2_HOME`)
+ * 此刻正在用它自己的构建区装依赖 —— 系统临时目录是共享的,而我们没有"这是我的"这种标记
+ * (进程可能已经被 SIGKILL 了,标记本身也会成为遗留物)。
+ * 一小时是 `A2_PLUGIN_BUILD_TIMEOUT_MS` 默认值(180 秒)的 20 倍:任何**还在飞**的构建都比它年轻,
+ * 而任何进程被杀留下的残骸最终都会比它老。
+ */
+export const STALE_BUILD_AREA_MS = 60 * 60 * 1000;
 
 /** 入口候选(package.json 的 `main` / `module` 优先,都没有才按约定找)。 */
 const ENTRY_CANDIDATES = ["index.ts", "index.js", "index.mts", "index.mjs", "main.ts", "main.js"];
@@ -85,6 +102,8 @@ export interface BundleOptions {
   env: Record<string, string | undefined>;
   /** 覆写工具链超时(测试用;缺省读 `A2_PLUGIN_BUILD_TIMEOUT_MS`)。 */
   timeoutMs?: number;
+  /** 覆写工具链输出上限(测试用;缺省 `OUTPUT_LIMIT_BYTES` = 4MiB)。 */
+  limitBytes?: number;
 }
 
 /** 打包成功后交给调用方的一切。**`dispose()` 必须被调用** —— 临时工作区里躺着一整棵 node_modules。 */
@@ -118,32 +137,60 @@ export async function bundleDirectoryPlugin(
   source: string,
   options: BundleOptions,
 ): Promise<BundleOutcome> {
-  const timeoutMs = options.timeoutMs ?? readBuildTimeout(options.env);
-  const env = toolchainEnv(options.env);
-
   // 临时工作区一律在系统临时目录下 —— **绝不在 `~/.a2`**:登记区是持久区,node_modules 不配进去。
-  const workdir = await mkdtemp(path.join(os.tmpdir(), "a2-plugin-build-"));
-  const project = path.join(workdir, "project");
-  const outdir = path.join(workdir, "out");
+  const workdir = await mkdtemp(path.join(os.tmpdir(), BUILD_AREA_PREFIX));
   const dispose = async () => {
     await rm(workdir, { recursive: true, force: true }).catch(() => {});
   };
-  const reject = async (error: WireError): Promise<BundleOutcome> => {
+
+  // **工作区的生死只在这一层决定**(13 票补的 12 票 CR 尾款 a):
+  //   * 失败 → 就地删掉(流水线自己不必记得收尾,每条拒绝分支只管返回报文);
+  //   * 抛出 → 同样删掉,并翻成结构化拒绝(与"router 永不抛"同一条口径)——
+  //     此前这条路没有任何分支可走,一次意料之外的异常就永久漏一个几十 MiB 的目录在 /tmp 里;
+  //   * 成功 → **不删**,工作区连同产物一起交给调用方(`BundleReport.dispose`)。
+  try {
+    const outcome = await runBundlePipeline(source, options, workdir, dispose);
+    if (!outcome.ok) await dispose();
+    return outcome;
+  } catch (error) {
     await dispose();
-    return { ok: false, error };
-  };
+    return {
+      ok: false,
+      error: loadError(
+        `打包插件时出了意料之外的错:${source}`,
+        String(error),
+        source,
+        buildGuidance(source),
+      ),
+    };
+  }
+}
+
+/** 流水线本体。每条拒绝分支只管返回报文 —— 工作区的清理归上面那层。 */
+async function runBundlePipeline(
+  source: string,
+  options: BundleOptions,
+  workdir: string,
+  dispose: () => Promise<void>,
+): Promise<BundleOutcome> {
+  const timeoutMs = options.timeoutMs ?? readBuildTimeout(options.env);
+  const limitBytes = options.limitBytes ?? OUTPUT_LIMIT_BYTES;
+  const env = toolchainEnv(options.env);
+  const project = path.join(workdir, "project");
+  const outdir = path.join(workdir, "out");
+  const fail = (error: WireError): BundleOutcome => ({ ok: false, error });
 
   // ── ① 复制源码进临时工作区 ────────────────────────────────────────────────
   const copied = copyTree(source, project);
-  if (!copied.ok) return await reject(copied.error);
+  if (!copied.ok) return fail(copied.error);
 
   // ── ② package.json 与入口 ─────────────────────────────────────────────────
   const manifest = await readPackageJson(project);
-  if (!manifest.ok) return await reject(manifest.error);
+  if (!manifest.ok) return fail(manifest.error);
 
   const entry = resolveEntry(project, manifest.value);
   if (entry === undefined) {
-    return await reject(
+    return fail(
       loadError(
         `目录插件 ${source} 里找不到入口文件。`,
         `找过:package.json 的 main/module 字段,以及 ${ENTRY_CANDIDATES.join(" / ")}。`,
@@ -161,11 +208,11 @@ export async function bundleDirectoryPlugin(
   if (hasDependencies(manifest.value)) {
     const install = await captureProcess(
       [process.execPath, "install", "--ignore-scripts"],
-      { cwd: project, env, timeoutMs },
+      { cwd: project, env, timeoutMs, limitBytes },
     );
     installMs = install.ms;
     if (install.timedOut) {
-      return await reject(
+      return fail(
         loadError(
           `装依赖超时(${timeoutMs}ms):${source}`,
           tail(install.stderr || install.stdout),
@@ -174,8 +221,11 @@ export async function bundleDirectoryPlugin(
         ),
       );
     }
+    if (install.overflow) {
+      return fail(overflowError("装依赖", install, limitBytes, source));
+    }
     if (install.exitCode !== 0) {
-      return await reject(
+      return fail(
         loadError(
           `装依赖失败(exit=${install.exitCode}):${source}`,
           tail(install.stderr || install.stdout),
@@ -187,15 +237,15 @@ export async function bundleDirectoryPlugin(
   }
 
   // ── ④ 审计素材:依赖清单(取不到不算失败 —— 审计缺一行,不该让装载失败)────
-  const dependencies = await listDependencies(project, env, timeoutMs);
+  const dependencies = await listDependencies(project, env, timeoutMs, limitBytes);
 
   // ── ⑤ build ───────────────────────────────────────────────────────────────
   const build = await captureProcess(
     [process.execPath, "build", `./${entry}`, "--target=bun", "--outdir", outdir],
-    { cwd: project, env, timeoutMs },
+    { cwd: project, env, timeoutMs, limitBytes },
   );
   if (build.timedOut) {
-    return await reject(
+    return fail(
       loadError(
         `打包超时(${timeoutMs}ms):${source}`,
         tail(build.stderr || build.stdout),
@@ -204,8 +254,11 @@ export async function bundleDirectoryPlugin(
       ),
     );
   }
+  if (build.overflow) {
+    return fail(overflowError("打包", build, limitBytes, source));
+  }
   if (build.exitCode !== 0) {
-    return await reject(
+    return fail(
       loadError(
         `打包失败(exit=${build.exitCode}):${source}`,
         // 打包器的原文就是最好的 detail —— 它带着文件、行号与"到底哪个 import 解析不了"。
@@ -219,7 +272,7 @@ export async function bundleDirectoryPlugin(
   // ── ⑥ 产物必须恰好一个文件(native addon / 外带资源都栽在这条上)──────────
   const produced = listFiles(outdir);
   if (produced.length !== 1) {
-    return await reject(
+    return fail(
       loadError(
         produced.length === 0
           ? `打包没有产出任何文件:${source}`
@@ -247,6 +300,46 @@ export async function bundleDirectoryPlugin(
       dispose,
     },
   };
+}
+
+/**
+ * 扫掉系统临时目录里**遗留的**构建区(13 票补的 12 票 CR 尾款 a)。
+ *
+ * 正常路径上每一条分支都会 `dispose()`,异常路径由上面那层 try 兜着 —— 但 `SIGKILL` / 掉电
+ * 没有任何分支可走,而每个构建区里都可能躺着一棵 node_modules。登记区的 `.staging-*` 早就有这道
+ * 清扫(11 票 CR 尾款 d),构建区此前没有:这里补上,判据是**年龄**(见 `STALE_BUILD_AREA_MS`)。
+ *
+ * best-effort:删不动就算了,卫生问题不该拦住装载(与 `sweepStagingArtifacts` 同一口径)。
+ */
+export async function sweepStaleBuildAreas(
+  options: { now?: number; olderThanMs?: number; tmpDir?: string } = {},
+): Promise<string[]> {
+  const dir = options.tmpDir ?? os.tmpdir();
+  const now = options.now ?? Date.now();
+  const olderThanMs = options.olderThanMs ?? STALE_BUILD_AREA_MS;
+  let entries: Dirent[];
+  try {
+    // **异步**读目录:这条扫描在 daemon 启动那一刻跑,而系统临时目录可能有几千个条目 ——
+    // 用同步版就是在启动路径上插一段阻塞(卫生问题不该让内核晚一毫秒答话)。
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const swept: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(BUILD_AREA_PREFIX)) continue;
+    const target = path.join(dir, entry.name);
+    try {
+      // mtime 而不是 birthtime:构建区在整个装/打过程中一直被写,所以"最后一次动它是什么时候"
+      // 才是"还在不在飞"的信号(birthtime 会把一次 10 分钟的冷装误判成遗留)。
+      if (now - (await stat(target)).mtimeMs < olderThanMs) continue;
+      await rm(target, { recursive: true, force: true });
+      swept.push(target);
+    } catch {
+      // 别人的目录(权限)或正好被人删了 —— 都不是我们的事。
+    }
+  }
+  return swept;
 }
 
 // MARK: - 工具链环境
@@ -431,13 +524,16 @@ async function listDependencies(
   project: string,
   env: Record<string, string>,
   timeoutMs: number,
+  limitBytes: number,
 ): Promise<string[]> {
   const listed = await captureProcess([process.execPath, "pm", "ls"], {
     cwd: project,
     env,
     timeoutMs,
+    limitBytes,
   });
-  if (listed.timedOut || listed.exitCode !== 0) return [];
+  // 超限在这里与"没跑成"同档:审计素材缺一行不该让一个本来能装的插件装不上。
+  if (listed.timedOut || listed.overflow !== undefined || listed.exitCode !== 0) return [];
   const names: string[] = [];
   for (const line of stripAnsi(listed.stdout).split("\n")) {
     // `bun pm ls` 的树形输出:`├── picocolors@1.1.1`。只取"名字@版本"那一截。
@@ -504,6 +600,44 @@ function buildGuidance(source: string): Guidance {
     ],
     context: { path: source },
   };
+}
+
+/**
+ * 工具链输出撞上限(13 票补的 12 票 CR 尾款 b)。
+ *
+ * 撞上限时 `captureProcess` 会 SIGKILL 子进程,于是 `exitCode` 是 -1 —— 若照"退出码非 0"那条分支
+ * 报,agent 读到的是「装依赖失败(exit=-1)」加一段被截断的原文,**完全看不出真正发生了什么**
+ * (而 -1 在任何退出码词表里都不存在)。所以超限要有自己的报文:说清是哪条流、上限是多少、
+ * 以及一条能自己走通的替代路。
+ */
+function overflowError(
+  step: string,
+  result: CaptureResult,
+  limitBytes: number,
+  source: string,
+): WireError {
+  const which = result.overflow === "stderr" ? "stderr" : "stdout";
+  return loadError(
+    `${step}时工具链输出超过上限(${which} 超过 ${Math.round(limitBytes / 1024)}KiB):${source}`,
+    tail(result.stderr || result.stdout),
+    source,
+    {
+      summary:
+        `内核给工具链的两条流各设了 ${Math.round(limitBytes / 1024)}KiB 上限 —— ` +
+        "输出到这个量级说明装/打过程本身出了不对劲的事(死循环的 postinstall、把整棵依赖树打印出来的构建脚本…)," +
+        "而不是「输出多了一点」。到顶即杀,内核不会把自己的内存交给一个插件的构建过程说了算。",
+      steps: [
+        {
+          description:
+            "先在你自己的目录里手跑一遍看它到底在吐什么:bun install --ignore-scripts 与 " +
+            "bun build <入口> --target=bun --outdir /tmp/out",
+        },
+        { description: "看插件协议与目录插件的形状", command: "a2 plugin --help" },
+        { description: "收拾干净之后重新登记", command: `a2 plugin add ${source}` },
+      ],
+      context: { path: source, stream: which, limitBytes: String(limitBytes) },
+    },
+  );
 }
 
 function installGuidance(source: string): Guidance {

@@ -8,7 +8,7 @@
 // 这条红线(ADR 0011)的活体证据,也是 10 票交接单点名要 11 票立的那条结构断言的新载体。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BUILTIN_CAPABILITIES } from "../src/capability/builtin.ts";
@@ -854,4 +854,39 @@ test("红线④:命名空间隔离 —— **全部**内置能力都不以 plugin
   for (const id of live) {
     expect(id.startsWith(CAPABILITY_NAMESPACE)).toBe(false);
   }
+});
+
+// MARK: - 13 票补的 12 票 CR 尾款 c:remove 的回滚与 add 对称
+
+test("尾款 c:remove 写清单失败 → 能力**放回**注册表(不留「这次调不动、重启又能调」的幽灵)", async () => {
+  daemon = await startDaemon(home);
+  const file = await writePlugin("hello", HELLO);
+  expect((await runCli(["plugin", "add", file, "--json"], { home })).exitCode).toBe(0);
+
+  // 让登记区不可写:清单是"临时文件 + rename"落盘的,建不了临时文件 = 写清单失败。
+  // (真实世界里的对应物是盘满、只读挂载、权限被改。)
+  const registry = path.join(home, "plugins");
+  chmodSync(registry, 0o500);
+  let removed: Awaited<ReturnType<typeof runCli>>;
+  try {
+    removed = await runCli(["plugin", "remove", "hello", "--json"], { home });
+  } finally {
+    chmodSync(registry, 0o700);
+  }
+
+  expect(removed.exitCode).toBe(5);
+  const body = parseJsonStdout(removed);
+  expect(body.error.code).toBe("plugin_load_failed");
+  expect(body.error.message).toContain("写插件清单失败");
+
+  // 回滚的判据不是"报文说回滚了",而是**这条能力此刻真的还能调**。
+  const called = await runCli(
+    ["capabilities", "call", "plugin.hello.greet", "--input", '{"who":"回滚"}', "--json"],
+    { home },
+  );
+  expect(called.exitCode).toBe(0);
+  expect(parseJsonStdout(called).result.output.hello).toBe("回滚");
+  // 清单没改成,所以它照样列得出来 —— 注册表与清单没有分叉。
+  const listed = parseJsonStdout(await runCli(["plugin", "list", "--json"], { home }));
+  expect((listed.result.plugins as { name: string }[]).map((p) => p.name)).toContain("hello");
 });

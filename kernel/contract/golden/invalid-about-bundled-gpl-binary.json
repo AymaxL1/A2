@@ -1,0 +1,29 @@
+{
+  "product": "a2",
+  "version": "0.1.0",
+  "protocol": 1,
+  "license": "a2 本体:未开源,保留所有权利。",
+  "externalPrograms": [
+    {
+      "name": "mihomo(Mihomo Meta)",
+      "role": "代理数据面",
+      "license": "GPL-3.0",
+      "lockedVersion": "v1.19.28",
+      "bundled": true,
+      "invocation": "随包分发的二进制,由内核直接拉起。",
+      "source": "https://github.com/MetaCubeX/mihomo",
+      "releases": "https://github.com/MetaCubeX/mihomo/releases",
+      "licenseUrl": "https://www.gnu.org/licenses/gpl-3.0.txt"
+    }
+  ],
+  "declaration": "a2 随包分发 mihomo。",
+  "noticeFiles": [
+    {
+      "name": "NOTICE-external-programs.txt",
+      "purpose": "外部程序声明的静态副本",
+      "path": "/usr/local/bin/NOTICE-external-programs.txt",
+      "present": true
+    }
+  ],
+  "upgrade": "随应用更新一起升级。"
+}

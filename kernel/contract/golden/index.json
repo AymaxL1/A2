@@ -589,6 +589,18 @@
       "schema": "AuditEvent",
       "kind": "valid",
       "why": "装载零闸下唯一的可审计物:装插件这件事本身的留痕(11 票新增的两个 AuditAction 之一)"
+    },
+    {
+      "file": "about-result.json",
+      "schema": "AboutResult",
+      "kind": "valid",
+      "why": "GPL 义务落点的报文形状:外部程序表(许可/锁版/源码/发布渠道/调用方式)+ 随包静态文本落点 + 升级口径"
+    },
+    {
+      "file": "invalid-about-bundled-gpl-binary.json",
+      "schema": "AboutResult",
+      "kind": "invalid",
+      "why": "`bundled` 恒为 false 是契约层的承诺:声称随包分发 GPL 二进制的报文必须被拒(义务面若真变了,那是一次要改 ADR 的决策)"
     }
   ]
 }

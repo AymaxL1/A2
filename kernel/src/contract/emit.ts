@@ -13,6 +13,7 @@
 import path from "node:path";
 import { z } from "zod";
 import {
+  AboutResultSchema,
   ArbitrationStateSchema,
   ArbitrationStatusResultSchema,
   AuditEventSchema,
@@ -71,6 +72,11 @@ export const CONTRACT_SCHEMAS = {
   StatusResult: StatusResultSchema,
   VersionResult: VersionResultSchema,
   HelpResult: HelpResultSchema,
+  // 13 票:GPL 义务的必有落点。登记成契约有两个用处 —— agent 能机读地拿到「调用了哪些外部程序、
+  // 各是什么许可、源码在哪」,而 `bundled: false` 这条承诺有了 schema 层的守卫。
+  // (`ExternalProgram` / `NoticeFile` 是它的嵌套形状,随 `AboutResult` 一起导出,不另登记一条 ——
+  //  与 `GuidanceStep` 同一口径:嵌套类型只在被别人用到时才有意义。)
+  AboutResult: AboutResultSchema,
   CapabilityDescriptor: CapabilityDescriptorSchema,
   CapabilityListResult: CapabilityListResultSchema,
   // 11 票:插件面。前四条是**内核 ↔ 插件**那条接口(导出成 JSON Schema 之后,agent 不必读本仓库

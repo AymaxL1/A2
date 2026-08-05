@@ -16,11 +16,15 @@
 //      临时目录里(02 票 spike 同姿势)——门禁跑一万遍,用户那份缓存一个字节都不变。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, utimesSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { toolchainEnv } from "../src/plugin/bundle.ts";
+import {
+  bundleDirectoryPlugin,
+  sweepStaleBuildAreas,
+  toolchainEnv,
+} from "../src/plugin/bundle.ts";
 import {
   cleanupHome,
   makeHome,
@@ -517,4 +521,83 @@ test("install/build 超时是**独立的** env:它卡死装载期,却不动 desc
   expect(
     (await runCli(["capabilities", "call", "plugin.plainplug.stamp", "--json"], { home })).exitCode,
   ).toBe(0);
+});
+
+// MARK: - 13 票补的 12 票 CR 尾款(a 构建区卫生 / b 输出超限)
+
+test("尾款 a:遗留构建区按**年龄**清扫 —— 老的删掉,还在飞的那种不碰", async () => {
+  // 私有的假 tmp 目录:绝不拿真 /tmp 去试(那里可能有另一个 daemon 正在用的构建区)。
+  const fakeTmp = path.join(workspace, "tmp");
+  await mkdir(fakeTmp, { recursive: true });
+  const stale = path.join(fakeTmp, "a2-plugin-build-stale");
+  const fresh = path.join(fakeTmp, "a2-plugin-build-fresh");
+  const stranger = path.join(fakeTmp, "someone-elses-dir");
+  for (const dir of [stale, fresh, stranger]) {
+    await mkdir(path.join(dir, "project", "node_modules"), { recursive: true });
+  }
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(stale, twoHoursAgo, twoHoursAgo);
+
+  const swept = await sweepStaleBuildAreas({ tmpDir: fakeTmp });
+
+  expect(swept).toEqual([stale]);
+  expect(existsSync(stale)).toBe(false);
+  // 刚建的那个可能属于**另一个 daemon 此刻正在跑的 add**(临时目录是共享的)——删它就是把人家的装载搞崩。
+  expect(existsSync(fresh)).toBe(true);
+  expect(existsSync(stranger)).toBe(true);
+});
+
+test("尾款 a:daemon 启动时扫一遍(上一次被 SIGKILL 留下的 node_modules 不会永远躺在 /tmp)", async () => {
+  // 这一条用真 os.tmpdir():被测的就是内核默认扫哪儿。名字带 uuid,只可能是本次造的。
+  const leftover = path.join(os.tmpdir(), `a2-plugin-build-${crypto.randomUUID()}`);
+  await mkdir(path.join(leftover, "project", "node_modules"), { recursive: true });
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(leftover, twoHoursAgo, twoHoursAgo);
+
+  daemon = await startWithCache();
+
+  // 启动清扫是 fire-and-forget(不该让 daemon 晚一毫秒起来),所以等它一会儿。
+  const deadline = Date.now() + 3000;
+  while (existsSync(leftover) && Date.now() < deadline) await Bun.sleep(20);
+  expect(existsSync(leftover)).toBe(false);
+});
+
+test("尾款 b:工具链输出撞上限 → 说清是「超限」,而不是一句 exit=-1 的失败", async () => {
+  const directory = await writeDirectoryPlugin("loudplug", {
+    entry: PLAIN_SINGLE_FILE,
+    packageJson: { name: "loudplug", version: "1.0.0", private: true, type: "module" },
+  });
+  const before = buildWorkdirs().length;
+
+  // 8 字节上限:任何一次真实的 bun build 都会撞上(它至少要打一行摘要)。
+  const outcome = await bundleDirectoryPlugin(directory, {
+    env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
+    limitBytes: 8,
+  });
+
+  expect(outcome.ok).toBe(false);
+  if (outcome.ok) return;
+  expect(outcome.error.code).toBe("plugin_load_failed");
+  expect(outcome.error.message).toContain("超过上限");
+  // 撞上限时子进程是被 SIGKILL 的,退出码是 -1 —— 那个数字绝不该出现在给 agent 的报文里。
+  expect(outcome.error.message).not.toContain("exit=-1");
+  expect(outcome.error.guidance?.context?.stream).toMatch(/^std(out|err)$/);
+  expect(outcome.error.guidance?.context?.limitBytes).toBe("8");
+  // 失败路径照样把构建区收干净(尾款 a 的另一半)。
+  expect(buildWorkdirs().length).toBe(before);
+});
+
+test("尾款 b:装依赖那一步撞上限也走同一条报文(两处都消费了 overflow 标记)", async () => {
+  const directory = await writeDirectoryPlugin("loudinstall", { withDependency: true });
+  const before = buildWorkdirs().length;
+
+  const outcome = await bundleDirectoryPlugin(directory, {
+    env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
+    limitBytes: 8,
+  });
+
+  expect(outcome.ok).toBe(false);
+  if (outcome.ok) return;
+  expect(outcome.error.message).toContain("装依赖时工具链输出超过上限");
+  expect(buildWorkdirs().length).toBe(before);
 });

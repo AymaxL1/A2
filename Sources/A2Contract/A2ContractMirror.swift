@@ -135,6 +135,9 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
     case pluginListResult = "PluginListResult"
     case pluginChangeResult = "PluginChangeResult"
 
+    /// 13 票:`a2 about` 的机读面(GPL 义务的必有落点)。
+    case aboutResult = "AboutResult"
+
     /// 为什么不镜像。**每一条都要能经得起问**:理由是"壳不消费"或"CLI 自己的输出面",
     /// 不是"来不及写"。真到 10 票发现壳要投影某一条,就把它挪进 `A2MirroredContract` 并补断言。
     public var reason: String {
@@ -160,6 +163,8 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             return "**内核 ↔ 插件**那条接口(exec 一次一调)的报文:两端都是内核与插件子进程,壳不在这条链上,一个字节都不经手。它们登记成契约是为了让写插件的 agent 有机器可读的规格,不是为了给 Swift 客户端消费。"
         case .pluginRecord, .pluginListResult, .pluginChangeResult:
             return "`a2 plugin add|list|remove` 的 CLI 机读面。壳不装插件也不列插件 —— 它只需要知道「能调的东西变了」,那走已镜像的 `CapabilitySetEvent`(快照 capabilities 同一形状)。"
+        case .aboutResult:
+            return "`a2 about` 的 CLI 机读面,**不经协议**(无 op、不走 UDS —— 义务落点不许依赖 daemon 在不在)。壳侧的对位物是 `A2AboutWindow.declaration` 那份静态文本:它有意**不**向内核请求任何东西(关掉内核、没装内核,关于页照样打得开),所以壳这边没有可解的报文,镜像它只会多一处会漂的类型。"
         }
     }
 }

@@ -313,6 +313,66 @@ export const HelpResultSchema = z.object({
 });
 export type HelpResult = z.infer<typeof HelpResultSchema>;
 
+// MARK: - `a2 about`:GPL 义务的必有落点(13 票,ADR 0007 修订版)
+//
+// 裁决序里**法律义务在 agent-first 之上**,而义务的**落点必须 CLI 化**(ADR 0008 第 4 条):
+// 于是这条 result 与 `version` / `help` 同类 —— **无 op、不经 daemon**。
+// 理由不是"省一次往返",而是:daemon 没装、没跑、装坏了,声明都必须读得到。
+// 把履行义务的唯一入口挂在一个可能不在的进程上,等于没履行。
+
+/**
+ * 被调用的**外部**程序(不随包分发,ADR 0007 修订版)。
+ *
+ * `bundled` 恒为 `false` 且**写死在契约里**:它不是一个"当前取值",是一条不许翻的承诺 ——
+ * 哪天有人真往分发物里塞了 GPL 二进制,这条 schema 会当场拒绝那份报文(义务面随之全变,
+ * 那是一次要改 ADR 的决策,不该靠改一个布尔值悄悄发生)。
+ */
+export const ExternalProgramSchema = z.object({
+  name: z.string().min(1),
+  /** 它在 a2 里担任什么(如"代理数据面")。 */
+  role: z.string().min(1),
+  license: z.string().min(1),
+  /** 安装脚本会装的锁定版(与 `MihomoStatusResult.lockedVersion` 同源)。 */
+  lockedVersion: z.string().min(1),
+  /** **恒为 false**:我们不分发它的二进制。 */
+  bundled: z.literal(false),
+  /** 怎么被调用的 —— 独立子进程红线的原文落点。 */
+  invocation: z.string().min(1),
+  /** 源码获取地址(GPL 的"源码获取指引"义务落在这里)。 */
+  source: z.string().min(1),
+  /** 发布渠道(安装脚本从这里取二进制)。 */
+  releases: z.string().min(1),
+  /** 许可证全文的公开地址。 */
+  licenseUrl: z.string().min(1),
+});
+export type ExternalProgram = z.infer<typeof ExternalProgramSchema>;
+
+/** 随包静态文本的一条:名字、用途、**应当在的位置**、以及此刻在不在。 */
+export const NoticeFileSchema = z.object({
+  name: z.string().min(1),
+  purpose: z.string().min(1),
+  /** 与 `a2` 同目录的绝对路径(单文件直接下载时可能不在 —— `present` 说的就是这件事)。 */
+  path: z.string().min(1),
+  present: z.boolean(),
+});
+export type NoticeFile = z.infer<typeof NoticeFileSchema>;
+
+/** `a2 about --json` 的 result。人类面(无 `--json`)是同一批事实的散文渲染,不另写一套说辞。 */
+export const AboutResultSchema = z.object({
+  product: z.string().min(1),
+  version: z.string().min(1),
+  protocol: z.literal(PROTOCOL_VERSION),
+  /** a2 本体的许可口径(它不含也不链接任何 GPL 代码 —— 这正是红线的意义)。 */
+  license: z.string().min(1),
+  externalPrograms: z.array(ExternalProgramSchema).min(1),
+  /** 外部程序声明的**静态正文**:随包文本与本字段是同一份字节。 */
+  declaration: z.string().min(1),
+  noticeFiles: z.array(NoticeFileSchema).min(1),
+  /** 升级口径。**没有静默更新**(spec 分发节 / ADR 0006 暂缓清单),这句话进机读面。 */
+  upgrade: z.string().min(1),
+});
+export type AboutResult = z.infer<typeof AboutResultSchema>;
+
 // MARK: - 能力 manifest 与能力面 result(04 票)
 
 /**

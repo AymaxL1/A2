@@ -1,0 +1,187 @@
+#!/bin/bash
+# 组装一个发布包(13 票)—— 各平台单文件 `a2` + 随包静态文本 + 安装脚本 + `a2-panel.app` + 发布元数据。
+#
+#   bash Scripts/release-assemble.sh [--output <dir>] [--targets a,b] [--bin <平台>=<路径>]…
+#                                    [--app <A2 Panel.app 或 .zip>] [--base <渠道根地址>]
+#                                    [--skip-self-check]
+#
+# ============================================================================
+# 产出物(全部落在 --output 目录,**不入库**:.gitignore 挡着 .build/)
+# ============================================================================
+#   a2-<平台>                       内核单文件 bin(60–95MiB;bun compile,内置运行时)
+#   NOTICE-external-programs.txt    外部程序声明 —— **`a2 about` 的输出原样落盘**(同一份字节)
+#   LICENSE-mihomo-GPL-3.0.txt      GPL-3.0 全文(docs/legal/ 那一份)
+#   install.sh                      curl 安装脚本(Scripts/install.sh 原样)
+#   A2-Panel-<版本>-macos.zip       可选随附的菜单栏壳(要 --app 才有)
+#   a2-release.json                 发布元数据:版本、各工件 SHA-256、**mihomo 锁定版**
+#
+# ============================================================================
+# 三条纪律
+# ============================================================================
+#   ① **平台表只有一份**(`kernel/src/release/manifest.ts`),本脚本经 release-targets.ts 读它 ——
+#      资产名在两处手写就会与元数据对不上,而安装脚本正是按元数据的名字去下载。
+#   ② **声明文本不是手抄的**:跑 `a2 about` 落盘。抄一份的那一刻,随包文本就开始与 bin 漂移了。
+#   ③ **自检**:组装完用**包里那个 bin** 跑一次 `a2 about --json`,确认它看得见随包的两份文本
+#      (`present: true`)。少拷一份声明的发布包,在这里就该停下,而不是发出去之后才发现。
+#      (`--skip-self-check` 只给"用假 bin 验脚本结构"的测试用。)
+#
+# 交叉编译:`--target=bun-linux-x64` 首次会下载对应的目标运行时(要联网,可能几分钟);
+#   之后走 bun 的缓存。本机跑不了 Linux 产物 —— 只验"能产出 + ELF 文件头对"(13 票如实记账)。
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUTPUT="$ROOT/.build/release"
+TARGETS=""
+APP_SOURCE=""
+CHANNEL_BASE=""
+SELF_CHECK=1
+PREBUILT=()   # "平台=路径"
+
+BUN_BIN="$(command -v bun 2>/dev/null)"
+[ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN_BIN="$HOME/.bun/bin/bun"
+[ -n "$BUN_BIN" ] || { echo "FAIL: 找不到 bun(内核是 TS,没有它出不了产物)"; exit 1; }
+
+die() { echo "FAIL: $1" >&2; exit 1; }
+need_value() { [ "$2" -ge 2 ] || die "$1 需要一个值"; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output) need_value --output $#; OUTPUT="$2"; shift 2 ;;
+    --targets) need_value --targets $#; TARGETS="$2"; shift 2 ;;
+    --bin) need_value --bin $#; PREBUILT+=("$2"); shift 2 ;;
+    --app) need_value --app $#; APP_SOURCE="$2"; shift 2 ;;
+    --base) need_value --base $#; CHANNEL_BASE="$2"; shift 2 ;;
+    --skip-self-check) SELF_CHECK=0; shift ;;
+    -h|--help) sed -n '1,30p' "$0"; exit 0 ;;
+    *) die "未知参数:$1" ;;
+  esac
+done
+
+# ---- 平台表(唯一来源在 TS 侧)-----------------------------------------------------
+TABLE="$("$BUN_BIN" run "$ROOT/kernel/scripts/release-targets.ts")" || die "读不到平台表"
+if [ -z "$TARGETS" ]; then
+  TARGETS="$(printf '%s\n' "$TABLE" | awk -F'\t' '$4=="yes"{printf "%s%s", sep, $1; sep=","}')"
+fi
+
+asset_of()  { printf '%s\n' "$TABLE" | awk -F'\t' -v p="$1" '$1==p{print $2}'; }
+target_of() { printf '%s\n' "$TABLE" | awk -F'\t' -v p="$1" '$1==p{print $3}'; }
+
+# 本机平台键(与 install.sh / KERNEL_TARGETS 同一套写法:x64 而非 amd64)。
+host_platform() {
+  case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    Linux) os="linux" ;;
+    *) echo ""; return ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) arch="arm64" ;;
+    x86_64|amd64) arch="x64" ;;
+    *) echo ""; return ;;
+  esac
+  printf '%s-%s' "$os" "$arch"
+}
+HOST_PLATFORM="$(host_platform)"
+
+prebuilt_for() {  # $1=平台 → 路径(没有就空)
+  local entry
+  for entry in ${PREBUILT+"${PREBUILT[@]}"}; do
+    case "$entry" in
+      "$1="*) printf '%s' "${entry#*=}"; return ;;
+    esac
+  done
+  printf ''
+}
+
+echo "==== release-assemble.sh ===="
+echo "  输出   $OUTPUT"
+echo "  平台   $TARGETS"
+
+rm -rf "$OUTPUT" || die "清不掉旧的输出目录:$OUTPUT"
+mkdir -p "$OUTPUT" || die "建不了输出目录:$OUTPUT"
+
+# ---- ① 内核 bin ------------------------------------------------------------------
+IFS=',' read -r -a TARGET_LIST <<<"$TARGETS"
+for platform in "${TARGET_LIST[@]}"; do
+  [ -n "$platform" ] || continue
+  asset="$(asset_of "$platform")"
+  bun_target="$(target_of "$platform")"
+  [ -n "$asset" ] && [ -n "$bun_target" ] || die "平台表里没有 $platform(可选:$(printf '%s\n' "$TABLE" | cut -f1 | tr '\n' ' '))"
+
+  given="$(prebuilt_for "$platform")"
+  if [ -n "$given" ]; then
+    [ -f "$given" ] || die "--bin $platform= 指的文件不存在:$given"
+    cp "$given" "$OUTPUT/$asset" || die "拷贝 $given 失败"
+    echo "-- $platform:用现成产物 $given"
+  else
+    echo "-- $platform:bun build --compile --target=$bun_target"
+    ( cd "$ROOT/kernel" && "$BUN_BIN" build ./src/cli/main.ts --compile --target="$bun_target" \
+        --outfile "$OUTPUT/$asset" ) || die "编译 $platform 失败"
+  fi
+  chmod 755 "$OUTPUT/$asset"
+done
+
+# ---- ② 随包静态文本:`a2 about` 的输出原样落盘 -------------------------------------
+# 优先用**包里那个本机 bin**(它就是用户将来跑的那一份);本次没产出本机平台时回落源码入口 ——
+# 两者是同一份源码渲染出来的同一段文字,但用 bin 更能证明"这份包里的 a2 说得出这段话"。
+NOTICE="$OUTPUT/NOTICE-external-programs.txt"
+HOST_ASSET=""
+[ -n "$HOST_PLATFORM" ] && HOST_ASSET="$(asset_of "$HOST_PLATFORM")"
+if [ -n "$HOST_ASSET" ] && [ -x "$OUTPUT/$HOST_ASSET" ]; then
+  "$OUTPUT/$HOST_ASSET" about >"$NOTICE" || die "跑 a2 about 失败(包里的本机 bin)"
+  echo "-- 声明文本:由 $HOST_ASSET about 产出"
+else
+  ( cd "$ROOT/kernel" && "$BUN_BIN" run ./src/cli/main.ts about ) >"$NOTICE" \
+    || die "跑 a2 about 失败(源码入口)"
+  echo "-- 声明文本:由源码入口产出(本次没有本机平台的产物)"
+fi
+[ -s "$NOTICE" ] || die "声明文本是空的 —— GPL 义务的随包落点不能是个空文件"
+
+cp "$ROOT/docs/legal/LICENSE-mihomo-GPL-3.0.txt" "$OUTPUT/" || die "拷 GPL 全文失败"
+cp "$ROOT/Scripts/install.sh" "$OUTPUT/install.sh" || die "拷安装脚本失败"
+chmod 755 "$OUTPUT/install.sh"
+
+# ---- ③ 版本号:问 bin 自己(单一来源)---------------------------------------------
+if [ -n "$HOST_ASSET" ] && [ -x "$OUTPUT/$HOST_ASSET" ]; then
+  VERSION="$("$OUTPUT/$HOST_ASSET" version 2>/dev/null | tr -d '\r\n')"
+else
+  VERSION="$( ( cd "$ROOT/kernel" && "$BUN_BIN" run ./src/cli/main.ts version ) 2>/dev/null | tr -d '\r\n')"
+fi
+[ -n "$VERSION" ] || die "问不出版本号"
+
+# ---- ④ 可选随附:A2 Panel.app -----------------------------------------------------
+if [ -n "$APP_SOURCE" ]; then
+  APP_ZIP="$OUTPUT/A2-Panel-$VERSION-macos.zip"
+  case "$APP_SOURCE" in
+    *.zip)
+      cp "$APP_SOURCE" "$APP_ZIP" || die "拷 .app 压缩包失败" ;;
+    *)
+      [ -d "$APP_SOURCE" ] || die "--app 既不是 .zip 也不是一个 .app 目录:$APP_SOURCE"
+      command -v ditto >/dev/null 2>&1 || die "压 .app 需要 ditto(macOS 自带);非 mac 上请先自己压好再 --app <zip>"
+      # ditto -c -k --keepParent:保住 bundle 的符号链接与扩展属性,签名不会被压坏。
+      ditto -c -k --keepParent "$APP_SOURCE" "$APP_ZIP" || die "压 .app 失败" ;;
+  esac
+  echo "-- 随附壳:$(basename "$APP_ZIP")"
+fi
+
+# ---- ⑤ 发布元数据(摘要 + mihomo 锁定版)------------------------------------------
+"$BUN_BIN" run "$ROOT/kernel/scripts/render-release-manifest.ts" "$OUTPUT" "$VERSION" "$CHANNEL_BASE" \
+  || die "生成发布元数据失败(常见原因:发布包里混进了 classifyArtifact 不认识的文件)"
+
+# ---- ⑥ 自检:包里那个 bin 看得见随包的两份文本吗 ------------------------------------
+if [ "$SELF_CHECK" = "1" ]; then
+  [ -n "$HOST_ASSET" ] && [ -x "$OUTPUT/$HOST_ASSET" ] \
+    || die "自检需要本机平台的产物($HOST_PLATFORM);只交叉编译时请显式 --skip-self-check"
+  ABOUT_JSON="$("$OUTPUT/$HOST_ASSET" about --json)" || die "自检:a2 about --json 跑不起来"
+  PRESENT_COUNT="$(printf '%s' "$ABOUT_JSON" | grep -o '"present":true' | wc -l | tr -d ' ')"
+  [ "$PRESENT_COUNT" = "2" ] \
+    || die "自检:包里的 a2 只看见 $PRESENT_COUNT 份随包静态文本(应为 2)—— 声明文本没落对位置"
+  echo "-- 自检通过:包里的 a2 看得见 NOTICE 与 GPL 全文两份静态文本"
+fi
+
+# ---- 收口 ------------------------------------------------------------------------
+echo
+echo "OK: $OUTPUT"
+ls -l "$OUTPUT" | awk 'NR>1 {printf "    %-34s %10s 字节\n", $NF, $5}'
+echo
+echo "发布渠道:${CHANNEL_BASE:-(未定 —— 元数据里 channel.status=undecided,安装脚本会明说)}"
+echo "试装(不出网):A2_RELEASE_BASE=\"$OUTPUT\" A2_INSTALL_DIR=/tmp/a2-try sh \"$OUTPUT/install.sh\""

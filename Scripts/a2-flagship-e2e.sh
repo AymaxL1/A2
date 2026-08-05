@@ -238,7 +238,13 @@ else
 fi
 
 # 零轮询:空闲两秒里请求数一条都不涨。
-sleep 2.5
+# **等那一行出现,而不是睡一个刚好够的时长**(13 票修的一处零余量竞态):壳先要"请求数连续 0.5 秒
+# 没变"才开始计,再空转 2 秒才打印 —— 与原来那句 `sleep 2.5` 恰好等长,机器一忙就抓到空字符串,
+# 于是一条真绿的断言被报成红。判据不变,只是把"睡够了吗"换成"它说了吗"。
+for _ in $(seq 1 150); do
+  grep -q '^PANEL_IDLE:' "$BOX/probe-approve.log" 2>/dev/null && break
+  sleep 0.1
+done
 IDLE_LINE="$(grep -m1 '^PANEL_IDLE:' "$BOX/probe-approve.log" 2>/dev/null)"
 IDLE_BEFORE="$(printf '%s' "$IDLE_LINE" | sed -n 's/.*before=\([0-9]*\).*/\1/p')"
 IDLE_AFTER="$(printf '%s' "$IDLE_LINE" | sed -n 's/.*after=\([0-9]*\).*/\1/p')"

@@ -1,0 +1,35 @@
+{
+  "product": "a2",
+  "version": "0.1.0",
+  "protocol": 1,
+  "license": "a2 本体:未开源,保留所有权利。它不包含、也不链接任何 GPL 代码。",
+  "externalPrograms": [
+    {
+      "name": "mihomo(Mihomo Meta)",
+      "role": "代理数据面",
+      "license": "GPL-3.0",
+      "lockedVersion": "v1.19.28",
+      "bundled": false,
+      "invocation": "只以独立子进程运行,控制面只走本地 REST API / 配置文件,永不进程内链接。",
+      "source": "https://github.com/MetaCubeX/mihomo",
+      "releases": "https://github.com/MetaCubeX/mihomo/releases",
+      "licenseUrl": "https://www.gnu.org/licenses/gpl-3.0.txt"
+    }
+  ],
+  "declaration": "── 外部程序声明 ──\na2 会调用外部程序 mihomo(GPL-3.0),不随任何分发物打包。",
+  "noticeFiles": [
+    {
+      "name": "NOTICE-external-programs.txt",
+      "purpose": "外部程序声明的静态副本",
+      "path": "/usr/local/bin/NOTICE-external-programs.txt",
+      "present": true
+    },
+    {
+      "name": "LICENSE-mihomo-GPL-3.0.txt",
+      "purpose": "GPL-3.0 全文的离线副本",
+      "path": "/usr/local/bin/LICENSE-mihomo-GPL-3.0.txt",
+      "present": false
+    }
+  ],
+  "upgrade": "升级永远显式:重跑安装脚本;a2 不做静默更新。"
+}

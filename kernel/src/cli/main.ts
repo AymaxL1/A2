@@ -7,6 +7,7 @@ import { ExitCode } from "../contract/exit-codes.ts";
 import { PROTOCOL_VERSION, successResponse } from "../contract/wire.ts";
 import { resolvePaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
+import { aboutCommand } from "./about.ts";
 import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
 import { domainCommand } from "./domain.ts";
@@ -36,6 +37,11 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
       human: KERNEL_VERSION,
       exitCode: ExitCode.success,
     };
+  }
+  // GPL 义务的必有落点(13 票 / ADR 0007 修订版)。与 version/help 同类:**不经 daemon** ——
+  // 声明必须在 daemon 没装、没跑的时候一样读得到。
+  if (command === "about") {
+    return aboutCommand(args);
   }
   if (command === "status") {
     if (args.length > 0) return usageOutcome(`status 不接受多余参数:${args.join(" ")}`);
