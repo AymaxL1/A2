@@ -786,10 +786,14 @@ test("扫描面默认值:配置只看 mihomo 自己的标准位置,二进制只�
   expect(loopbackTarget("example.com:9090")).toBeUndefined();
 });
 
-test("锁版元数据与旧仓那份实测记录同源(换版本必须两处一起改)", async () => {
+test("锁版元数据与那份实测记录同源(换版本必须两处一起改)", async () => {
   // 唯一有实测背书的版本与摘要来自旧仓随包分发过的那份内核。两处对不上就说明有人单方面改了锁版。
+  // **落点在 10 票搬过家**:旧仓 `Sources/PluginProxy/Resources/MIHOMO-VERSION.txt` 随 Swift 逻辑面
+  //   整族退场,那份实测记录移到 `kernel/contract/MIHOMO-VERSION.txt` —— 锁版事实自此完全归内核。
+  //   (随包的那份 42MiB 二进制**没有跟着搬**:ADR 0007 修订版起不再分发 GPL 二进制,
+  //    锁版的技术含义已改判为「下载物必须对得上摘要」,见 swift-parity-map「有意的契约变更」12。)
   const recorded = await Bun.file(
-    path.resolve(import.meta.dir, "../../Sources/PluginProxy/Resources/MIHOMO-VERSION.txt"),
+    path.resolve(import.meta.dir, "../contract/MIHOMO-VERSION.txt"),
   ).text();
   expect(recorded).toContain(MIHOMO_LOCKED_VERSION);
   expect(recorded).toContain(MIHOMO_ASSET_DIGESTS["darwin-arm64"] as string);

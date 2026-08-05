@@ -1,68 +1,52 @@
-# Tests/ —— swift-testing 用例(17 票起是本仓库单元/域断言的唯一落点)
+# Tests/ —— swift-testing 用例(壳侧断言的唯一落点)
 
-## ⚠️ 先读这条:**裸跑 `swift test` 没有清场网**
-
-`Tests/AAAgentTestKitTests/SystemAgentPortTests.swift` 会起**真进程**(`/bin/sh`、`cat`、`yes`,
-以及唯一时长的 `sleep 87137`)。
-
-* 经 `bash Scripts/check.sh` 跑时是安全的:`Scripts/check/bootstrap.sh` 装了 `trap cleanup EXIT`,
-  `cleanup()` 里有 `pkill -f "sleep 87137"` —— 即使用例中途崩了、门禁被 Ctrl-C 了,残留进程也会被清掉。
-* **直接手敲 `swift test` 时那层网不存在。** 如果用例在 `terminate` 之前被打断,
-  `sleep 87137` 会留在你的机器上(约 24 小时后才自己退)。
-
-所以:
-
-```bash
-# 推荐:走门禁(自带清场)
-bash Scripts/check.sh
-
-# 如果一定要单跑,跑完请自己收尾:
-pkill -f "sleep 87137"
-```
-
-（`87137` 是刻意选的唯一时长,`pkill -f` 按它匹配不会误伤你机器上别的 `sleep`。
-反孤儿探针另用 `87139`,同理。）
+10 票「壳原子切换」之后,本目录只剩 **a2 系**四套:旧的 `AAContractsTests` /
+`AAHostTestKitTests` / `AAAgentTestKitTests`(182 条)随旧 Swift 逻辑面整族退场,
+每一条的落定(映射 / 合并 / 淘汰 / 顺延)逐条写在 [`kernel/test/swift-parity-map.md`](../kernel/test/swift-parity-map.md)
+的「10 票收口」一节。
 
 ## 怎么跑
 
-本机工具链(`~/Library/Developer/Toolchains/swift-latest.xctoolchain`)**不带 XCTest**,
-故必须显式禁掉它、点名 swift-testing:
-
 ```bash
-swift test --disable-xctest --enable-swift-testing --no-parallel
+bash Scripts/check.sh        # 推荐:门禁四件套(swift test 是其中第②件)
 ```
 
-`--no-parallel` 不是可选装饰:`SystemAgentPortTests` 碰真进程/真信号,并有一条按耗时判定的
-阻塞语义断言,并行会让它变得不确定。门禁(`Scripts/check/swift-test.sh`)也是这么跑的。
-
-两个适配层套件读 01/02 spike 落盘的真实样本,路径经环境变量注入(缺失即 fail-closed,不静默跳过):
+单跑壳侧那部分:
 
 ```bash
-AA_SPIKE_DIR="$PWD/.scratch/agent-delegation/research" swift test --disable-xctest --enable-swift-testing --no-parallel
+swift test --no-parallel
 ```
+
+本机工具链(`~/Library/Developer/Toolchains/swift-latest.xctoolchain`)不带 XCTest,
+必要时显式点名 swift-testing:`swift test --disable-xctest --enable-swift-testing --no-parallel`。
+
+`--no-parallel` 不是可选装饰,两条理由:
+
+* **壳快照要在主 actor 上做离屏渲染**,并行调度下渲染与断言的时序会变得不确定;
+* 09 票撞过一次真的并行 flake(假内核跑在全局队列上、被并行用例的 sleep 占住线程池),
+  修法是给假内核一条专用 `Thread` + 按判据差给余量,但门禁口径仍取 `--no-parallel`。
+
+**这批用例不起任何进程、不碰真实 `~/.a2`、不发一条真网络请求**,所以裸跑是安全的
+(17 票时代那条「`sleep 87137` 会留在你机器上」的警告随 `AAAgentTestKitTests` 一起退场)。
+起真 daemon 的那一关在 `Scripts/a2-flagship-e2e.sh`(门禁第③步),它自带 trap 清场。
 
 ## target 布局
 
 | target | 内容 | 备注 |
 | --- | --- | --- |
-| `AAContractsTests` | 退出码锁定表 | 11 票的 swift-testing 试点 |
-| `AAHostTestKitTests` | Registry / Proxy / SystemProxy / CrashRecovery / Subscription / MenuModel 六套 | 全纯逻辑,假件驱动 |
-| `AAAgentTestKitTests` | AgentCore / ClaudeAdapter / CodexAdapter / AgentTask / Watchdog / LaunchAssembler / SystemAgentPort 七套 | **最后一套碰真进程** |
+| `A2ContractTests` | 契约金标的 **Swift 半边**:范围对账 / 合法样本往返 / 非法样本必拒 / 封闭词表对账 / 可选字段松紧 | 读 `kernel/contract/golden/` 的同一批样本 |
+| `A2KernelClientTests` | UDS 客户端的协议逻辑:字节级拆行 / id 相关 / 推送分流 / pending 顺延 | 假内核用 `socketpair()` 现造 |
+| `A2PanelTests` | 壳纯逻辑:菜单覆盖面与可追溯性 / 四态如实反映 / 六族事件投影 / 确认原样呈现 | 零 AppKit |
+| `A2PanelSnapshotTests` | **壳快照**:渲染器 B 离屏渲染 × 入库 golden(像素 + 模型文本) | 要 AppKit,`@MainActor` |
 
-**假件不在这里**:`ProxyFakes` / `NetworkConfigFakes` / `SelfHealFakes` / `SubscriptionFakes` /
-`MenuFixtures` 仍住在 `Sources/AAHostTestKit/`,`FakeAgentPort` / `FakeTaskPorts` 仍住在
-`Sources/AAAgentTestKit/`。理由是硬约束而不是偏好:它们还有**可执行**消费者
-(`menu-snapshot` 用 `MenuFixtures`,`registry-tests` 用 `SystemAgentPortOrphanProbe`),
+**固定装置不在这里**:`A2PanelFixtures` 住在 `Sources/`。理由是硬约束而不是偏好 ——
+它还有**可执行**消费者(`a2-panel-snapshot` 重录 golden、`a2-panel-probe` 跑旗舰 e2e),
 而 SPM 的 `executableTarget` 不能依赖 `testTarget`。
 
-## 改用例名之前请先读这条
+## 两条与门禁的隐形契约(改之前先读)
 
-`Scripts/check/unit-and-domain.sh`(96 条)与 `Scripts/check/menubar.sh`(2 条)一共 **98 条**
-`assert_contains` 直接 grep `swift test` 的输出文本,而它们 grep 的**就是这些 `@Test` 的名字**
-(17 票迁移时逐字取自旧的手写断言文案)。
-
-* 改一个被 grep 的 `@Test` 名 = 改门禁 → 必须同步改 `Scripts/check/*.sh` 里对应那条。
-* `@Suite` 名里那些看着奇怪的 `XXX_TESTS passed=` 标记同理:旧 runner 打印过这样的汇总行,
-  shell 侧拿它当「本套件确实跑了」的证据;迁移后由 `✔ Suite "…" passed` 承担,标记原样嵌在套件名里。
-* `MenuModelConformanceTests` 里两行 `print("MENUBAR_ASSERT1/2: ok=…")` 也是门禁 grep 的目标,
-  别当调试残留删掉。
+1. **golden 路径由 `#filePath` 推仓库根**,不经环境变量注入 —— 于是这批断言在任何 `swift test`
+   下都成立,门禁脚本不必喂路径。代价是测试文件不能随便挪位置(挪了要同步改那段推导)。
+2. `A2PanelFixtures.capabilities` 是一份**手写对照**的内核 manifest。它漂了,纯逻辑测试**不会**红 ——
+   兜住它的是旗舰 e2e:`a2-panel-probe` 连上真内核后逐条核对(`PANEL_MANIFEST` / `PANEL_COVERAGE`)。
+   改那份清单时,请把 `Scripts/a2-flagship-e2e.sh` 也跑一遍。

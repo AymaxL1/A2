@@ -11,7 +11,8 @@ import type { MihomoShortfall } from "../contract/wire.ts";
 /**
  * 锁定版本。
  *
- * **出处**:`Sources/PluginProxy/Resources/MIHOMO-VERSION.txt` 首行 `Mihomo Meta v1.19.28 darwin arm64` ——
+ * **出处**:`kernel/contract/MIHOMO-VERSION.txt` 首行 `Mihomo Meta v1.19.28 darwin arm64` ——
+ * (该文件原在 `Sources/PluginProxy/Resources/`,10 票旧 Swift 面退场时搬到这里 —— 锁版事实自此完全归内核。)
  * 那是旧仓随包分发过、且被旧门禁逐字节校验过的那一份,是本仓库里唯一一个**有实测背书**的版本。
  * (研究文档 `docs/research/mihomo-integration.md` §7 记录 v1.19.29 是当时的最新稳定版,但我们没有它的
  * 校验和实测背书 —— 锁版必须锁到能验的那一版,而不是最新的那一版。换版是一次显式决策,连同下面的摘要表一起改。)
@@ -33,7 +34,8 @@ export const MIHOMO_RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases
 /**
  * 锁定版各平台资产的 **SHA-256(解压后的可执行本体)**。
  *
- * `darwin-arm64` 那条是本机 `shasum -a 256 Sources/PluginProxy/Resources/mihomo-darwin-arm64` 现场核对过的,
+ * `darwin-arm64` 那条是当年对随包那份二进制 `shasum -a 256` 现场核对过的(二进制已随 10 票退场 ——
+ * ADR 0007 修订版起不再分发 GPL 二进制),
  * 与 `MIHOMO-VERSION.txt` 的 `SHA-256:` 行一致。**其余平台留空是有意的**:没有可信摘要就没有可信安装 ——
  * 内核在那些平台上 fail-closed 拒绝下载并给出指引,而不是"先装了再说"。补表的方式写在拒绝报文里。
  */
