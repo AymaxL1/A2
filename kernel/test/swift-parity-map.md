@@ -416,7 +416,9 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 | `AgentWatchdogTests`(看门狗与取消) | 13 | 顺延 | 同上 |
 | `AgentLaunchAssemblerTests`(命令行组装 / CODEX_HOME) | 11 | 顺延 | 同上 |
 | `SystemAgentPortTests`(**真进程** / 进程组 / 反孤儿) | 11 | 顺延 | 同上 |
-| `Scripts/check/agent-e2e.sh`(`aa-agent` CLI × 假 agent 全链 + 反孤儿信号两路径) | 21 | 顺延 | 同上 |
+| `Scripts/check/agent-e2e.sh`(`aa-agent` CLI × 假 agent 全链 + 反孤儿信号两路径) | 21(运行时) | 顺延 | 同上 |
+
+**「21 条」的记账口径(11 票 CR 尾款 c 补记,2026-08-05)**:这个 21 数的是脚本里 **`assert_*` 的调用点**(退场前那一版逐条数得 21 处)。它**不是**该脚本的全部断言点:另有 **8 处内联的 `echo "PASS: …" / echo "FAIL: …"` 判定分支**(反孤儿探针那两段:进程组存活、atexit 清空、SIGTERM 前存活、SIGTERM 后清空,以及样本缺失的兜底),它们不走 `assert_*` 因而没被计入 —— **断言点合计 29**。顺延的是整族行为规范,不因数字口径而变;写在这里是免得将来有人拿 29 去对 21 时以为漏了账。本表其余各组的数字凡取自脚本的,一律是「`assert_*` 调用点」这一口径。
 
 **为什么是顺延而不是淘汰**:05 票裁定「agent-delegation 审批**收敛到内核统一仲裁**;
 **执行器将来在内核内以 TS 重生**」,01 票已把这四条修订指令写进 `.scratch/agent-delegation/spec.md` 文末。
@@ -458,7 +460,7 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 
 | 组 | 旧断言 | 处置 | 新落点 |
 |---|---|---|---|
-| 3(49 条 PASS) | **架构铁律**:`PluginProxy` / `AAAgentCore` / `AAAgentSystem` 不 import 任何 `Host*`;反孤儿钩子的依赖闭包守卫 | **改判(同一条精神,新的载体)** | 旧铁律护的是「插件域不得依赖宿主」。新架构里那条边界由**进程边界**承担:插件是进程外子进程、只经协议白名单拿能力(ADR 0011);壳这侧的对位物是 `Package.swift` 的依赖图本身(`A2Panel` 零 AppKit、`A2Contract` 零依赖)+ `A2PanelTests` ▸ 菜单只投影 proxy 域。**11 票要为插件侧立新的结构断言**(那是它的面) |
+| 3(49 条 PASS) | **架构铁律**:`PluginProxy` / `AAAgentCore` / `AAAgentSystem` 不 import 任何 `Host*`;反孤儿钩子的依赖闭包守卫 | **改判(同一条精神,新的载体)** | 旧铁律护的是「插件域不得依赖宿主」。新架构里那条边界由**进程边界**承担:插件是进程外子进程、只经协议白名单拿能力(ADR 0011);壳这侧的对位物是 `Package.swift` 的依赖图本身(`A2Panel` 零 AppKit、`A2Contract` 零依赖)+ `A2PanelTests` ▸ 菜单只投影 proxy 域。**插件侧的新断言已由 11 票落地(2026-08-05,此账销清)**:`kernel/test/cli-plugin.test.ts` ▸ 红线①插件 pid ≠ 内核 pid(进程外)、▸ 红线②插件环境里一个 `A2_*` 都没有(协议白名单)、▸ 红线③ spawn 恒带 `--no-install` 且 import 不在的包当场硬失败(不联网现装)、▸ 红线④内置能力无一以 `plugin.` 开头(命名空间隔离);外加 `Scripts/a2-plugin-e2e.sh` 幕 3 在**真内核 + 真插件子进程**上把前两条再验一遍(3-1/3-2)。旧铁律靠 49 条 grep 守「不许 import」,新铁律靠**进程事实**守「根本不在一个进程里」—— 后者更难被绕过 |
 | 4(7 条) | `aa --help` 逐码打印退出码语义表 | 合并 | `usage.ts` 的 USAGE 里仍有整行退出码表;`cli-basics.test.ts` ▸ help --json 断言帮助可机读(04 票 C 组已登记同款) |
 | 5(8 条) | `aa docs agents-md` 接入片段(prefix_rule / require_escalated / capabilities call / pending / exit code) | **顺延 13** | 04 票 C 组已标顺延 13(agent 指引物随分发工件走)。**注意其中两条已作废**:`capabilities result <request-id>` 与 `"pending":true` —— pending 态整体淘汰(见「有意的契约变更」6),重写指引时不许照抄 |
 | 6(约 12 条) | `aa install-cli` 幂等 / 覆盖 / canonical 化 / `--uninstall` | **淘汰(前提没了)** | `aa` 已退场;CLI 就是内核 bin `a2` 自己,分发形态改判为**单文件下载 + curl 安装脚本**(ADR 0008 / spec 分发节),没有「把 `.app` 里的 CLI 链进 PATH」这回事了。安装脚本的断言归 **13 票** |
