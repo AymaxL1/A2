@@ -24,8 +24,7 @@
       ],
       "context": {
         "home": "/Users/alice/.a2",
-        "binPath": "/Users/alice/.a2/bin/a2",
-        "envOverride": "A2_SELF_BIN"
+        "binPath": "/Users/alice/.a2/bin/a2"
       }
     }
   }

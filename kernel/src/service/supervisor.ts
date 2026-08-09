@@ -62,13 +62,16 @@ export interface Supervisor {
   /** 显式拉起进程(装载了但没在跑时用)。 */
   start(): Promise<void>;
   /**
-   * 显式重启进程。两个调用场景,**两端各占一个**:
+   * 显式重启进程。**三处调用,两类原因**:
    *   * **unit 内容漂了而服务正跑着**(`converge.ts`):重写文件只收敛了「磁盘上写的是什么」,
    *     已经在跑的那个进程仍在用旧的 ExecStart/环境变量。这一路只有 `loadStartsProcess` 为假的
    *     supervisor(systemd)走得到 —— launchd 的 bootout + bootstrap 本身就把进程换了。
-   *   * **文件换了而 unit 没变**(`mihomo/manager.ts` 的 `mihomoUpgrade`):二进制被换成新版本,
-   *     unit 内容一个字都没动,收敛逻辑因此不会做任何事,而跑着的那个进程还攥着旧 inode。
-   *     这一路**两端都走得到**,launchd 上就是下面那条 `kickstart -k`。
+   *   * **文件换了而 unit 没变** —— **两处**,同一条道理:
+   *       - `mihomo/manager.ts` 的 `mihomoUpgrade`:mihomo 二进制被换成锁定版;
+   *       - `service/manager.ts` 的 `--copy-to-home` 显式升级(15 票):`$A2_HOME/bin/a2` 那份
+   *         **内核自己的拷贝**被换成新版本。
+   *     两处的 unit 内容都一个字没动,收敛逻辑因此不会做任何事,而跑着的进程还攥着旧 inode。
+   *     这一类**两端都走得到**,launchd 上就是下面那条 `kickstart -k`。
    */
   restart(): Promise<void>;
   /** 停 + 取消自启 + 从 supervisor 卸下(unit 文件由 manager 删)。 */
@@ -77,6 +80,22 @@ export interface Supervisor {
 
 export function createSupervisor(plan: ServicePlan): Supervisor {
   return plan.kind === "launchd" ? new LaunchdSupervisor(plan) : new SystemdSupervisor(plan);
+}
+
+/**
+ * **这一次**的装载有没有顺带把进程拉起来。`loadStartsProcess` 说的是这个 supervisor 的性子,
+ * 这个函数说的是这一次的事实(装载动作真的发生了 + 该 supervisor 的装载含拉起)。
+ *
+ * 判据只留一份:两个调用方问的是同一件事 —— `converge.ts` 据此决定「要不要空等 pid」,
+ * `service/manager.ts` 据此决定「要不要为换了的 bin 再重启一次」。各写一遍就是两处会各自漂移的真值
+ * (15 票 CR 尾款 3)。两边各自还有自己的另一半条件(前者是"刚 restart 过",后者是"显式拉起/重启过"),
+ * 那部分留在各自那里。
+ */
+export function loadImpliesStart(
+  supervisor: Pick<Supervisor, "loadStartsProcess">,
+  actions: UnitAction[],
+): boolean {
+  return supervisor.loadStartsProcess && actions.includes("supervisor_loaded");
 }
 
 interface CommandResult {
@@ -169,7 +188,9 @@ class LaunchdSupervisor implements Supervisor {
 
   /**
    * `-k` = 先杀再拉。**漂移收敛那一路走不到这里**(launchd 的 load 已经换了进程),
-   * 但 `a2 mihomo upgrade` 走得到:换二进制不改 unit,只能靠这条把进程换到新 inode 上。
+   * 但「换了文件而 unit 没变」那一类走得到,而且**是两处**:`a2 mihomo upgrade` 换 mihomo 二进制、
+   * `a2 service install --copy-to-home` 换内核自己那份拷贝(15 票)——
+   * 都只能靠这条把进程换到新 inode 上。
    */
   async restart(): Promise<void> {
     await run(["launchctl", "kickstart", "-k", this.#target()]);

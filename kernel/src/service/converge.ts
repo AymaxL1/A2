@@ -10,7 +10,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Supervisor, SupervisorState, UnitAction } from "./supervisor.ts";
+import { loadImpliesStart, type Supervisor, type SupervisorState, type UnitAction } from "./supervisor.ts";
 import { LOG_DIR_MODE, UNIT_FILE_MODE, type ServicePlan } from "./unit.ts";
 
 /** 等"进程真的起来/真的没了"的上限。systemd/launchd 的动作是异步的,状态不会在命令返回的那一刻就位。 */
@@ -62,9 +62,9 @@ export async function convergeUnit(
 
   // 只有"刚 bootstrap 过 + 该 supervisor 的装载含拉起"或"刚 restart 过"这两种情形值得空等 ——
   // 其余情形直接问一次就够,空等只会让"装了但起不来"的排障多花几秒。
+  // (前一半判据与 `service/manager.ts` 的"要不要为换了的 bin 再重启一次"是同一件事,故共用一份。)
   let state = await supervisor.query();
-  const worthWaiting =
-    restarted || (supervisor.loadStartsProcess && actions.includes("supervisor_loaded"));
+  const worthWaiting = restarted || loadImpliesStart(supervisor, actions);
   if (state.pid === undefined && worthWaiting) {
     state = await settle(supervisor, (current) => current.pid !== undefined);
   }

@@ -502,6 +502,10 @@ export const ServiceActionSchema = z.enum([
    *     只有 systemd 走得到;launchd 的同一情形表现为 `supervisor_unloaded` + `supervisor_loaded`。
    *   * **拷贝换了而 unit 没变**(15 票 `--copy-to-home` 的显式升级)—— unit 一个字没动,
    *     收敛逻辑因此什么都不做,而跑着的进程还攥着旧 bin。这一路**两端都走得到**。
+   *
+   * **代价要说清**:重启换的是进程,于是**所有在途长连接当场断开** —— 已注册的角色随连接消失,
+   * 在途的 dangerous 确认按「断线即默拒」收尾(08 票的语义,不因升级而例外)。
+   * 面板/订阅者断后自行重连,重连拿到的是新内核的一份全量快照。
    */
   "kernel_restarted",
 ]);
@@ -517,11 +521,11 @@ export const ServiceStatusResultSchema = z.object({
   unitPath: z.string().min(1),
   /** unit 文件在不在。 */
   unitInstalled: z.boolean(),
-  /**
+   /**
    * unit 实际指向的可执行(15 票)。取值语义与 `unitPath` 同一口径:
-   *   * unit 文件在(且形状认得)→ **从盘上那份 unit 里读出来的** argv[0],即此刻真被托管的那个 bin;
-   *   * unit 不在(或内容不是本内核写的)→ 本次调用**会写**的那个(`--copy-to-home` 时是
-   *     `$A2_HOME/bin/a2`,否则是当前这个 bin 自己)。
+   *   * unit 文件在**且形状解得出** → **从盘上那份 unit 里读出来的** argv[0],即此刻真被托管的那个 bin;
+   *   * unit **不在,或形状解不出**(不是本内核写的 / 被人改坏了)→ 回落到本次调用**会写**的那个
+   *     (`--copy-to-home` 时是 `$A2_HOME/bin/a2`,否则是当前这个 bin 自己)。
    *
    * 面板据此判断"托管的是不是我这份内核" —— 所以它必须是**盘上的事实**,而不是本次调用的计划。
    */

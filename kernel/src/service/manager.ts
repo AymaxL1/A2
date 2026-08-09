@@ -27,6 +27,7 @@ import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts"
 import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
 import {
   createSupervisor,
+  loadImpliesStart,
   SupervisorCommandError,
   type Supervisor,
   type SupervisorState,
@@ -68,10 +69,14 @@ export async function serviceInstall(
   paths: KernelPaths,
   options: ServiceInstallOptions = {},
 ): Promise<OpOutcome> {
-  // 拷贝的前置判断放在**动手之前**:开发态没有可分发的自身,那时连 unit 都不该碰一下。
+  // 拷贝的前置判断放在**动手之前**:没有可分发的自身时,连 unit 都不该碰一下。两种不成立各有说法 ——
+  // 开发态(压根没有单文件产物)与"指过来的那个文件不在"(只可能来自诊断用的覆写)。
   const selfBin = options.copyToHome ? resolveSelfBin() : undefined;
-  if (options.copyToHome && selfBin === undefined) {
-    return opFailure(selfCopyUnsupportedError(paths));
+  if (options.copyToHome) {
+    if (selfBin === undefined) return opFailure(selfCopyUnsupportedError(paths));
+    // 不做这一步的话,它会一路走到 `Bun.write` 才炸,落进 withPlan 的兜底(退出码 5「事没办成」)——
+    // 而这件事其实是**这条请求本身不成立**(6),指引也该对着那个覆写说话,不是让人去看内核日志。
+    if (!existsSync(selfBin)) return opFailure(selfBinMissingError(paths, selfBin));
   }
   const planOptions: ServicePlanOptions = options.copyToHome
     ? { binPath: homeBinPath(paths) }
@@ -116,13 +121,13 @@ export async function serviceInstall(
 }
 
 /**
- * 本次收敛有没有顺带把进程换掉。判据与 `converge.ts` 里"值不值得空等"那一条同源:
- * 显式拉起/重启过,或者这个 supervisor 的装载本身就含拉起(launchd 的 bootstrap)。
- * ——错判的代价是白重启一次服务,所以宁可保守。
+ * 本次收敛有没有顺带把进程换掉:显式拉起/重启过,或者这一次的装载本身就含拉起
+ * (launchd 的 bootstrap —— 判据与 `converge.ts` 里"值不值得空等"共用 `loadImpliesStart()`,
+ * 不是各写一遍的"同源")。错判的代价是白重启一次服务,所以宁可保守。
  */
 function processReplaced(actions: UnitAction[], supervisor: Supervisor): boolean {
   if (actions.includes("process_started") || actions.includes("process_restarted")) return true;
-  return supervisor.loadStartsProcess && actions.includes("supervisor_loaded");
+  return loadImpliesStart(supervisor, actions);
 }
 
 export async function serviceUninstall(paths: KernelPaths): Promise<OpOutcome> {
@@ -214,8 +219,9 @@ function statusResult(plan: ServicePlan, state: SupervisorState): ServiceStatusR
 }
 
 /**
- * unit 实际指向的可执行。**先问盘上那份**(它才是此刻真被托管的东西),读不到或形状不认识才回落到
- * 本次调用会写的那个 —— 与 `unitPath` 在未安装时给出"install 会写的位置"同一口径。
+ * unit 实际指向的可执行。**先问盘上那份**(它才是此刻真被托管的东西);
+ * 只有 **unit 不在、或形状解不出**这两种情形才回落到本次调用会写的那个 ——
+ * 与 `unitPath` 在未安装时给出"install 会写的位置"同一口径。
  */
 function installedBinPath(plan: ServicePlan): string {
   const planned = plan.programArguments[0] as string;
@@ -262,7 +268,38 @@ function selfCopyUnsupportedError(paths: KernelPaths): WireError {
         },
         { description: "或者开发态直接装(unit 指向当前这条命令)", command: "a2 service install --json" },
       ],
-      context: { home: paths.home, binPath: homeBinPath(paths), envOverride: SELF_BIN_ENV },
+      // 有意**不**在这里登记 `A2_SELF_BIN`(CR 尾款 5a):那是仅供测试与诊断的覆写,
+      // 把它写进用户可见的指引等于邀请人去用它。它只在**它自己出问题**的那条错误里露面(见下)。
+      context: { home: paths.home, binPath: homeBinPath(paths) },
+    },
+  };
+}
+
+/**
+ * 指过来的那份"自身"不在。生产路径上走不到这里(那时是 `process.execPath`,它必然存在)——
+ * 唯一的来路是 `A2_SELF_BIN` 覆写指错了地方,所以这条错误**点名它**:是它出的问题,人得知道去改哪。
+ */
+function selfBinMissingError(paths: KernelPaths, selfBin: string): WireError {
+  const overridden = process.env[SELF_BIN_ENV]?.trim() ? SELF_BIN_ENV : undefined;
+  return {
+    code: ErrorCode.serviceSelfCopyUnsupported,
+    message: overridden
+      ? `${SELF_BIN_ENV} 指向不存在的文件,没有可拷贝的自身。`
+      : "本 bin 自己的可执行不在了,没有可拷贝的自身。",
+    detail: `要拷的是 ${selfBin},但这个路径上没有文件。`,
+    guidance: {
+      summary: overridden
+        ? `${SELF_BIN_ENV} 是仅供测试与诊断的覆写:要么把它指向一个真的可执行,要么去掉它、用编译产物跑。`
+        : "用一份完整的编译产物重跑这条命令。",
+      steps: [
+        { description: "看那个路径上到底有什么", command: `ls -l ${selfBin}` },
+        { description: "编译一份完整的单文件产物", command: "bash kernel/scripts/build.sh" },
+        {
+          description: "用产物装(不带任何覆写)",
+          command: "kernel/dist/a2 service install --copy-to-home --json",
+        },
+      ],
+      context: { home: paths.home, binPath: homeBinPath(paths), selfBin },
     },
   };
 }

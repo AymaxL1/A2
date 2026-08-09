@@ -9,7 +9,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   copySelfToHome,
@@ -18,7 +18,7 @@ import {
   HOME_BIN_DIR_MODE,
   resolveSelfBin,
   SELF_BIN_ENV,
-  STAGING_SUFFIX,
+  STAGING_PREFIX,
 } from "../src/service/self-copy.ts";
 import { renderLaunchdPlist, renderSystemdUnit, unitBinaryPath } from "../src/service/unit.ts";
 
@@ -112,9 +112,76 @@ test("源不在:抛错,且不留下暂存件也不留下半截的目标", async 
   await expect(copySelfToHome(path.join(root, "查无此文件"), target)).rejects.toThrow();
 
   expect(existsSync(target)).toBe(false);
-  expect(existsSync(`${target}${STAGING_SUFFIX}`)).toBe(false);
   const dir = path.dirname(target);
   if (existsSync(dir)) expect(await readdir(dir)).toEqual([]);
+});
+
+// MARK: - 暂存件:名字每次唯一 + 陈旧残留会被捡走(CR 尾款 1)
+
+test("暂存件不用固定名:目标旁边占着老固定名的东西也挡不住落位", async () => {
+  const root = await workspace();
+  const source = path.join(root, "src-a2");
+  await writeFile(source, "#!/bin/sh\necho v1\n", { mode: 0o755 });
+  const target = path.join(root, "home", "bin", "a2");
+  await mkdir(path.dirname(target), { recursive: true });
+  // 旧方案写的就是 `<target>.staging` 这一个固定名 —— 这里让那个名字被一个**目录**占着:
+  // 旧方案会当场 EISDIR,新方案(唯一名)压根不看它。
+  await mkdir(`${target}.staging`);
+
+  expect(await copySelfToHome(source, target)).toBe("copied");
+
+  expect(await readFile(target, "utf8")).toContain("v1");
+});
+
+test("陈旧暂存件会被捡走:内容没变那一路也清(升级中途被杀留下的孤儿只有这里能捡)", async () => {
+  const root = await workspace();
+  const source = path.join(root, "src-a2");
+  await writeFile(source, "#!/bin/sh\necho v1\n", { mode: 0o755 });
+  const target = path.join(root, "home", "bin", "a2");
+  await copySelfToHome(source, target);
+  const dir = path.dirname(target);
+  // 上一次升级写到一半被 SIGKILL 留下的那个 60MiB 孤儿(这里用一个小文件代表)。
+  const orphan = path.join(dir, `${STAGING_PREFIX}a2-01890000-dead-7000-8000-000000000000`);
+  await writeFile(orphan, "半截的产物");
+
+  // 内容没变 —— 早退那一路。
+  expect(await copySelfToHome(source, target)).toBe("unchanged");
+
+  expect(existsSync(orphan)).toBe(false);
+  expect(await readdir(dir)).toEqual(["a2"]);
+});
+
+test("陈旧暂存件会被捡走:内容变了那一路也清,且不误伤目标", async () => {
+  const root = await workspace();
+  const source = path.join(root, "src-a2");
+  await writeFile(source, "#!/bin/sh\necho v1\n", { mode: 0o755 });
+  const target = path.join(root, "home", "bin", "a2");
+  await copySelfToHome(source, target);
+  const dir = path.dirname(target);
+  const orphan = path.join(dir, `${STAGING_PREFIX}a2-01890000-beef-7000-8000-000000000000`);
+  await writeFile(orphan, "半截的产物");
+
+  await writeFile(source, "#!/bin/sh\necho v2\n", { mode: 0o755 });
+  expect(await copySelfToHome(source, target)).toBe("copied");
+
+  expect(existsSync(orphan)).toBe(false);
+  expect(await readdir(dir)).toEqual(["a2"]);
+  expect(await readFile(target, "utf8")).toContain("v2");
+});
+
+test("清扫只认自己的前缀:同目录下别人的文件一根汗毛都不动", async () => {
+  const root = await workspace();
+  const source = path.join(root, "src-a2");
+  await writeFile(source, "#!/bin/sh\necho v1\n", { mode: 0o755 });
+  const target = path.join(root, "home", "bin", "a2");
+  await copySelfToHome(source, target);
+  const dir = path.dirname(target);
+  const innocent = path.join(dir, "a2.staging-备份");
+  await writeFile(innocent, "别人的东西");
+
+  expect(await copySelfToHome(source, target)).toBe("unchanged");
+
+  expect(existsSync(innocent)).toBe(true);
 });
 
 // MARK: - 落点与「本 bin 是谁」
@@ -140,6 +207,11 @@ const AWKWARD_PATHS = [
   "/Users/100%pure/.a2/bin/a2",
   "/Users/alice/<odd>/a2",
   "/Users/back\\slash/a2",
+  // 双引号与 `$` —— systemd 侧最不平凡的那条分支:`"` 被写成 `\"`,反转义必须逐个认出来
+  // (`$` 则有意不转义,见 `systemdQuote` 的头注:它的展开是上下文相关的)。
+  '/Users/say "hi"/$a2',
+  // 一条把三样凑齐的:引号 + 反斜杠 + 百分号,三种转义在同一个词里叠着。
+  '/Users/q"b\\s/100%/a2',
 ];
 
 test("launchd:render → parse 逐条还原 argv[0](转义过的 & < > 也还得回来)", () => {

@@ -142,8 +142,13 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
     /// 不是"来不及写"。真到 10 票发现壳要投影某一条,就把它挪进 `A2MirroredContract` 并补断言。
     public var reason: String {
         switch self {
-        case .versionResult, .helpResult:
-            return "bin 自报的本地事实(无 op),CLI 输出面专用;壳要版本与协议号从快照的 status 里就拿得到,这两条它压根不会请求。"
+        case .versionResult:
+            // **16 票起「壳压根不会请求」不再是真话**:执行器白名单第四条就是 `version --json`,
+            // 壳靠它问**内嵌那份 bin** 自报的版本,再与快照里线上内核的 `status.version` 比,
+            // 不一致才出「升级内核」项。两个版本来自两个不同的进程,快照那一份答不了内嵌那一份。
+            return "bin 自报的本地事实(无 op),CLI 输出面专用。16 票起壳会对**内嵌的那份 bin** 跑一次 `version --json`(白名单四条之一)来问它自己的版本 —— 只取一个 `version` 字符串,经 A2JSON 取值即可;线上内核那一份仍从快照的 status 里拿(已是 typed)。"
+        case .helpResult:
+            return "bin 自报的本地事实(无 op),CLI 输出面专用;帮助文本是给人和 agent 读的,壳压根不会请求。"
         case .capabilityListResult, .capabilityDescribeResult:
             return "能力清单壳经**快照** capabilities 拿(注册那一次往返就带全量,已是 typed),不必再走这两条查询面。"
         case .capabilityCallResult:
@@ -151,12 +156,14 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
         case .arbitrationStatusResult:
             return "仲裁面壳经快照 arbitration + arbitration/audit 两族推送拿到同一批事实(已是 typed),这条是 CLI 的查询面。"
         case .serviceStatusResult, .serviceChangeResult:
-            // 15 票改口径:**壳现在真的会调这三条命令**(ADR 0012「面板自足」的执行器白名单 ——
-            // 首启点「安装并启动」走的就是 `a2 service install --copy-to-home --json`)。
+            // **16 票起这是既成事实**:壳经嵌入 bin 走 `service install --copy-to-home --json` /
+            // `service uninstall --json` / `service status --json`(ADR 0012 的执行器白名单)。
             // 但界没变:那是**经 CLI 机读面**拿到的一条包封,不是长连接上的协议帧 ——
-            // 壳的状态机依据仍然是快照与七族事件,service 的 result 只在引导那一刻读一次
-            // (取 `state` / `binPath` / `actions` 三个字段),经 A2JSON 取值即可。
-            return "服务面问的是系统 supervisor,daemon 没跑时更要能答话 —— 那是 CLI 面。15 票起壳会在首启引导时调它(经嵌入 bin 的 `service install --copy-to-home --json`),但只读 state/binPath/actions 三个字段一次,经 A2JSON 取值即可,不值得为一次性引导多建两个会独立漂移的 typed 类型;真到面板票嫌取值啰嗦,挪进镜像表即可(样本已就位,挪动会被对账断言逼着做完整)。"
+            // 壳的状态机依据仍然是快照与七族事件,service 的 result 只在引导那几下读一次,
+            // 取的是 `state` / `binPath` / `actions` 与 change 结果里嵌的 `status.state` 四个字段,
+            // 经 A2JSON 取值即可;**解析用例直接喂 `kernel/contract/golden/` 的真样本**
+            // (含非法样本验 fail-closed),所以"不建 typed 镜像"并不等于"没有双端对账"。
+            return "服务面问的是系统 supervisor,daemon 没跑时更要能答话 —— 那是 CLI 面。16 票起壳确实会在引导时调它们(经嵌入 bin 的 `service install --copy-to-home --json` 等三条),但只经 A2JSON 取 state/binPath/actions/status.state 四个字段,且解析用例直接喂本仓库的真金标(含非法样本验 fail-closed)—— 不值得为引导这几下多建两个会独立漂移的 typed 类型;真嫌取值啰嗦,挪进镜像表即可(样本已就位,挪动会被对账断言逼着做完整)。"
         case .mihomoStatusResult, .mihomoChangeResult:
             return "mihomo 共存阶梯是安装期决策(CLI 面);壳只关心「它此刻活没活着」,那走 supervision 事件(已是 typed)。"
         case .proxyStatusResult, .proxyGroupsResult, .subscriptionListResult:

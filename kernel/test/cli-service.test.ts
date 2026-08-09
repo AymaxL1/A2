@@ -689,7 +689,52 @@ test.if(!COMPILED)("开发态用 --copy-to-home:结构化拒绝 + 退出码 6,�
   const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
   expect(commands).toContain("bash kernel/scripts/build.sh");
   expect(commands).toContain("a2 service install --json");
+  // `A2_SELF_BIN` 是**仅供测试与诊断**的覆写,不该出现在用户可见的指引里 ——
+  // 写进去等于邀请人去用它。(它只在"它自己指错了"那条错误里露面,那时它才是原因。)
+  expect(JSON.stringify(body.error)).not.toContain("A2_SELF_BIN");
+
+  // **金标是这条错误的手写镜像**,两边必须对得上:静态文本逐字相等、context 的键集相等
+  // (值不比 —— 金标里是 /Users/alice,这里是本次沙盒的真路径)。
+  // 没有这一条的话,金标改了一个键也只是"仍然合 schema",双端谁都不会吵。
+  const golden = await Bun.file(
+    path.resolve(import.meta.dir, "../contract/golden/response-service-self-copy-unsupported.json"),
+  ).json();
+  expect(body.error.code).toBe(golden.error.code);
+  expect(body.error.message).toBe(golden.error.message);
+  expect(body.error.detail).toBe(golden.error.detail);
+  expect(body.error.guidance.summary).toBe(golden.error.guidance.summary);
+  expect(commands).toEqual(
+    golden.error.guidance.steps.map((step: { command?: string }) => step.command),
+  );
+  expect(Object.keys(body.error.guidance.context).sort()).toEqual(
+    Object.keys(golden.error.guidance.context).sort(),
+  );
+
   // 路不通就一个字节都不该落:没有 unit、没有 bin、也没跟 supervisor 说过话。
+  expect(existsSync(box.unitPath)).toBe(false);
+  expect(existsSync(path.dirname(box.homeBinPath))).toBe(false);
+  expect(await supervisorCalls(box)).toEqual([]);
+});
+
+test("要拷的那份自身不在:结构化拒绝 + 退出码 6,指引对着那条覆写说话,什么都不落盘", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  const missing = path.join(box.root, "self-bin", "查无此文件");
+
+  const result = await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env: { ...box.env, A2_SELF_BIN: missing },
+  });
+
+  // 「路走通了、事没办成」(5)与「这条请求根本不成立」(6)是两档 —— 这件事属后者:
+  // 不做前置判断的话它会一路走到写文件才炸,落进 withPlan 的兜底,报成 5 且指引让人去看内核日志。
+  expect(result.exitCode).toBe(6);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.code).toBe("service_self_copy_unsupported");
+  expect(body.error.message).toContain("A2_SELF_BIN");
+  expect(body.error.detail).toContain(missing);
+  const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
+  expect(commands).toContain(`ls -l ${missing}`);
   expect(existsSync(box.unitPath)).toBe(false);
   expect(existsSync(path.dirname(box.homeBinPath))).toBe(false);
   expect(await supervisorCalls(box)).toEqual([]);

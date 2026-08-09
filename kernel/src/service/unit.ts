@@ -354,7 +354,8 @@ export function renderSystemdUnit(spec: Omit<UnitSpec, "label"> & { description?
 // MARK: - 反向:从**盘上那份 unit** 里读回它实际要跑的可执行(15 票)
 
 /**
- * 已装好的 unit 实际指向的可执行(argv[0])。解不动(不是本内核写的 / 形状不认识)返回 undefined。
+ * 已装好的 unit 实际指向的可执行(argv[0])。**解不动就返回 undefined**(不是本内核写的 / 被人改坏了)——
+ * 调用方据此回落到「本次调用会写的那个」,所以这里绝不猜:猜错就是给面板一个假的托管事实。
  *
  * 为什么非读盘不可:`servicePlan()` 算出来的是「**这次调用会写**什么」,而 `service status` 的
  * `binPath` 要答的是「**盘上那份现在指着**什么」。面板正是靠这个区别判断"内核该不该升级" ——

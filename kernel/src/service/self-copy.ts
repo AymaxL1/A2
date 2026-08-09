@@ -14,7 +14,7 @@
 // 卸载**有意不删这份拷贝**:`a2 service uninstall` 只拆 unit。它落在数据同侧,与配置、日志、
 // 插件登记区同类 —— 数据的删除永远是另一个显式动作,不搭在"停服"这一条上顺手做掉。
 
-import { chmod, mkdir, rename, unlink } from "node:fs/promises";
+import { chmod, mkdir, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { isCompiledBin } from "./unit.ts";
@@ -35,8 +35,17 @@ export const HOME_BIN_DIR_MODE = 0o700;
 /** 文件 0755:supervisor 要 exec 它;可执行位必须显式给(写文件的 mode 会被 umask 削)。 */
 export const HOME_BIN_MODE = 0o755;
 
-/** 落位前的暂存件后缀(与 `plugin/store.ts` 同一口径:先写临时件,再原子改名)。 */
-export const STAGING_SUFFIX = ".staging";
+/**
+ * 落位前的暂存件前缀。**名字每次唯一**(`<前缀>a2-<uuid>`),先例照 `plugin/host.ts::registerArtifact`
+ * 那条 `.staging-<name>-<uuid>`,而不是固定名。
+ *
+ * 为什么非唯一不可(CR 尾款 1):固定名在两次并发 install 之间会互踩 —— 极端时序下 B 还在往一个
+ * **已经被 A rename 落位**的 inode 上写字节,而那个 inode 此刻正被 launchd 托管着跑。
+ * 唯一名把这条路堵死:两次并发各写各的,rename 谁后到谁赢,落位的**永远是完整的一份**。
+ *
+ * 正式工件永远不以点开头,所以点前缀天然与 `a2` 不冲突(与 `store.ts` 同一条约定)。
+ */
+export const STAGING_PREFIX = ".staging-";
 
 /** `$A2_HOME/bin/a2` —— 全进程唯一入口。 */
 export function homeBinPath(paths: KernelPaths): string {
@@ -66,14 +75,20 @@ export type SelfCopyOutcome = "copied" | "unchanged";
  * (mtime 不是内容的代理:checkout、复制、时钟回拨都能骗过它。)
  */
 export async function copySelfToHome(source: string, target: string): Promise<SelfCopyOutcome> {
-  if (await sameBytes(source, target)) return "unchanged";
-
   const dir = path.dirname(target);
+
+  if (await sameBytes(source, target)) {
+    // **早退这一路也要清**:升级写到一半被 SIGKILL,留下的是一个 60MiB 的孤儿,
+    // 而下一次 install 多半正好是"内容没变"这一路 —— 不在这里捡,就再没有人捡了。
+    await sweepStaging(dir);
+    return "unchanged";
+  }
+
   await mkdir(dir, { recursive: true, mode: HOME_BIN_DIR_MODE });
   await chmod(dir, HOME_BIN_DIR_MODE);
 
-  // 暂存件与目标**同目录**:rename 只有在同一文件系统内才是原子的。
-  const staging = `${target}${STAGING_SUFFIX}`;
+  // 暂存件与目标**同目录**:rename 只有在同一文件系统内才是原子的。名字每次唯一,理由见 STAGING_PREFIX。
+  const staging = path.join(dir, `${STAGING_PREFIX}${HOME_BIN_NAME}-${crypto.randomUUID()}`);
   try {
     await Bun.write(staging, Bun.file(source));
     await chmod(staging, HOME_BIN_MODE);
@@ -83,7 +98,28 @@ export async function copySelfToHome(source: string, target: string): Promise<Se
     await unlink(staging).catch(() => {});
     throw error;
   }
+  await sweepStaging(dir);
   return "copied";
+}
+
+/**
+ * 清掉同目录下的陈旧暂存件。**best-effort**:卫生问题不该让一次 install 失败(与 daemon 启动时
+ * 那两次清扫同一种姿势),所以整块吞掉异常。
+ *
+ * **一处如实的取舍**:真有另一个 install 正在并发写它自己的暂存件时,这次清扫可能把它删掉 ——
+ * 那一边于是 rename 失败、**当场报一个可重试的结构化错误**(install 幂等,重跑即可)。
+ * 拿"另一边响亮地失败一次"换"永不清理的 60MiB 孤儿"是划算的;而固定名那个旧方案的代价是
+ * **把正被托管的活体 bin 写坏**,不在一个量级上。
+ */
+async function sweepStaging(dir: string): Promise<void> {
+  try {
+    for (const name of await readdir(dir)) {
+      if (!name.startsWith(STAGING_PREFIX)) continue;
+      await unlink(path.join(dir, name)).catch(() => {});
+    }
+  } catch {
+    /* 目录不在或读不了:那就没有残留可清,也不该因此失败 */
+  }
 }
 
 /** 两个文件是不是同一批字节。先比大小(便宜地否掉绝大多数),再比 SHA-256。 */
