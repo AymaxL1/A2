@@ -144,20 +144,11 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
         guard let model = sender.representedObject as? A2MenuItemModel,
               let action = model.bootstrapAction else { return }
         // 「要不要先确认」由**动作自己的数据**说了算(见文件头)。用户不点确认 = 什么都不发。
-        if let confirmation = action.confirmation, !askConfirmation(confirmation) { return }
+        //   弹框本身交给 `A2BootstrapPresenter` —— 「回车归安全那一侧」那条规矩只该有一处实现
+        //   (16 票第一版在这里另写了一遍,于是漏掉了"清掉主操作那个自动回车"的半句)。
+        if let confirmation = action.confirmation,
+           !A2BootstrapPresenter.presentConfirmation(confirmation) { return }
         onBootstrap(action)
-    }
-
-    /// 引导动作的确认框。**默认按钮是取消**(第二个按钮拿回车),与 dangerous 确认器同一条规矩。
-    private func askConfirmation(_ confirmation: A2BootstrapConfirmation) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = confirmation.title
-        alert.informativeText = confirmation.body
-        alert.addButton(withTitle: confirmation.confirmTitle)
-        let cancel = alert.addButton(withTitle: confirmation.cancelTitle)
-        cancel.keyEquivalent = "\r"
-        NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// 向用户要一个入参。**只收字符串**:类型由内核的 descriptor 声明,壳不替它转

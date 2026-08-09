@@ -3,6 +3,7 @@
 [info disabled] 内核:已连接 v0.1.0
 [info disabled] 确认器:在场(dangerous 会弹到这里)
 [bootstrap enabled] 升级内核 v0.1.0→v0.2.0(重启服务,不断网)  ⇒ a2 service install --copy-to-home
+[info disabled] ↳ 重启只动内核:代理不断;面板会短暂断开重连,在途确认按默认拒绝收场
 [separator]
 [info disabled] mihomo:未运行  → proxy.status  @basicStatus
 [separator]

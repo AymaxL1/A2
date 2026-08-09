@@ -233,8 +233,12 @@ struct A2BootstrapReadingTests {
         }
     }
 
-    @Test("16 退出码语义表与内核 exit-codes.ts 逐条对齐(壳只解释、不定义)")
-    func exitCodeMeaningsMatchTheKernelTable() {
+    // ⚠️ 名字改准了(16 票 CR):这条**不是**双端对账 —— 它读不到 `exit-codes.ts`,
+    //    内核真改了语义它也不会红。它是**本表自身的变更探测器**:谁顺手改了这几句措辞,
+    //    就得来这里改用例;改不动就说明他没想清楚要改什么。
+    //    敢留这份拷贝的依据是 0–6 在内核侧明写「数值在此一次登记、后续不改」。
+    @Test("16 退出码语义表的变更探测器(壳侧第三份拷贝;真对账要金标出机读码表,不在本票范围)")
+    func exitCodeMeaningTableIsPinned() {
         #expect(A2BootstrapFailure.exitCodeMeaning(0) == "成功")
         #expect(A2BootstrapFailure.exitCodeMeaning(1) == "用法错")
         #expect(A2BootstrapFailure.exitCodeMeaning(2) == "被拒")
@@ -325,12 +329,13 @@ struct A2BootstrapCoordinatorTests {
     private static let inline: A2BootstrapCoordinator.Scheduler = { work in work() }
 
     private func makeCoordinator(_ runner: RecordingRunner?,
-                                 dismissed: Bool = false)
+                                 dismissed: Bool = false,
+                                 socketPath: String? = nil)
         -> (A2BootstrapCoordinator, Box) {
         let box = Box()
         let coordinator = A2BootstrapCoordinator(
             runner: runner,
-            socketPath: nil,
+            socketPath: socketPath,
             firstRunPromptDismissed: dismissed,
             execute: Self.inline, deliver: Self.inline,
             onChange: { box.states.append($0) })
@@ -527,17 +532,101 @@ struct A2BootstrapCoordinatorTests {
         #expect(coordinator.state.firstRunPromptDismissed == true)
     }
 
-    @Test("16 socket 探测只看文件在不在(壳不连、不探端口)")
-    func socketPresenceIsAFileCheck() throws {
+    @Test("16 socket 探测只看文件在不在,且**跟着每次 service status 一起刷新**(不是启动时看一眼就算)")
+    func socketPresenceRefreshesWithServiceStatus() throws {
         let dir = try TemporaryDirectory()
-        let (coordinator, _) = makeCoordinator(RecordingRunner())
         let socket = dir.url.appendingPathComponent("kernel.sock").path
+        let runner = RecordingRunner()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner, socketPath: socket)
 
-        coordinator.refreshSocketPresence(socketPath: socket)
+        // 启动那一刻文件还不在。
         #expect(coordinator.state.socketPresent == false)
 
+        // 有人把内核跑起来了 → socket 落地 → 下一次问服务态时,这个事实必须跟着更新。
         try dir.write("kernel.sock", permissions: 0o600)
-        coordinator.refreshSocketPresence(socketPath: socket)
-        #expect(coordinator.state.socketPresent == true)
+        coordinator.refreshServiceStatus()
+        #expect(coordinator.state.socketPresent == true,
+                "socket 的事实必须与服务态在同一次投递里一起变,否则首启判据会读到一半新一半旧")
+
+        // 反向也成立:socket 没了(内核停了),下一次刷新如实翻回去。
+        try FileManager.default.removeItem(atPath: socket)
+        coordinator.refreshServiceStatus()
+        #expect(coordinator.state.socketPresent == false)
+    }
+
+    // ========================================================================
+    // 16 票 CR:首启说明框不许在会话中途蹦出来
+    // ========================================================================
+
+    @Test("16 用户一点引导项,`hasUsedBootstrap` 立刻置位(不必等它跑完 —— 人已经在用这个面了)")
+    func performLatchesImmediately() throws {
+        var pending: [() -> Void] = []
+        let runner = RecordingRunner()
+        runner.responses[.serviceInstall] =
+            try BootstrapGolden.success("service-change-install.json")
+        let coordinator = A2BootstrapCoordinator(
+            runner: runner, socketPath: nil,
+            execute: { work in pending.append(work) }, deliver: Self.inline,
+            onChange: { _ in })
+
+        #expect(coordinator.state.hasUsedBootstrap == false)
+        coordinator.perform(.install)
+        #expect(coordinator.state.hasUsedBootstrap == true, "发起那一刻就该置位,而不是收场时")
+        pending.removeAll()
+    }
+
+    @Test("16 回归:**从「高级」卸掉服务之后,首启说明框不许再弹**(服务态确实回到了未安装)")
+    func uninstallDoesNotResurrectTheFirstRunPrompt() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        // 一台"装着服务、socket 在、没谢绝过"的机器:卸载之前判据本来就不成立。
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        // 卸完之后,首启判据的另外四个条件**全部重新成立**了 ——
+        //   有内嵌 bin、没谢绝过、服务未安装、socket 不在。少了「用过引导面」那一条,
+        //   说明框会当场蹦出来问「装回去?」。这条断言就是钉住它。
+        #expect(coordinator.state.serviceState == .notInstalled)
+        #expect(coordinator.state.socketPresent == false)
+        #expect(coordinator.state.firstRunPromptDismissed == false)
+        #expect(coordinator.state.embeddedBinAvailable == true)
+        #expect(coordinator.state.shouldPresentFirstRunPrompt == false,
+                "刚被用户亲手卸掉的东西,壳不许回头问他要不要装回去")
+    }
+
+    @Test("16 回归:安装失败之后也不许弹(服务态同样停在未安装)")
+    func failedInstallDoesNotResurrectTheFirstRunPrompt() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceInstall] =
+            try BootstrapGolden.failure("response-service-self-copy-unsupported.json", exitCode: 6)
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.install)
+
+        #expect(coordinator.state.lastFailure != nil)
+        #expect(coordinator.state.serviceState == .notInstalled)
+        #expect(coordinator.state.shouldPresentFirstRunPrompt == false,
+                "刚失败一次就再弹一遍说明框,是在追着用户问")
+    }
+
+    @Test("16 但「还没动过手」的机器照弹:置位只在用户真的点过之后")
+    func untouchedMachineStillPrompts() throws {
+        let runner = RecordingRunner()
+        runner.responses[.version] = try BootstrapGolden.success("version-result.json")
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.probe()
+
+        #expect(coordinator.state.hasUsedBootstrap == false, "启动时问一问不算「用过引导面」")
+        #expect(coordinator.state.shouldPresentFirstRunPrompt == true)
     }
 }

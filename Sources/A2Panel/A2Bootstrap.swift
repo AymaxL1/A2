@@ -96,6 +96,10 @@ public protocol A2BootstrapRunner: AnyObject {
 /// **不设超时**,理由如实写在这里:白名单四条命令都是 a2 的 CLI 面,而 a2 **永不交互阻塞**
 /// (ADR 0005)—— 它不会挂在那里等谁。真挂住了那是内核缺陷,而半路 kill 掉一次在途的
 /// `service install` 会留下一个装了一半的服务,比让菜单显示「安装中…」更糟。
+///
+/// **真挂死时会怎样,说清楚**:在途守卫会把引导面锁在「安装中…」上,直到用户重启面板 ——
+/// 而重启面板是**无害**的(退出仅断连,ADR 0008:不还原系统代理、不停 mihomo、不动已装的服务)。
+/// 换句话说,这个故障模式的最坏后果是"这个菜单区段这次用不了",不是"系统被弄坏了"。
 public final class A2BootstrapProcessRunner: A2BootstrapRunner {
 
     /// 内嵌 bin 的绝对路径(`Bundle.main.resourceURL/a2`,见 `A2EmbeddedKernel`)。
@@ -121,6 +125,9 @@ public final class A2BootstrapProcessRunner: A2BootstrapRunner {
                                   standardError: "内嵌内核 bin 起不来:\(error)")
         }
         // 先读干净再等退出:反过来在输出超过管道缓冲时会死锁(这里只有一行 JSON,但顺序不该赌)。
+        // **顺序读两条管道**理论上仍能互锁(stdout 读到 EOF 之前 stderr 写满 64KiB 就卡住)。
+        //   这里不管它,理由是有界:白名单四条的机读输出各是一行 JSON、stderr 至多几行诊断,
+        //   离管道容量差着数量级。真要根治得开两条读线程 —— 为一个够不到的边界加并发不划算。
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -188,8 +195,14 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
         self.exitCode = exitCode
     }
 
-    /// 退出码的粗分类(与 `kernel/src/contract/exit-codes.ts` 同一张表)。
-    /// 壳**只解释、不定义**:这里多一个数就是壳在自说自话。
+    /// 退出码的粗分类,**给人看的一句话**。
+    ///
+    /// ⚠️ 如实口径(16 票 CR 改准):这是**第三份**同表拷贝(TS 的 `exit-codes.ts` 是事实源,
+    ///   `docs/agents/a2-cli.md` 有一份人读的,这里是 Swift 侧的)。它**不是**对账机制 ——
+    ///   内核真改了数值语义,本表与对着它的用例都不会红。用例的作用是
+    ///   **本表自身的变更探测器**(有人顺手改了措辞就得来这里改用例,改不动就说明他没想清楚)。
+    ///   之所以敢留这份拷贝:0–6 这七个数在 `exit-codes.ts` 里明写「数值在此一次登记、后续不改」,
+    ///   是冻结的;真要对上账,得让金标导出一份机读的码表,那要动 `kernel/contract/`,不在本票范围。
     public static func exitCodeMeaning(_ exitCode: Int32) -> String {
         switch exitCode {
         case 0:  return "成功"

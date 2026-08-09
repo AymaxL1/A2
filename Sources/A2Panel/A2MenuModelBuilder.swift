@@ -359,6 +359,10 @@ public enum A2MenuModelBuilder {
                     enabled: !busy,
                     bootstrapAction: .install,
                     disabledReason: busyReason))
+                // 标题只放得下一句,而这一次点击的后果不止一句 —— 剩下的**摆在点之前**,
+                //   而不是等它发生了再让用户去猜(升级会重启内核 → 面板断连重连 →
+                //   在途的 dangerous 确认随之收场,那是 08 票定的降级行为,如实说出来)。
+                items.append(.info("↳ 重启只动内核:代理不断;面板会短暂断开重连,在途确认按默认拒绝收场"))
             }
         }
 

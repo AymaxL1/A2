@@ -32,6 +32,9 @@ public final class A2BootstrapCoordinator {
     public private(set) var state: A2BootstrapState
 
     private let runner: A2BootstrapRunner?
+    /// `<A2_HOME>/run/kernel.sock`。**每次拿到服务态答案时顺手重看一眼这个文件在不在** ——
+    /// 首启判据要它,而"启动那一刻看过一次"在一个会重连、会被引导操作改变的进程里撑不住。
+    private let socketPath: String?
     private let execute: Scheduler
     private let deliver: Scheduler
     private let onChange: (A2BootstrapState) -> Void
@@ -50,13 +53,20 @@ public final class A2BootstrapCoordinator {
                 deliver: @escaping Scheduler = { work in DispatchQueue.main.async(execute: work) },
                 onChange: @escaping (A2BootstrapState) -> Void) {
         self.runner = runner
+        self.socketPath = socketPath
         self.execute = execute
         self.deliver = deliver
         self.onChange = onChange
         self.state = A2BootstrapState(
             embeddedBinAvailable: runner != nil,
             firstRunPromptDismissed: firstRunPromptDismissed,
-            socketPresent: socketPath.map { FileManager.default.fileExists(atPath: $0) } ?? false)
+            socketPresent: A2BootstrapCoordinator.socketExists(socketPath))
+    }
+
+    /// socket **只看文件在不在**:壳不连它、不探端口 —— 那是会话那侧的事,这里只要一个事实。
+    private static func socketExists(_ path: String?) -> Bool {
+        guard let path else { return false }
+        return FileManager.default.fileExists(atPath: path)
     }
 
     // MARK: - 启动时问一次(不轮询)
@@ -77,7 +87,12 @@ public final class A2BootstrapCoordinator {
         refreshServiceStatus()
     }
 
-    /// 重问一次服务态(启动时、以及每次引导操作收场后)。
+    /// 重问一次服务态。**三个时刻**会调它,全部事件驱动、无定时器:
+    ///   ① 启动时(`probe`);② 每次引导操作收场后;③ 面板从断连翻到连上的那一帧
+    ///     (判据 `A2BootstrapDecision.shouldRefreshServiceState`,由装配层调用)。
+    ///
+    /// ③ 是 16 票 CR 补的:少了它,"用户在面板之外把服务装上了"这条路上,面板手里的服务态
+    /// 会永久陈旧,「高级 → 停止并卸载」就一直错误地置灰在「服务尚未安装」上。
     public func refreshServiceStatus() {
         guard let runner else { return }
         run { runner.run(.serviceStatus) } then: { [weak self] output in
@@ -89,6 +104,9 @@ public final class A2BootstrapCoordinator {
                 // 问不出来就是问不出来 —— 保留上一次的答案会让菜单说一句已经不成立的话。
                 self.state.serviceState = nil
             }
+            // 顺手把 socket 的事实也刷新到同一帧上:首启判据同时看这两样,
+            //   让它们**在同一次投递里**一起变,判据就不会读到一半新一半旧的输入。
+            self.state.socketPresent = A2BootstrapCoordinator.socketExists(self.socketPath)
             self.publish()
         }
     }
@@ -104,6 +122,10 @@ public final class A2BootstrapCoordinator {
         state.inFlight = action
         // 上一次的失败在**这一次发起时**就清掉:菜单不该同时显示"安装中…"和上一轮的红字。
         state.lastFailure = nil
+        // **用户已经在用引导面了** —— 首启说明框的使命(告诉他这东西是什么)就此完成。
+        //   这一句是 16 票 CR 的核心修复:没有它,卸载收场 / 安装失败之后服务态回到
+        //   `not_installed`,说明框会在会话中途蹦出来问「装回去?」。
+        state.hasUsedBootstrap = true
         publish()
 
         run { runner.run(action.command) } then: { [weak self] output in
@@ -126,12 +148,6 @@ public final class A2BootstrapCoordinator {
     /// 用户在首启说明框上点了「稍后」。**此后不再自动弹**(标记的持久化归调用方)。
     public func markFirstRunPromptDismissed() {
         state.firstRunPromptDismissed = true
-        publish()
-    }
-
-    /// socket 文件在不在 —— 首启判据之一,由调用方在决定弹不弹之前刷新一次。
-    public func refreshSocketPresence(socketPath: String) {
-        state.socketPresent = FileManager.default.fileExists(atPath: socketPath)
         publish()
     }
 

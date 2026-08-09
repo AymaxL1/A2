@@ -63,8 +63,12 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
                 body: [
                     "这会停掉常驻内核并移除 launchd 用户服务 com.a2.kernel。",
                     "",
-                    "**只拆服务**:~/.a2 里的数据(订阅、插件、日志)与 $A2_HOME/bin/a2 那份内核拷贝都留下,",
-                    "要清理请显式删它们。系统代理若还被接管着,请先用菜单里的「关闭系统代理(还原)」。",
+                    "只拆服务 —— ~/.a2 里的数据(订阅、插件、日志)与 ~/.a2/bin/a2 那份内核拷贝都留下,",
+                    "要清理请显式删它们。",
+                    // 「先还原系统代理」这句得留余地:菜单里那一项只在**连得上内核**时才有
+                    //   (它是一条能力调用),而卸载往往正好发生在连不上的时候。给两条路。
+                    "系统代理若还被 a2 接管着,请先还原:菜单里的「关闭系统代理(还原)」——",
+                    "菜单上没有那一项(面板此刻没连上内核)时,在终端敲 a2 proxy off。",
                     "",
                     "随时可以从菜单再装回来。",
                 ].joined(separator: "\n"),
@@ -98,6 +102,9 @@ public struct A2BootstrapConfirmation: Sendable, Equatable {
 ///
 /// 文案本身是契约的一部分:装 launchd 用户服务、建 `~/.a2`、开机自启与崩溃自愈归系统 supervisor
 /// —— 这三件事若不写在弹框里,用户点的就不是一次知情的同意。用例逐条核验它们在场。
+///
+/// ⚠️ **正文里不许出现 Markdown**(`**粗体**` 之类):它进的是 `NSAlert.informativeText`,
+///    那是**纯文本**,星号会原样画在屏幕上。要强调就用「」引号或破折号 —— 有断言钉着。
 public enum A2BootstrapPrompt {
     public static let title = "把 a2 内核装成常驻服务?"
 
@@ -107,7 +114,7 @@ public enum A2BootstrapPrompt {
         "点「安装并启动」会做这三件事:",
         "  · 装一个 launchd 用户服务 com.a2.kernel(开机自启、崩溃自愈都归系统托管,面板不做进程监督)",
         "  · 建 ~/.a2(订阅、插件、日志、socket 都在里面),并把这个 .app 里那份内核拷进 ~/.a2/bin/a2",
-        "  · unit 指向那份拷贝而**不是** .app 里的 —— 所以之后挪走、改名甚至删掉 .app,服务照跑",
+        "  · unit 指向那份拷贝,而不是 .app 里的 —— 所以之后挪走、改名甚至删掉 .app,服务照跑",
         "",
         "怎么卸:菜单「高级 → 停止并卸载内核服务」,或在终端敲 a2 service uninstall。",
         "面板不会把 a2 装进 PATH,也不写你的 shell 配置。",
@@ -124,10 +131,10 @@ public enum A2BootstrapPrompt {
 // 面板本地的引导状态
 // ============================================================================
 
-/// 在途的引导操作(同一时刻至多一个)。
-public typealias A2BootstrapOperation = A2BootstrapMenuAction
-
 /// 引导相关的**面板本地状态**。菜单模型是 (`A2PanelState`, 本类型) 的纯函数。
+///
+/// (16 票 CR 尾款:原先这里还有个 `A2BootstrapOperation = A2BootstrapMenuAction` 的别名。
+///  删了 —— 它不带任何类型安全,只是给同一件事起了第二个名字,读代码的人得多查一次。)
 public struct A2BootstrapState: Sendable, Equatable {
 
     /// 内嵌 bin 在不在。**false = 引导功能整体隐藏**(dev / 测试态),菜单保持 10 票原样。
@@ -137,20 +144,28 @@ public struct A2BootstrapState: Sendable, Equatable {
     /// 最近一次 `service status` 读到的服务态。`nil` = 还没问到(或问失败了)。
     public var serviceState: A2BootstrapServiceFacts.State?
     /// 在途操作。非 nil 时菜单项一律禁用,并出一条「安装中…」的 info 行。
-    public var inFlight: A2BootstrapOperation?
+    public var inFlight: A2BootstrapMenuAction?
     /// 最近一次引导失败(成功一次就清空)。如实进菜单,含退出码语义。
     public var lastFailure: A2BootstrapFailure?
     /// 用户在首启说明框上点过「稍后」(UserDefaults 标记的投影)。**此后不再自动弹**。
     public var firstRunPromptDismissed: Bool
+    /// **本次启动里用户已经用过引导面**(点过任意一个引导项)。
+    ///
+    /// 16 票 CR 抓到的真缺陷:首启判据只看"服务装没装",而它在会话中途会**重新成立** ——
+    /// 用户从「高级」卸掉服务、或一次安装失败之后,`serviceState` 回到 `not_installed`,
+    /// 说明框就会当场蹦出来问「装回去?」。那既不是"首启",也不是用户此刻想要的。
+    /// 一旦用户自己点过引导项,说明框的使命(告诉他这东西是什么)就已经完成 —— 从此闭嘴。
+    public var hasUsedBootstrap: Bool
     /// `<A2_HOME>/run/kernel.sock` 这个文件在不在(首启判据之一,见下)。
     public var socketPresent: Bool
 
     public init(embeddedBinAvailable: Bool = false,
                 embeddedKernelVersion: String? = nil,
                 serviceState: A2BootstrapServiceFacts.State? = nil,
-                inFlight: A2BootstrapOperation? = nil,
+                inFlight: A2BootstrapMenuAction? = nil,
                 lastFailure: A2BootstrapFailure? = nil,
                 firstRunPromptDismissed: Bool = false,
+                hasUsedBootstrap: Bool = false,
                 socketPresent: Bool = false) {
         self.embeddedBinAvailable = embeddedBinAvailable
         self.embeddedKernelVersion = embeddedKernelVersion
@@ -158,6 +173,7 @@ public struct A2BootstrapState: Sendable, Equatable {
         self.inFlight = inFlight
         self.lastFailure = lastFailure
         self.firstRunPromptDismissed = firstRunPromptDismissed
+        self.hasUsedBootstrap = hasUsedBootstrap
         self.socketPresent = socketPresent
     }
 
@@ -171,34 +187,56 @@ public struct A2BootstrapState: Sendable, Equatable {
             embeddedBinAvailable: embeddedBinAvailable,
             serviceState: serviceState,
             socketPresent: socketPresent,
-            userDeclined: firstRunPromptDismissed)
+            userDeclined: firstRunPromptDismissed,
+            hasUsedBootstrap: hasUsedBootstrap)
     }
 }
 
 // ============================================================================
-// 触发判据(**纯函数**,四个输入)
+// 触发判据(**纯函数**,五个输入)
 // ============================================================================
 
 public enum A2BootstrapDecision {
 
-    /// 首启说明框弹不弹。四个条件**全部成立**才弹,任一不成立就闭嘴。
+    /// 首启说明框弹不弹。五个条件**全部成立**才弹,任一不成立就闭嘴。
     ///
     /// 逐条理由:
     ///   ① **嵌入 bin 在** —— 不在就没有执行器,弹了也没有能点的按钮(dev / 测试态);
     ///   ② **用户没谢绝过** —— 点过「稍后」就不再纠缠(ADR 0012 第 2 条的原话),菜单项常驻可随时再装;
-    ///   ③ **服务确实未安装** —— `installed_not_running` / `running` 都不该弹说明框
+    ///   ③ **本次启动还没用过引导面** —— 用户自己点过引导项之后,说明框的使命已尽。
+    ///      这一条是 16 票 CR 补的:少了它,「卸载完成」「安装失败」这类**会话中途**回到
+    ///      `not_installed` 的时刻会让说明框重新蹦出来问「装回去?」—— 那已经不是"首启",
+    ///      而是壳在追着用户问。判据里必须有一条记得"你已经在用这个面了"。
+    ///   ④ **服务确实未安装** —— `installed_not_running` / `running` 都不该弹说明框
     ///      (那时用户早就知道这东西是什么了);**`nil` 也不弹** —— 问不出服务态时闭嘴,
     ///      宁可少弹一次,也不在一个连状态都读不到的机器上劝人装东西;
-    ///   ④ **socket 文件不在** —— 有 socket 意味着有内核在跑(哪怕它不是 launchd 装的,
+    ///   ⑤ **socket 文件不在** —— 有 socket 意味着有内核在跑(哪怕它不是 launchd 装的,
     ///      比如开发者手工 `a2 daemon run`)。那时弹框会劝他把自己那份顶掉,是纯粹的添乱。
     public static func shouldPresentFirstRunPrompt(embeddedBinAvailable: Bool,
                                                    serviceState: A2BootstrapServiceFacts.State?,
                                                    socketPresent: Bool,
-                                                   userDeclined: Bool) -> Bool {
+                                                   userDeclined: Bool,
+                                                   hasUsedBootstrap: Bool) -> Bool {
         guard embeddedBinAvailable else { return false }
         guard !userDeclined else { return false }
+        guard !hasUsedBootstrap else { return false }
         guard serviceState == .notInstalled else { return false }
         guard !socketPresent else { return false }
         return true
+    }
+
+    /// 连接态从「断」翻到「连」的**那一帧** —— 唯一该重问一次服务态的时刻。
+    ///
+    /// 为什么需要它(16 票 CR 抓到的真缺陷):`serviceState` 只在启动时与每次引导操作收场后刷新。
+    /// 于是"用户在**面板之外**装了服务"(终端敲 `a2 service install`、或另一台机同步过来)这条路上,
+    /// 面板手里那份服务态会**永久陈旧**地停在 `not_installed` —— 「高级 → 停止并卸载」就一直
+    /// 置灰在「服务尚未安装」上,而服务其实正跑着。用户从面板里再也卸不掉它。
+    ///
+    /// 修法只有一次读、且是**事件驱动**的:面板连上内核 = 有人把内核跑起来了,这一帧重问一次。
+    /// 不轮询、不定时(ADR 0012 第 5 条不破)。断→断(换个断开原因)、连→连都不触发。
+    public static func shouldRefreshServiceState(previous: A2PanelConnection,
+                                                 current: A2PanelConnection) -> Bool {
+        if case .connected = current, case .disconnected = previous { return true }
+        return false
     }
 }

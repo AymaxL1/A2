@@ -24,7 +24,8 @@
 //   A2Panel           → A2Contract + A2KernelClient。**零 AppKit**:菜单模型、构造器、
 //                       事件投影、会话循环、确认呈现模型 —— 全部可在纯逻辑测试里跑。
 //   A2PanelMacOS      → A2Panel + AppKit。两个渲染器、确认器窗口、关于页、装配层。
-//   A2PanelFixtures   → A2Panel。四态固定装置 + 与内核 manifest 逐条对照的能力清单。
+//   A2PanelFixtures   → A2Panel。菜单状态固定装置(10 票四种 + 16 票六种引导分支,共十种)
+//                       + 与内核 manifest 逐条对照的能力清单。
 //
 // 「依赖边须与源码实际 import 一一对应」这条口径继续有效(不挂空头依赖)。
 //

@@ -118,6 +118,10 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 首启说明框。**判据是纯函数**(`A2BootstrapDecision`),这里只负责"弹"与"记住用户说了什么"。
+    ///
+    /// 「会话中途不再弹」那条不靠这里的 `firstRunPromptShown` —— 它只挡"同一次启动里弹两遍"。
+    /// 真正管住它的是判据里的 `hasUsedBootstrap`(用户一点引导项就置位,见 `A2BootstrapCoordinator.perform`),
+    /// 于是"卸载收场后又冒出来问装回去"这件事在**编排层**就不成立,有回归用例钉着。
     private func maybePresentFirstRunPrompt() {
         guard !firstRunPromptShown, bootstrapState.shouldPresentFirstRunPrompt else { return }
         firstRunPromptShown = true
@@ -143,8 +147,15 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
 extension A2PanelAppDelegate: A2PanelSessionDelegate {
     nonisolated public func panelSession(_ session: A2PanelSession, didUpdate state: A2PanelState) {
         DispatchQueue.main.async { [weak self] in
-            self?.panelState = state
-            self?.render()
+            guard let self else { return }
+            // 断→连的**那一帧**重问一次服务态:那是"有人把内核跑起来了"的唯一可靠信号,
+            //   也是"用户在面板之外装了服务"这条路上,面板唯一有机会纠正陈旧服务态的时刻。
+            //   判据是纯函数(有断言),这里只负责在对的时刻调它。事件驱动一次,**不轮询**。
+            let shouldRefresh = A2BootstrapDecision.shouldRefreshServiceState(
+                previous: self.panelState.connection, current: state.connection)
+            self.panelState = state
+            self.render()
+            if shouldRefresh { self.bootstrap?.refreshServiceStatus() }
         }
     }
 

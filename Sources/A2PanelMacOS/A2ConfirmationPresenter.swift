@@ -63,6 +63,12 @@ public final class A2ConfirmationPresenter {
         deny.frame = NSRect(x: 344, y: 16, width: 100, height: 32)
         deny.bezelStyle = .rounded
         // 默认按钮 = 拒绝(规矩②)。回车 = 拒绝。
+        //
+        // ⚠️ 16 票 CR 在这里起过一次争议,裁定记在这:**这两个按钮是手搭的 `NSButton`,
+        //    不是 `NSAlert`**。`NSAlert.addButton` 会给第一个按钮**自动**塞一个 `\r`
+        //    (那是 `A2BootstrapPresenter` 必须显式清掉的东西);手搭的 `NSButton` 不会 ——
+        //    它的 `keyEquivalent` 缺省是空串,下面的 `approve` 从头到尾没被赋过值。
+        //    所以回车在这个窗上**只**落在 deny 上,批准永远得用鼠标点。有断言钉着缺省值这条事实。
         deny.keyEquivalent = "\r"
         deny.target = self
         deny.action = #selector(denyTapped(_:))
@@ -72,6 +78,7 @@ public final class A2ConfirmationPresenter {
         let approve = NSButton(title: presentation.approveTitle, target: nil, action: nil)
         approve.frame = NSRect(x: 236, y: 16, width: 100, height: 32)
         approve.bezelStyle = .rounded
+        // **不给它任何 keyEquivalent**,这一行的缺席是有意的(见上面 deny 那段裁定)。
         approve.target = self
         approve.action = #selector(approveTapped(_:))
         approve.identifier = NSUserInterfaceItemIdentifier(request.id)
