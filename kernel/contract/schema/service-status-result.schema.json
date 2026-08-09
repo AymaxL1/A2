@@ -29,6 +29,10 @@
     "unitInstalled": {
       "type": "boolean"
     },
+    "binPath": {
+      "type": "string",
+      "minLength": 1
+    },
     "registered": {
       "type": "boolean"
     },
@@ -52,6 +56,7 @@
     "label",
     "unitPath",
     "unitInstalled",
+    "binPath",
     "registered",
     "home",
     "socketPath"

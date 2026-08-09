@@ -5,11 +5,11 @@
     "label": "com.a2.kernel",
     "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.kernel.plist",
     "unitInstalled": true,
-    "binPath": "/Users/alice/.local/bin/a2",
+    "binPath": "/Users/alice/.a2/bin/a2",
     "registered": true,
-    "pid": 44127,
+    "pid": 51840,
     "home": "/Users/alice/.a2",
     "socketPath": "/Users/alice/.a2/run/kernel.sock"
   },
-  "actions": ["unit_written", "supervisor_loaded"]
+  "actions": ["bin_copied", "kernel_restarted"]
 }

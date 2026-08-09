@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "id": "018f7a20-9c31-7d42-b6a8-5e1f3c8d7042",
+  "ok": false,
+  "error": {
+    "code": "service_self_copy_unsupported",
+    "message": "当前这个 a2 不是可分发的单文件产物,没有「自身」可以拷进 A2_HOME。",
+    "detail": "--copy-to-home 拷的是 bun build --compile 出来的那份单文件;源码态跑起来的 a2 的可执行是 bun 自己,拷过去只会得到一个跑不起来的空壳。",
+    "guidance": {
+      "summary": "用编译产物跑这条命令(分发形态本来就是它);只想在开发态装服务的话,不带旗标即可。",
+      "steps": [
+        {
+          "description": "编译单文件产物",
+          "command": "bash kernel/scripts/build.sh"
+        },
+        {
+          "description": "用产物装(unit 指向 $A2_HOME/bin/a2 的拷贝)",
+          "command": "kernel/dist/a2 service install --copy-to-home --json"
+        },
+        {
+          "description": "或者开发态直接装(unit 指向当前这条命令)",
+          "command": "a2 service install --json"
+        }
+      ],
+      "context": {
+        "home": "/Users/alice/.a2",
+        "binPath": "/Users/alice/.a2/bin/a2",
+        "envOverride": "A2_SELF_BIN"
+      }
+    }
+  }
+}

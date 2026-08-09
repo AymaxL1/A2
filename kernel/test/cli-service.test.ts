@@ -13,17 +13,18 @@
 // 命令编排与幂等全有断言;**实机验收顺延**(spec「Linux 口径」)。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   ServiceChangeResultSchema,
   ServiceStatusResultSchema,
 } from "../src/contract/wire.ts";
-import { parseJsonStdout, runCli, socketPathFor } from "./support/harness.ts";
+import { a2Command, parseJsonStdout, runCli, socketPathFor } from "./support/harness.ts";
 
 const FAKE_DIR = path.resolve(import.meta.dir, "support/fake-supervisor");
 const LABEL = "com.a2.kernel";
+const CLI_ENTRY = path.resolve(import.meta.dir, "../src/cli/main.ts");
 
 type SupervisorKind = "launchd" | "systemd";
 
@@ -34,6 +35,10 @@ interface Sandbox {
   root: string;
   /** unit 文件**应该**落的位置(测试独立算出来的,不是问被测代码要的)。 */
   unitPath: string;
+  /** `--copy-to-home` 的落点**应该**在哪(同样是测试自己拼的)。 */
+  homeBinPath: string;
+  /** 充当「可分发单文件」的替身(见 `writeSelfBin`);编译产物那一遍不用它。 */
+  selfBinPath: string;
   logPath: string;
   stateDir: string;
   env: Record<string, string>;
@@ -59,6 +64,8 @@ async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
     home,
     root,
     unitPath,
+    homeBinPath: path.join(home, "bin", "a2"),
+    selfBinPath: path.join(root, "self-bin", "a2"),
     stateDir,
     logPath,
     env: {
@@ -72,6 +79,34 @@ async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
     },
   };
 }
+
+/**
+ * 「可分发单文件」的替身:一个真能跑的 a2(壳脚本 exec 到源码入口)。
+ *
+ * 为什么需要它:`--copy-to-home` 拷的是 `bun build --compile` 出来的那份单文件,而日常这批测试跑的是
+ * **源码入口**(`bun run src/cli/main.ts`)—— 那时根本没有"自身"可拷。用 `A2_SELF_BIN` 指一个等价的
+ * 可执行,拷贝→落位→unit 指向拷贝→supervisor 真把它起起来这条链才能在源码态被**完整**驱动
+ * (假件是照 unit 真 exec 的,所以拷过去的东西必须真能跑)。
+ *
+ * **编译产物那一遍(`A2_TEST_BIN`)有意不覆写**:那时被测体自己就是可分发单文件,拷的是它本人 ——
+ * 于是同一批断言在两种被测体上验的是同一件事的两种真实形态。`version` 那条则专挑产物那一遍验。
+ */
+async function writeSelfBin(box: Sandbox, marker: string): Promise<void> {
+  await mkdir(path.dirname(box.selfBinPath), { recursive: true });
+  await writeFile(
+    box.selfBinPath,
+    `#!/bin/sh\n# ${marker}\nexec ${JSON.stringify(process.execPath)} run ${JSON.stringify(CLI_ENTRY)} "$@"\n`,
+    { mode: 0o755 },
+  );
+}
+
+/** 本次被测体的自拷贝来源:编译产物那一遍用它自己,源码那一遍用替身。 */
+function selfBinEnv(box: Sandbox): Record<string, string> {
+  return process.env.A2_TEST_BIN ? {} : { A2_SELF_BIN: box.selfBinPath };
+}
+
+/** 源码那一遍才有"开发态"可言(编译产物那一遍本来就有可分发的自身)。 */
+const COMPILED = process.env.A2_TEST_BIN !== undefined;
 
 async function service(box: Sandbox, args: string[]) {
   return await runCli(["service", ...args, "--json"], { home: box.home, env: box.env });
@@ -145,6 +180,9 @@ test("service status:未安装时是三态之一、退出码 0,并给出 install
   expect(body.result.label).toBe(LABEL);
   expect(body.result.unitPath).toBe(box.unitPath);
   expect(body.result.unitInstalled).toBe(false);
+  // unit 不在时 binPath 给的是**这次 install 会写的那个**(与 unitPath 同一口径)——
+  // 不带旗标就是当前这个被测体自己。
+  expect(body.result.binPath).toBe(a2Command()[0]);
   expect(body.result.registered).toBe(false);
   expect(body.result.pid).toBeUndefined();
   expect(body.result.home).toBe(box.home);
@@ -194,6 +232,10 @@ test("service install(launchd):plist 落位、自愈自启键齐全、A2_HOME �
   );
   expect(programArguments.slice(-2)).toEqual(["daemon", "run"]);
   expect(existsSync(programArguments[0] as string)).toBe(true);
+  // 机读面的 binPath 与盘上那份 unit 逐字相等(它答的就是"托管的是哪个可执行")。
+  expect(body.result.status.binPath).toBe(programArguments[0]);
+  // 不带旗标时行为不变:unit 仍指向调用者自己,$A2_HOME 底下不会凭空多出一个 bin。
+  expect(existsSync(path.join(box.home, "bin"))).toBe(false);
 
   // plist 得是**真的合法** plist —— 用 Apple 自己的解析器判,不用我的正则自证。
   if (existsSync("/usr/bin/plutil")) {
@@ -420,6 +462,276 @@ test("service install/uninstall(systemd):幂等复跑不改动,卸载后回到�
   const again = parseJsonStdout(await service(box, ["uninstall"]));
   expect(again.result.actions).toEqual([]);
   expect(again.result.status.state).toBe("not_installed");
+});
+
+// MARK: - 面板自足:--copy-to-home(15 票 / ADR 0012)
+
+test("--copy-to-home 首装:bin 落 $A2_HOME/bin/a2(0755)、unit 指向拷贝、拷贝真能跑", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+
+  const result = await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env: { ...box.env, ...selfBinEnv(box) },
+  });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(ServiceChangeResultSchema.safeParse(body.result).success).toBe(true);
+  // 拷贝排在最前面 —— 先有可执行,再有指着它的 unit。
+  expect(body.result.actions).toEqual(["bin_copied", "unit_written", "supervisor_loaded"]);
+  expect(body.result.status.binPath).toBe(box.homeBinPath);
+  expect(statSync(box.homeBinPath).mode & 0o777).toBe(0o755);
+  expect(statSync(path.dirname(box.homeBinPath)).mode & 0o777).toBe(0o700);
+
+  // unit 里写的**就是**那份拷贝(不是 .app 里、也不是调用者所在的那个位置)。
+  const plist = await readFile(box.unitPath, "utf8");
+  const argumentsBlock =
+    /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(plist)?.[1] ?? "";
+  const programArguments = [...argumentsBlock.matchAll(/<string>([^<]*)<\/string>/g)].map(
+    (match) => match[1] as string,
+  );
+  expect(programArguments).toEqual([box.homeBinPath, "daemon", "run"]);
+
+  // 拷过去的东西**真能跑**:自己报得出版本,且与被测体报的一模一样。
+  const version = await runCli(["version"], { home: box.home, env: box.env });
+  const copied = Bun.spawnSync({ cmd: [box.homeBinPath, "version"], env: { ...process.env } });
+  expect(copied.exitCode).toBe(0);
+  expect(copied.stdout.toString().trim()).toBe(version.stdout.trim());
+
+  // 装完就是跑着的:supervisor 起的是那份拷贝,而它真的在 socket 上答话。
+  expect(body.result.status.state).toBe("running");
+  const status = await runCli(["status", "--json"], { home: box.home, env: box.env });
+  expect(status.exitCode).toBe(0);
+  expect(parseJsonStdout(status).result.pid).toBe(body.result.status.pid);
+});
+
+test("--copy-to-home 幂等:同一份 bin 复跑不报拷贝、不换 inode、不动进程", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  const first = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  const inode = statSync(box.homeBinPath).ino;
+  const callsAfterFirst = (await supervisorCalls(box)).length;
+
+  const second = await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env,
+  });
+
+  expect(second.exitCode).toBe(0);
+  const body = parseJsonStdout(second);
+  // 人类面的"本来就是这样"在机读面就是这个空数组。
+  expect(body.result.actions).toEqual([]);
+  expect(statSync(box.homeBinPath).ino).toBe(inode);
+  expect(body.result.status.pid).toBe(first.result.status.pid);
+  expect(body.result.status.binPath).toBe(box.homeBinPath);
+  // 幂等不只是"结果一样":不该再发任何**改状态**的命令。
+  const added = (await supervisorCalls(box)).slice(callsAfterFirst);
+  expect(added.every((call) => call.startsWith("launchctl print "))).toBe(true);
+});
+
+test("--copy-to-home 升级:拷贝内容变了且服务在跑 → 重新拷 + 显式重启(unit 一个字没动)", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  // 这条恒用替身:要验的是"内容变了"这件事,而编译产物没法就地改出第二个版本。
+  const env = { ...box.env, A2_SELF_BIN: box.selfBinPath };
+  const before = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  const oldPid = before.result.status.pid;
+  const unitBefore = await readFile(box.unitPath, "utf8");
+
+  await writeSelfBin(box, "v2");
+  const result = await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env,
+  });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  // **换了文件不等于换了进程**:unit 内容一字未改,所以收敛逻辑什么都不会做 ——
+  // 升级全靠这条显式重启,而它必须如实出现在 actions 里。
+  expect(body.result.actions).toEqual(["bin_copied", "kernel_restarted"]);
+  expect(await readFile(box.unitPath, "utf8")).toBe(unitBefore);
+  expect(await readFile(box.homeBinPath, "utf8")).toContain("v2");
+  expect(body.result.status.pid).not.toBe(oldPid);
+  await waitFor("旧内核进程退出", () => !isAlive(oldPid));
+  // launchd 上换进程走的是 kickstart -k(unit 没变,bootout/bootstrap 那条路根本不成立)。
+  expect((await supervisorCalls(box)).some((call) => call.startsWith("launchctl kickstart -k "))).toBe(
+    true,
+  );
+});
+
+test("--copy-to-home 升级:收敛本身已经换过进程时不再多重启一次", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, A2_SELF_BIN: box.selfBinPath };
+  const before = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+
+  // bin 与 unit **同时**变了:launchd 的 bootout + bootstrap 本来就把进程换成新拷贝了,
+  // 这时再 kickstart -k 一次只是白杀一个刚起来的进程。
+  await writeSelfBin(box, "v2");
+  await writeFile(box.unitPath, `${await readFile(box.unitPath, "utf8")}\n<!-- 有人手改过 -->\n`);
+  const body = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+
+  expect(body.result.actions).toEqual([
+    "bin_copied",
+    "unit_written",
+    "supervisor_unloaded",
+    "supervisor_loaded",
+  ]);
+  expect(body.result.status.state).toBe("running");
+  expect(body.result.status.pid).not.toBe(before.result.status.pid);
+});
+
+test("--copy-to-home 升级:服务没跑就不重启(没有进程可换,只落新拷贝)", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, A2_SELF_BIN: box.selfBinPath };
+  const before = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  process.kill(before.result.status.pid, "SIGKILL");
+  await waitFor("内核进程退出", () => !isAlive(before.result.status.pid));
+
+  await writeSelfBin(box, "v2");
+  const body = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+
+  // 拉起来的那次用的已经是新拷贝,再"重启"一次只是白杀一个刚起来的进程。
+  expect(body.result.actions).toEqual(["bin_copied", "kernel_started"]);
+  expect(body.result.status.state).toBe("running");
+});
+
+test("--copy-to-home(systemd):unit 的 ExecStart 指向拷贝,升级同样是显式重启", async () => {
+  const box = (sandbox = await makeSandbox("systemd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, A2_SELF_BIN: box.selfBinPath };
+  const before = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  expect(before.result.actions).toEqual([
+    "bin_copied",
+    "unit_written",
+    "supervisor_reloaded",
+    "supervisor_loaded",
+    "kernel_started",
+  ]);
+  expect(await readFile(box.unitPath, "utf8")).toMatch(
+    new RegExp(`^ExecStart=${box.homeBinPath} daemon run$`, "m"),
+  );
+
+  await writeSelfBin(box, "v2");
+  const body = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+
+  expect(body.result.actions).toEqual(["bin_copied", "kernel_restarted"]);
+  expect(body.result.status.binPath).toBe(box.homeBinPath);
+  expect((await supervisorCalls(box))).toContain(`systemctl --user restart ${LABEL}.service`);
+});
+
+test("uninstall 只拆 unit:$A2_HOME/bin/a2 的拷贝留下,人类面明说这一口径", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env });
+
+  const human = await runCli(["service", "uninstall"], { home: box.home, env: box.env });
+
+  expect(human.exitCode).toBe(0);
+  expect(existsSync(box.unitPath)).toBe(false);
+  // 数据同侧的东西留给显式清理 —— 卸服务不顺手删它。
+  expect(existsSync(box.homeBinPath)).toBe(true);
+  expect(human.stdout).toContain("只拆 unit");
+  expect(human.stdout).toContain("保留不删");
+});
+
+test("binPath 是**盘上那份 unit** 的事实,不是本次调用的计划", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env: { ...box.env, ...selfBinEnv(box) },
+  });
+
+  // 这一次**不带旗标**:计划值是当前这个可执行,而盘上的 unit 指着拷贝 —— 必须答后者。
+  // (面板从 .app 里跑一次 status 就是这个场景:答错了它会以为托管的是自己那份。)
+  const status = parseJsonStdout(
+    await runCli(["service", "status", "--json"], { home: box.home, env: box.env }),
+  );
+  expect(status.result.binPath).toBe(box.homeBinPath);
+  expect(status.result.binPath).not.toBe(a2Command()[0]);
+});
+
+test.if(!COMPILED)("开发态用 --copy-to-home:结构化拒绝 + 退出码 6,什么都不落盘", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+
+  // 不设 A2_SELF_BIN —— 源码态跑的 a2 的可执行是 bun 自己,没有可分发的"自身"可拷。
+  const result = await runCli(["service", "install", "--copy-to-home", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
+
+  expect(result.exitCode).toBe(6);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.code).toBe("service_self_copy_unsupported");
+  // 拒绝即指引:两条能走通的路各给一条精确命令。
+  const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
+  expect(commands).toContain("bash kernel/scripts/build.sh");
+  expect(commands).toContain("a2 service install --json");
+  // 路不通就一个字节都不该落:没有 unit、没有 bin、也没跟 supervisor 说过话。
+  expect(existsSync(box.unitPath)).toBe(false);
+  expect(existsSync(path.dirname(box.homeBinPath))).toBe(false);
+  expect(await supervisorCalls(box)).toEqual([]);
+});
+
+test("--copy-to-home 只对 install 有意义:用在 status/uninstall 上是用法错", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+
+  for (const action of ["status", "uninstall"]) {
+    const result = await runCli(["service", action, "--copy-to-home", "--json"], {
+      home: box.home,
+      env: box.env,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const body = parseJsonStdout(result);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("usage");
+    expect(body.error.message).toContain("--copy-to-home");
+  }
+  expect(await supervisorCalls(box)).toEqual([]);
+});
+
+test("三条命令的机读面:stdout 恒是**一条**包封,没有散文混进来", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+
+  const runs = [
+    await runCli(["service", "status", "--json"], { home: box.home, env }),
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+    await runCli(["service", "uninstall", "--json"], { home: box.home, env }),
+  ];
+
+  for (const result of runs) {
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trimEnd().split("\n")).toHaveLength(1);
+    const body = parseJsonStdout(result);
+    expect(body.ok).toBe(true);
+    expect(body.v).toBe(1);
+    expect(typeof body.id).toBe("string");
+  }
 });
 
 // MARK: - 用法面与不支持的平台

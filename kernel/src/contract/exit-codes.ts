@@ -91,6 +91,9 @@ export function exitCodeForErrorCode(code: string): number {
     // 「本平台没有已支持的 supervisor」不是你敲错了命令(1),也不是事没办成(5)——
     // 是这条请求在这台机器上根本不成立,与校验层拒绝同档。
     case ErrorCode.serviceUnsupportedPlatform:
+    // 同理(15 票):`--copy-to-home` 在源码态的 bin 上根本不成立 —— 没有可分发的"自身"可拷。
+    // 那条说的是这台机器,这条说的是这个 bin,同一档。
+    case ErrorCode.serviceSelfCopyUnsupported:
     // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
     case ErrorCode.systemProxyUnsupported:
     // 长连接协议面的两条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活。

@@ -670,3 +670,38 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 
 **全表统计更新**:22 条顺延中 **已兑现 14 条**(顺延 07 五条 + 顺延 10 两条 + **顺延 13 七条**),
 未兑现 8 条(全部是 agent-delegation,排期未定,去处不是本效应的票)。
+
+---
+
+## 15 票登记:面板自足·内核侧(`--copy-to-home` + 线上内核版本 + `status.binPath`)
+
+本票**没有旧 Swift 断言可映射** —— 「面板自足」是 14/15/16 三票才立的东西(ADR 0012),旧仓的 `aa`
+壳是纯壳,既不内嵌内核也不引导安装。故本节只记**新账**,不动上面的顺延统计。
+
+### A. 新建行为的断言落点
+
+| 面 | 断言落点 |
+|---|---|
+| 原子拷贝与幂等(内容判据) | `service-self-copy.test.ts` ▸ 首装落位 0755 / 目录 0700 / 不留暂存件 ▸ 同一批字节复跑不换 inode(mtime 变了也不算变) ▸ 内容变了才换 inode ▸ 大小相同字节不同也算变 ▸ 源不在时不留半成品 |
+| unit 反向读法(`binPath` 的事实来源) | `service-self-copy.test.ts` ▸ launchd / systemd 各一条 render → parse 往返(路径含空格 / `&` / `%` / `<>` / `\` 六种刁钻形态)▸ 形状不认识就说不知道,不瞎猜 |
+| `--copy-to-home` 全链(CLI 缝,假 supervisor) | `cli-service.test.ts` ▸ 首装:bin 落 `$A2_HOME/bin/a2`、unit 的 ProgramArguments 指向拷贝、拷贝**真能跑**(spawn 它跑 `version`,与被测体逐字相等)▸ 幂等:不报 `bin_copied`、inode 不变、不发改状态命令 ▸ 升级:内容变了且服务在跑 → `bin_copied` + `kernel_restarted`(unit 一字未改,launchd 走 `kickstart -k`)▸ 没跑就不重启(只 `kernel_started`)▸ systemd 同一套(ExecStart 指向拷贝 + `restart`) |
+| 开发态拒绝 | `cli-service.test.ts` ▸ 源码态用 `--copy-to-home`:`service_self_copy_unsupported` + 退出码 6,且 unit / bin / supervisor 三处一个字节都没动。金标 `response-service-self-copy-unsupported.json`(经 `ResponseEnvelope` 进 Swift 往返断言) |
+| `binPath` 的取值语义 | `cli-service.test.ts` ▸ 未安装时给的是 install 会写的那个 ▸ 已安装时**读盘上那份 unit**(用「拷了之后不带旗标再查一次」逼出两者的差别)▸ 不带旗标装完,机读面的 binPath 与 plist 里的 argv[0] 逐字相等 |
+| 卸载口径 | `cli-service.test.ts` ▸ uninstall 只拆 unit:`$A2_HOME/bin/a2` 留下,人类面明说「只拆 unit / 保留不删」 |
+| 三条命令的机读面 | `cli-service.test.ts` ▸ install / uninstall / status 的 `--json` 各是**一条**包封(stdout 只有一行,`v` / `id` / `ok` 齐全)▸ `--copy-to-home` 用在 status / uninstall 上是用法错(退出码 1) |
+| hello 带内核版本 | `cli-arbitration.test.ts` ▸ 注册即全量快照:`snapshot.status.version` 与 `a2 version` 逐字相等、`protocol` 为 1 |
+| 契约金标 | `service-change-copy-to-home.json`(首装)/ `service-change-bin-upgraded.json`(显式升级)/ `invalid-service-status-missing-bin-path.json`(binPath 必填)+ 六份既有服务样本补 `binPath` |
+
+### B. 一处**有意没做**的记账
+
+`ServiceStatusResult` / `ServiceChangeResult` **仍不进 Swift 镜像表**,但豁免理由已按 15 票改写:
+壳从此**真的会调**这三条命令(ADR 0012 的执行器白名单),只是它经 **CLI 机读面**读三个字段
+(`state` / `binPath` / `actions`)一次,而不是在长连接上收协议帧 —— 壳的状态机依据仍是快照与七族事件。
+真到 16 票嫌 `A2JSON` 取值啰嗦,把这两条挪进 `A2MirroredContract` 即可;样本已就位,挪动会被
+`GoldenContractTests` 的对账断言逼着做完整。
+
+### C. 一条**如实记的口径变更**(不是丢失,是补真)
+
+`ServiceAction.kernel_restarted` 此前的契约注释写着「只在 systemd 那条路上出现」。15 票起它有了
+**第二个产出面**:拷贝换了而 unit 一个字没动(显式升级)—— 那一路**两端都走得到**(launchd 上是
+`launchctl kickstart -k`)。注释已改写,两个产出面各有一条 CLI 缝断言。

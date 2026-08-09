@@ -2,6 +2,8 @@
 //
 // 这三条命令**不经 UDS**:服务面问的是系统 supervisor,而 daemon 没跑的时候恰恰是最需要它们答话的时候。
 // 但机读面与走 daemon 的命令同一形状(`outcomeFromOpOutcome` 负责),agent 看不出区别。
+// 15 票起这三条也是**面板的引导路径**(ADR 0012 的执行器白名单),所以机读面从面板可达这件事
+// 不是附带的:面板拿到的就是 agent 拿到的那一条包封,没有第二套输出。
 //
 // 本文件不做任何平台判断与命令编排(那是 `src/service/` 的事),只管:argv 怎么解析、结果怎么给人看。
 
@@ -16,8 +18,14 @@ import { serviceInstall, serviceStatus, serviceUninstall } from "../service/mana
 import { outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
 import { SERVICE_USAGE, helpOutcome, serviceUsageOutcome } from "./usage.ts";
 
+/** 把自身单文件拷进 `$A2_HOME/bin/a2` 并让 unit 指向拷贝(15 票 / ADR 0012「面板自足」)。 */
+const COPY_TO_HOME_FLAG = "--copy-to-home";
+
 export async function serviceCommand(args: string[], paths: KernelPaths): Promise<CommandOutcome> {
-  const [action, ...rest] = args;
+  // `--copy-to-home` 是三条命令里**唯一**的旗标(15 票);`--json` 更早一步就被 `main.ts` 摘掉了,
+  // 走到这里的从来只有子命令自己的参数。
+  const copyToHome = args.includes(COPY_TO_HOME_FLAG);
+  const [action, ...rest] = args.filter((arg) => arg !== COPY_TO_HOME_FLAG);
 
   if (action === undefined) {
     return serviceUsageOutcome("service 需要一个动作:install / uninstall / status");
@@ -25,9 +33,16 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
   if (action === "help" || action === "-h" || action === "--help") {
     return helpOutcome(SERVICE_USAGE);
   }
-  // 三条命令都不接受参数 —— unit 名与域是内核写死的(只碰 `com.a2.kernel`),没有可调之处。
+  // 旗标之外一律不收 —— unit 名与域是内核写死的(只碰 `com.a2.kernel`),没有可调之处。
   if (rest.length > 0) {
     return serviceUsageOutcome(`service ${action} 不接受多余参数:${rest.join(" ")}`);
+  }
+  // `--copy-to-home` 只对 install 有意义。默默忽略等于让人以为它生效了,所以照用法错处理
+  // (与 `a2 mihomo install --isolated` 同一口径)。
+  if (copyToHome && action !== "install") {
+    return serviceUsageOutcome(
+      `${COPY_TO_HOME_FLAG} 只对 install 有意义(收到:service ${action} ${COPY_TO_HOME_FLAG})`,
+    );
   }
 
   if (action === "status") {
@@ -40,7 +55,7 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
   }
   if (action === "install") {
     return outcomeFromOpOutcome(
-      await serviceInstall(paths),
+      await serviceInstall(paths, { copyToHome }),
       "service.install",
       ServiceChangeResultSchema,
       (result) => renderChange(result, "安装"),
@@ -51,7 +66,7 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
       await serviceUninstall(paths),
       "service.uninstall",
       ServiceChangeResultSchema,
-      (result) => renderChange(result, "卸载"),
+      (result) => renderChange(result, "卸载", UNINSTALL_KEEPS_BIN),
     );
   }
 
@@ -69,6 +84,8 @@ function renderStatus(status: ServiceStatusResult): string {
   const lines = [
     head,
     `  unit 文件:${status.unitPath}${status.unitInstalled ? "" : "(尚不存在)"}`,
+    // unit 指着谁,是「托管的是不是我这份内核」的唯一答案(15 票);未安装时给的是 install 会写的那个。
+    `  托管的可执行:${status.binPath}${status.unitInstalled ? "" : "(将写入)"}`,
     `  A2_HOME:${status.home}`,
   ];
   if (status.state !== "running") {
@@ -77,11 +94,20 @@ function renderStatus(status: ServiceStatusResult): string {
   return lines.join("\n");
 }
 
+/**
+ * 卸载的口径(15 票 / ADR 0012):**只拆 unit**。`$A2_HOME/bin/a2` 那份拷贝落在数据同侧
+ * (与配置、日志、插件登记区同类),删它永远是另一个显式动作,不搭在"停服"这一条上顺手做掉。
+ */
+const UNINSTALL_KEEPS_BIN =
+  "  注:只拆 unit —— $A2_HOME/bin/a2 那份内核拷贝(若有)保留不删,要清理请显式删它。";
+
 /** 幂等的人类面:什么都没改时明说"本来就是这样",而不是假装干了活。 */
-function renderChange(result: ServiceChangeResult, verb: string): string {
+function renderChange(result: ServiceChangeResult, verb: string, note?: string): string {
   const head =
     result.actions.length === 0
       ? `${verb}:已经是目标状态,本次未改动任何东西。`
       : `${verb}完成:${result.actions.join("、")}`;
-  return [head, renderStatus(result.status)].join("\n");
+  const lines = [head, renderStatus(result.status)];
+  if (note !== undefined) lines.push(note);
+  return lines.join("\n");
 }

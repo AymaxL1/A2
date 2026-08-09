@@ -5,6 +5,7 @@
     "label": "com.a2.kernel",
     "unitPath": "/home/alice/.config/systemd/user/com.a2.kernel.service",
     "unitInstalled": true,
+    "binPath": "/home/alice/.local/bin/a2",
     "registered": true,
     "pid": 90210,
     "home": "/home/alice/.a2",

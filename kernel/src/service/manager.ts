@@ -9,7 +9,7 @@
 // 「CLI 永不隐式拉起 daemon」不因本票而破:`install` 是**人类显式授权**的动作,由它把常驻交给系统
 // supervisor 是合法的;`status` 只读;其余任何命令仍然只 connect、从不 spawn。
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { callKernel } from "../client/kernel-client.ts";
 import {
@@ -23,10 +23,12 @@ import {
   type WireError,
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
-import { convergeUnit, removeUnit, SETTLE_POLL_MS } from "./converge.ts";
+import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts";
+import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
 import {
   createSupervisor,
   SupervisorCommandError,
+  type Supervisor,
   type SupervisorState,
   type UnitAction,
 } from "./supervisor.ts";
@@ -35,7 +37,9 @@ import {
   servicePlan,
   STDERR_LOG_NAME,
   STDOUT_LOG_NAME,
+  unitBinaryPath,
   type ServicePlan,
+  type ServicePlanOptions,
 } from "./unit.ts";
 
 /**
@@ -52,21 +56,73 @@ export async function serviceStatus(paths: KernelPaths): Promise<OpOutcome> {
   });
 }
 
-export async function serviceInstall(paths: KernelPaths): Promise<OpOutcome> {
-  return await withPlan(paths, async (plan) => {
-    const supervisor = createSupervisor(plan);
-    const { actions, state } = await convergeUnit(plan, supervisor);
+export interface ServiceInstallOptions {
+  /**
+   * `--copy-to-home`(15 票 / ADR 0012「面板自足」):先把本 bin 自己原子拷进 `$A2_HOME/bin/a2`,
+   * 再让 unit 指向那份拷贝。不给则行为一字不变(unit 仍指向当前这个可执行)。
+   */
+  copyToHome?: boolean;
+}
 
-    if (state.pid === undefined) {
-      return opFailure(notRunningError(plan));
-    }
-    // 有 pid ≠ 能用。等它在 socket 上真的应答,`install` 才算兑现"装完就是跑着的"。
-    if (!(await settleDaemonReachable(plan))) {
-      return opFailure(notAnsweringError(plan));
-    }
+export async function serviceInstall(
+  paths: KernelPaths,
+  options: ServiceInstallOptions = {},
+): Promise<OpOutcome> {
+  // 拷贝的前置判断放在**动手之前**:开发态没有可分发的自身,那时连 unit 都不该碰一下。
+  const selfBin = options.copyToHome ? resolveSelfBin() : undefined;
+  if (options.copyToHome && selfBin === undefined) {
+    return opFailure(selfCopyUnsupportedError(paths));
+  }
+  const planOptions: ServicePlanOptions = options.copyToHome
+    ? { binPath: homeBinPath(paths) }
+    : {};
 
-    return opSuccess({ status: statusResult(plan, state), actions: kernelActions(actions) });
-  });
+  return await withPlan(
+    paths,
+    async (plan) => {
+      const actions: ServiceAction[] = [];
+      // 先落 bin 再写 unit:反过来的话,拷贝失败会留下一个指着不存在的文件的 unit。
+      const binChanged =
+        selfBin !== undefined && (await copySelfToHome(selfBin, homeBinPath(paths))) === "copied";
+      if (binChanged) actions.push("bin_copied");
+
+      const supervisor = createSupervisor(plan);
+      // 收敛**之前**的运行态:下面那条"要不要重启"问的是"这次改动落地时它正跑着吗"。
+      const before = await supervisor.query();
+      const converged = await convergeUnit(plan, supervisor);
+      actions.push(...kernelActions(converged.actions));
+      let state = converged.state;
+
+      // **换了文件不等于换了进程**(与 `a2 mihomo upgrade` 同一条道理):bin 换了新 inode 而 unit
+      // 一个字没动时,收敛逻辑什么都不会做,跑着的那个进程还攥着旧 bin。这一步就是显式升级的落点。
+      if (binChanged && before.pid !== undefined && !processReplaced(converged.actions, supervisor)) {
+        await supervisor.restart();
+        actions.push("kernel_restarted");
+        state = await settle(supervisor, (current) => current.pid !== undefined);
+      }
+
+      if (state.pid === undefined) {
+        return opFailure(notRunningError(plan));
+      }
+      // 有 pid ≠ 能用。等它在 socket 上真的应答,`install` 才算兑现"装完就是跑着的"。
+      if (!(await settleDaemonReachable(plan))) {
+        return opFailure(notAnsweringError(plan));
+      }
+
+      return opSuccess({ status: statusResult(plan, state), actions });
+    },
+    planOptions,
+  );
+}
+
+/**
+ * 本次收敛有没有顺带把进程换掉。判据与 `converge.ts` 里"值不值得空等"那一条同源:
+ * 显式拉起/重启过,或者这个 supervisor 的装载本身就含拉起(launchd 的 bootstrap)。
+ * ——错判的代价是白重启一次服务,所以宁可保守。
+ */
+function processReplaced(actions: UnitAction[], supervisor: Supervisor): boolean {
+  if (actions.includes("process_started") || actions.includes("process_restarted")) return true;
+  return supervisor.loadStartsProcess && actions.includes("supervisor_loaded");
 }
 
 export async function serviceUninstall(paths: KernelPaths): Promise<OpOutcome> {
@@ -97,11 +153,12 @@ function kernelActions(actions: UnitAction[]): ServiceAction[] {
 async function withPlan(
   paths: KernelPaths,
   body: (plan: ServicePlan) => Promise<OpOutcome>,
+  planOptions: ServicePlanOptions = {},
 ): Promise<OpOutcome> {
   const choice = resolveSupervisorKind();
   if (!choice.ok) return opFailure(unsupportedPlatformError(choice.reason, paths));
 
-  const plan = servicePlan(choice.kind, paths);
+  const plan = servicePlan(choice.kind, paths, process.env, planOptions);
   try {
     return await body(plan);
   } catch (error) {
@@ -148,11 +205,25 @@ function statusResult(plan: ServicePlan, state: SupervisorState): ServiceStatusR
     label: plan.label,
     unitPath: plan.unitPath,
     unitInstalled,
+    binPath: installedBinPath(plan),
     registered: state.registered,
     ...(state.pid === undefined ? {} : { pid: state.pid }),
     home: plan.paths.home,
     socketPath: plan.paths.socketPath,
   };
+}
+
+/**
+ * unit 实际指向的可执行。**先问盘上那份**(它才是此刻真被托管的东西),读不到或形状不认识才回落到
+ * 本次调用会写的那个 —— 与 `unitPath` 在未安装时给出"install 会写的位置"同一口径。
+ */
+function installedBinPath(plan: ServicePlan): string {
+  const planned = plan.programArguments[0] as string;
+  try {
+    return unitBinaryPath(plan.kind, readFileSync(plan.unitPath, "utf8")) ?? planned;
+  } catch {
+    return planned;
+  }
 }
 
 function unsupportedPlatformError(reason: string, paths: KernelPaths): WireError {
@@ -167,6 +238,31 @@ function unsupportedPlatformError(reason: string, paths: KernelPaths): WireError
         { description: "或用你自己的进程管理器托管这条命令", command: "a2 daemon run" },
       ],
       context: { home: paths.home },
+    },
+  };
+}
+
+/**
+ * `--copy-to-home` 撞上开发态。指引给的是**这台机器上此刻能走通的两条路**:
+ * 要么用编译产物(分发形态本来就是它),要么不带旗标装(unit 直接指向源码入口那条命令)。
+ */
+function selfCopyUnsupportedError(paths: KernelPaths): WireError {
+  return {
+    code: ErrorCode.serviceSelfCopyUnsupported,
+    message: "当前这个 a2 不是可分发的单文件产物,没有「自身」可以拷进 A2_HOME。",
+    detail:
+      "--copy-to-home 拷的是 bun build --compile 出来的那份单文件;源码态跑起来的 a2 的可执行是 bun 自己,拷过去只会得到一个跑不起来的空壳。",
+    guidance: {
+      summary: "用编译产物跑这条命令(分发形态本来就是它);只想在开发态装服务的话,不带旗标即可。",
+      steps: [
+        { description: "编译单文件产物", command: "bash kernel/scripts/build.sh" },
+        {
+          description: "用产物装(unit 指向 $A2_HOME/bin/a2 的拷贝)",
+          command: "kernel/dist/a2 service install --copy-to-home --json",
+        },
+        { description: "或者开发态直接装(unit 指向当前这条命令)", command: "a2 service install --json" },
+      ],
+      context: { home: paths.home, binPath: homeBinPath(paths), envOverride: SELF_BIN_ENV },
     },
   };
 }

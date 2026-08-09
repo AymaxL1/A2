@@ -4,6 +4,7 @@
   "label": "com.a2.kernel",
   "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.kernel.plist",
   "unitInstalled": true,
+  "binPath": "/Users/alice/.local/bin/a2",
   "registered": true,
   "pid": 44127,
   "home": "/Users/alice/.a2",

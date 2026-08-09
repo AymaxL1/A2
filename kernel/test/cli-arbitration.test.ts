@@ -235,6 +235,14 @@ test("注册即全量快照:状态 / 能力全集 / 仲裁面 / 存活监督 / �
   });
   expect(snapshot.supervision.watching).toBe(true);
   expect(Array.isArray(snapshot.audit)).toBe(true);
+
+  // **注册那一帧就带着内核版本**(15 票:面板的升级检测就靠它 —— 内嵌的那份 bin 与线上跑着的
+  // 这一份对不上,面板才知道该提示"重装以升级")。位置有意不新造一个字段:快照的 status 里
+  // 本来就有 `version`,而它与 `a2 version` 同一个真值源(`runtime/version.ts` ← package.json)。
+  const reported = await runCli(["version"], { home });
+  expect(reported.exitCode).toBe(0);
+  expect(snapshot.status.version).toBe(reported.stdout.trim());
+  expect(snapshot.status.protocol).toBe(1);
 }, 20000);
 
 test("一条连接可以既是确认器又是订阅者;重复注册同一角色是幂等的", async () => {

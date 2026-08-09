@@ -61,11 +61,19 @@ export const CAPABILITIES_USAGE = `a2 capabilities —— 能力面(内核的唯
 export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系统托管,应用层不造看门狗)
 
 用法:
-  a2 [--json] service install       装成系统托管的常驻服务并确保它跑着(幂等)
-  a2 [--json] service uninstall     停掉并干净移除(幂等)
-  a2 [--json] service status        查安装态与运行态(只读)
+  a2 [--json] service install [--copy-to-home]   装成系统托管的常驻服务并确保它跑着(幂等)
+  a2 [--json] service uninstall                  停掉并干净移除(幂等)
+  a2 [--json] service status                     查安装态与运行态(只读)
 
-三条命令都不接受参数:unit 名恒为 com.a2.kernel,内核只碰这一个 unit。
+除 --copy-to-home 外不接受任何参数:unit 名恒为 com.a2.kernel,内核只碰这一个 unit。
+三条命令都可 --json(与走 daemon 的命令同一形状的包封)—— 面板的引导路径走的就是这条机读面。
+
+--copy-to-home(面板自足,ADR 0012):
+  先把**本 bin 自己**原子拷进 $A2_HOME/bin/a2(0755),再让 unit 指向那份拷贝 ——
+  于是 .app 挪位/删除、macOS translocation 都不会让常驻服务指向一个不存在的路径。
+  幂等按**内容**判:同一份 bin 复跑不报 bin_copied;内容变了而服务正跑着,则显式重启(升级永远显式)。
+  只有编译产物能这么装:源码态跑的 a2 没有可分发的"自身",会结构化拒绝(service_self_copy_unsupported)。
+  卸载**不删**这份拷贝:它在数据同侧,清理是另一个显式动作。
 
 托管形态:
   macOS                launchd user 域 agent(~/Library/LaunchAgents),KeepAlive.Crashed 自愈 + RunAtLoad 自启
@@ -78,11 +86,17 @@ status 的三态(机读字段 result.state):
 
 三态都是**查询成功**(退出码 0),状态在 result.state 里 —— 想要"没跑就非零退出"的判据请用 a2 status(退出码 4)。
 
+机读面(--json)里与面板有关的两个字段:
+  result.status.binPath  unit 实际指向的可执行(读的是**盘上那份 unit**;未安装时给的是 install 会写的那个)
+  result.actions         本次真改了什么;空数组 = 本来就是这样(bin_copied 只在拷贝内容真的变了时出现)
+
 环境变量:
   A2_HOME              覆写 ~/.a2;install 会把它写进 unit(supervisor 不读 shell 配置)
   A2_SERVICE_SUPERVISOR 覆写 supervisor 选择(launchd|systemd)。仅测试与诊断用
+  A2_SELF_BIN          覆写 --copy-to-home 要拷的那份可分发单文件。仅测试与诊断用
 
-退出码:0 成功 / 1 用法错 / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 本平台无已支持的 supervisor`;
+退出码:0 成功 / 1 用法错 / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 这条请求在这台机器或这个 bin 上不成立
+       (本平台无已支持的 supervisor;或源码态的 a2 用了 --copy-to-home)`;
 
 export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据面不随控制面起落)
 

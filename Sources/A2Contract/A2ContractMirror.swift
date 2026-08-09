@@ -151,7 +151,12 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
         case .arbitrationStatusResult:
             return "仲裁面壳经快照 arbitration + arbitration/audit 两族推送拿到同一批事实(已是 typed),这条是 CLI 的查询面。"
         case .serviceStatusResult, .serviceChangeResult:
-            return "服务面问的是系统 supervisor,daemon 没跑时更要能答话 —— 那是 CLI 的活,壳不装服务、不调这两条。"
+            // 15 票改口径:**壳现在真的会调这三条命令**(ADR 0012「面板自足」的执行器白名单 ——
+            // 首启点「安装并启动」走的就是 `a2 service install --copy-to-home --json`)。
+            // 但界没变:那是**经 CLI 机读面**拿到的一条包封,不是长连接上的协议帧 ——
+            // 壳的状态机依据仍然是快照与七族事件,service 的 result 只在引导那一刻读一次
+            // (取 `state` / `binPath` / `actions` 三个字段),经 A2JSON 取值即可。
+            return "服务面问的是系统 supervisor,daemon 没跑时更要能答话 —— 那是 CLI 面。15 票起壳会在首启引导时调它(经嵌入 bin 的 `service install --copy-to-home --json`),但只读 state/binPath/actions 三个字段一次,经 A2JSON 取值即可,不值得为一次性引导多建两个会独立漂移的 typed 类型;真到面板票嫌取值啰嗦,挪进镜像表即可(样本已就位,挪动会被对账断言逼着做完整)。"
         case .mihomoStatusResult, .mihomoChangeResult:
             return "mihomo 共存阶梯是安装期决策(CLI 面);壳只关心「它此刻活没活着」,那走 supervision 事件(已是 typed)。"
         case .proxyStatusResult, .proxyGroupsResult, .subscriptionListResult:

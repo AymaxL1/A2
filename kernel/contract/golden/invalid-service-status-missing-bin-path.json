@@ -1,11 +1,11 @@
 {
-  "state": "not_installed",
+  "state": "running",
   "supervisor": "launchd",
   "label": "com.a2.kernel",
   "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.kernel.plist",
-  "unitInstalled": false,
-  "binPath": "/Users/alice/.local/bin/a2",
-  "registered": false,
+  "unitInstalled": true,
+  "registered": true,
+  "pid": 44127,
   "home": "/Users/alice/.a2",
   "socketPath": "/Users/alice/.a2/run/kernel.sock"
 }

@@ -129,6 +129,18 @@
       "why": "漂移收敛到**进程**(systemd 口径):重写 unit + daemon-reload 之后还要重启,否则跑着的进程仍用旧 ExecStart"
     },
     {
+      "file": "service-change-copy-to-home.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "面板自足的首装(15 票):bin_copied 打头,binPath 落在 $A2_HOME/bin/a2 —— unit 指的是拷贝而不是 .app 里那份"
+    },
+    {
+      "file": "service-change-bin-upgraded.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "显式升级(15 票):拷贝内容变了而 unit 一个字没动,于是只有 bin_copied + kernel_restarted —— 换了文件不等于换了进程"
+    },
+    {
       "file": "response-service-unsupported-platform.json",
       "schema": "ResponseEnvelope",
       "kind": "valid",
@@ -139,6 +151,12 @@
       "schema": "ResponseEnvelope",
       "kind": "valid",
       "why": "服务面拒绝之二:supervisor 命令失败(退出码 5),指引里带着那条能原样重跑的命令"
+    },
+    {
+      "file": "response-service-self-copy-unsupported.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之三(15 票):源码态的 a2 用了 --copy-to-home —— 这条请求在这个形态的 bin 上不成立(退出码 6),指引给出编译产物那条路"
     },
     {
       "file": "mihomo-status-absent.json",
@@ -259,6 +277,12 @@
       "schema": "ServiceChangeResult",
       "kind": "invalid",
       "why": "收敛动作不在已登记词表内 —— actions 是审计素材,不能是自由文本"
+    },
+    {
+      "file": "invalid-service-status-missing-bin-path.json",
+      "schema": "ServiceStatusResult",
+      "kind": "invalid",
+      "why": "缺 binPath(15 票):面板靠它判断「托管的是不是我这份内核」,这个字段缺省就等于让它去猜"
     },
     {
       "file": "proxy-status-running.json",

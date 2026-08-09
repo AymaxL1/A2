@@ -148,6 +148,14 @@ export const ErrorCode = {
    * 与「参数不对」分开(那是 6),这一档是"路走通了、事没办成",退出码 5。
    */
   serviceOperationFailed: "service_operation_failed",
+  /**
+   * `--copy-to-home` 撞上**开发态**(源码跑,不是 `bun build --compile` 的单文件产物)——
+   * 没有"自身"可拷:那时的 `process.execPath` 是 bun 自己,拷过去只会得到一个跑不起来的空壳。
+   *
+   * 归 6 不归 5(15 票):这不是"事没办成",是**这条请求在这个形态的 bin 上根本不成立** ——
+   * 与 `service_unsupported_platform` 同档(那条说的是这台机器,这条说的是这个 bin)。
+   */
+  serviceSelfCopyUnsupported: "service_self_copy_unsupported",
 
   // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
 
@@ -471,6 +479,11 @@ export type SupervisorKind = z.infer<typeof SupervisorKindSchema>;
  * agent 据此判断"这次是真装了还是本来就装好了",不必比对前后状态。
  */
 export const ServiceActionSchema = z.enum([
+  /**
+   * 把本 bin 自己拷进了 `$A2_HOME/bin/a2`(15 票 `--copy-to-home`)。
+   * **只在内容真的变了(或本来就不在)时出现** —— 同一份 bin 复跑 install 不报这一条。
+   */
+  "bin_copied",
   /** 写(或覆盖)了 unit 文件。 */
   "unit_written",
   /** 删了 unit 文件。 */
@@ -484,8 +497,11 @@ export const ServiceActionSchema = z.enum([
   /** 显式拉起了内核进程(launchd kickstart / systemd start)。 */
   "kernel_started",
   /**
-   * 显式重启了内核进程 —— unit 内容漂了而服务正跑着,重写文件不足以让**已经在跑的那个进程**换成新内容。
-   * 只在 systemd 那条路上出现;launchd 的同一情形表现为 `supervisor_unloaded` + `supervisor_loaded`。
+   * 显式重启了内核进程。**两个产出面,各占一端**:
+   *   * **unit 内容漂了而服务正跑着** —— 重写文件不足以让已经在跑的那个进程换成新内容。这一路
+   *     只有 systemd 走得到;launchd 的同一情形表现为 `supervisor_unloaded` + `supervisor_loaded`。
+   *   * **拷贝换了而 unit 没变**(15 票 `--copy-to-home` 的显式升级)—— unit 一个字没动,
+   *     收敛逻辑因此什么都不做,而跑着的进程还攥着旧 bin。这一路**两端都走得到**。
    */
   "kernel_restarted",
 ]);
@@ -501,6 +517,15 @@ export const ServiceStatusResultSchema = z.object({
   unitPath: z.string().min(1),
   /** unit 文件在不在。 */
   unitInstalled: z.boolean(),
+  /**
+   * unit 实际指向的可执行(15 票)。取值语义与 `unitPath` 同一口径:
+   *   * unit 文件在(且形状认得)→ **从盘上那份 unit 里读出来的** argv[0],即此刻真被托管的那个 bin;
+   *   * unit 不在(或内容不是本内核写的)→ 本次调用**会写**的那个(`--copy-to-home` 时是
+   *     `$A2_HOME/bin/a2`,否则是当前这个 bin 自己)。
+   *
+   * 面板据此判断"托管的是不是我这份内核" —— 所以它必须是**盘上的事实**,而不是本次调用的计划。
+   */
+  binPath: z.string().min(1),
   /** supervisor 认不认识这个 unit。 */
   registered: z.boolean(),
   /** 运行中才有;supervisor 报的进程号。 */

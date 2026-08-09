@@ -78,14 +78,25 @@ export function resolveSupervisorKind(
 }
 
 /**
- * unit 里要跑的那条命令。两种被测/被装形态各一条:
+ * Bun 编译产物特有的虚拟文件系统前缀(实测:编译后 `Bun.main` = `/$bunfs/root/<名字>`)。
+ * 「本进程是不是一个可分发的单文件」这条判据**全仓只此一处**(15 票:`--copy-to-home` 也问它)。
+ */
+export const COMPILED_MAIN_PREFIX = "/$bunfs/";
+
+/** 本进程是不是 `bun build --compile` 出来的单文件产物(而不是源码跑的开发态)。 */
+export function isCompiledBin(): boolean {
+  return Bun.main.startsWith(COMPILED_MAIN_PREFIX);
+}
+
+/**
+ * unit 里要跑的那条命令。三种形态:
+ *   * `binPath` 给了(15 票 `--copy-to-home`)→ `<拷贝> daemon run`,与本进程是什么形态无关;
  *   * 编译产物(`bun build --compile`)→ `<bin> daemon run`;
  *   * 源码跑(开发/测试)→ `<bun> run <入口> daemon run`。
- * 判据用 Bun 编译产物特有的虚拟文件系统前缀(实测:编译后 `Bun.main` = `/$bunfs/root/<名字>`)。
  */
-export function resolveProgramArguments(): string[] {
-  const compiled = Bun.main.startsWith("/$bunfs/");
-  return compiled
+export function resolveProgramArguments(binPath?: string): string[] {
+  if (binPath !== undefined) return [binPath, "daemon", "run"];
+  return isCompiledBin()
     ? [process.execPath, "daemon", "run"]
     : [process.execPath, "run", Bun.main, "daemon", "run"];
 }
@@ -107,13 +118,22 @@ export function systemdUserDir(env: Record<string, string | undefined> = process
   return path.join(base, "systemd", "user");
 }
 
+export interface ServicePlanOptions {
+  /**
+   * unit 里要跑的可执行(15 票 `--copy-to-home`:`$A2_HOME/bin/a2` 那份拷贝)。
+   * 不给则由 `resolveProgramArguments()` 按本进程形态自己算 —— 不带旗标时行为一字不变。
+   */
+  binPath?: string;
+}
+
 /** 把「装哪个 unit」这件事一次算清:路径、内容、启动命令、日志目录。 */
 export function servicePlan(
   kind: SupervisorKind,
   paths: KernelPaths,
   env: Record<string, string | undefined> = process.env,
+  options: ServicePlanOptions = {},
 ): ServicePlan {
-  const programArguments = resolveProgramArguments();
+  const programArguments = resolveProgramArguments(options.binPath);
   const logDir = path.join(paths.home, LOG_DIR_NAME);
   // launchd 不读 shell profile(launchd/systemd 都一样),A2_HOME 必须写进 unit ——
   // 否则系统托管的实例会去管 `~/.a2`,而不是你安装时指定的那个 home。
@@ -329,4 +349,67 @@ export function renderSystemdUnit(spec: Omit<UnitSpec, "label"> & { description?
     "WantedBy=default.target",
     "",
   ].join("\n");
+}
+
+// MARK: - 反向:从**盘上那份 unit** 里读回它实际要跑的可执行(15 票)
+
+/**
+ * 已装好的 unit 实际指向的可执行(argv[0])。解不动(不是本内核写的 / 形状不认识)返回 undefined。
+ *
+ * 为什么非读盘不可:`servicePlan()` 算出来的是「**这次调用会写**什么」,而 `service status` 的
+ * `binPath` 要答的是「**盘上那份现在指着**什么」。面板正是靠这个区别判断"内核该不该升级" ——
+ * 若拿本次调用的计划值冒充事实,面板从 .app 里跑一次 status 就会看到 .app 内那份 bin,
+ * 而 unit 其实指着 `$A2_HOME/bin/a2` 的拷贝。那不是不精确,是假话。
+ *
+ * 两个渲染器各有一个反向物,与它们**逐条对位**(有往返断言守着:render → parse ≡ 原 argv[0])。
+ */
+export function unitBinaryPath(kind: SupervisorKind, content: string): string | undefined {
+  return kind === "launchd" ? launchdBinaryPath(content) : systemdBinaryPath(content);
+}
+
+/** `renderLaunchdPlist` 的反向:ProgramArguments 数组里的头一个 `<string>`。 */
+function launchdBinaryPath(content: string): string | undefined {
+  const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(content)?.[1];
+  if (block === undefined) return undefined;
+  const first = /<string>([\s\S]*?)<\/string>/.exec(block)?.[1];
+  return first === undefined ? undefined : xmlUnescape(first);
+}
+
+/** `xmlEscape` 的反向。`&amp;` **必须最后还原**,否则 `&amp;lt;` 会被两步吃成 `<`。 */
+function xmlUnescape(value: string): string {
+  return value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+}
+
+/** `renderSystemdUnit` 的反向:`ExecStart=` 那行的头一个词(按 `systemdQuote` 的词法拆)。 */
+function systemdBinaryPath(content: string): string | undefined {
+  const line = /^ExecStart=(.*)$/m.exec(content)?.[1];
+  return line === undefined ? undefined : systemdFirstToken(line);
+}
+
+/**
+ * `systemdQuote` 的反向,只取头一个词。两种形态:带引号的(值里有空格/引号/反斜杠/`$`/`%`)与裸的。
+ * `%%` → 字面 `%` 的还原对两种形态都要做(转义发生在加引号**之前**,见 `systemdQuote`)。
+ */
+function systemdFirstToken(line: string): string | undefined {
+  const text = line.trimStart();
+  if (text.length === 0) return undefined;
+  if (!text.startsWith('"')) {
+    const end = /\s/.exec(text)?.index ?? text.length;
+    return text.slice(0, end).replaceAll("%%", "%");
+  }
+  let token = "";
+  for (let index = 1; index < text.length; index += 1) {
+    const char = text[index] as string;
+    // `systemdQuote` 只会转义 `\` 与 `"` 两种,别的反斜杠原样留着。
+    if (char === "\\" && index + 1 < text.length) {
+      const next = text[index + 1] as string;
+      token += next === "\\" || next === '"' ? next : `\\${next}`;
+      index += 1;
+      continue;
+    }
+    if (char === '"') return token.replaceAll("%%", "%");
+    token += char;
+  }
+  // 引号没闭合 —— 不是本内核写出来的东西,不猜。
+  return undefined;
 }
