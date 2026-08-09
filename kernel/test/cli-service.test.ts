@@ -779,6 +779,420 @@ test("三条命令的机读面:stdout 恒是**一条**包封,没有散文混进�
   }
 });
 
+// MARK: - 卸载补全:--purge(17 票 / ADR 0012 第 6 条修订)
+//
+// 这一组把「零残留」那条路走完整:拆内核 unit → 拆 a2 自管的 mihomo → 删整个 $A2_HOME。
+// 红线的证明方式是**造一个用户自己的 mihomo 在场**(`io.metacubex.mihomo`:真 unit 文件 + 经假
+// supervisor 真登记的真进程 + 一份配置),然后断言它整场毫发无伤 —— 而不是只断言"我们没打算碰它"。
+
+const MIHOMO_LABEL = "com.a2.mihomo";
+/** 用户自己装的那份(红线对象)。内核在任何路径下都不许碰它,连问一句都不该。 */
+const FOREIGN_LABEL = "io.metacubex.mihomo";
+
+/** 该 label 的 unit 该落在哪(测试自己拼,不问被测代码要)。 */
+function unitPathFor(box: Sandbox, kind: SupervisorKind, label: string): string {
+  return kind === "launchd"
+    ? path.join(box.root, "Library", "LaunchAgents", `${label}.plist`)
+    : path.join(box.env.XDG_CONFIG_HOME as string, "systemd", "user", `${label}.service`);
+}
+
+/**
+ * 在沙盒里造一个「这个 unit 正装着而且跑着」的现场:写 unit 文件 + **经假 supervisor 真登记**
+ * (于是它真起一个进程)。用测试自己写状态文件是不行的 —— 那样"内核有没有真的把它拆掉"就没法验。
+ *
+ * 起的是一条 `while true; do sleep 1; done` 的壳脚本,命令行里带着沙盒根 —— afterEach 的 pkill 兜得住。
+ */
+async function installLiveUnit(
+  box: Sandbox,
+  kind: SupervisorKind,
+  label: string,
+): Promise<{ unitPath: string; pid: number }> {
+  const script = path.join(box.root, `${label}.sh`);
+  await writeFile(script, `#!/bin/sh\n# ${label} 的替身常驻进程\nwhile true; do sleep 1; done\n`, {
+    mode: 0o755,
+  });
+  const unitPath = unitPathFor(box, kind, label);
+  await mkdir(path.dirname(unitPath), { recursive: true });
+
+  if (kind === "launchd") {
+    await writeFile(
+      unitPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "<dict>",
+        "\t<key>Label</key>",
+        `\t<string>${label}</string>`,
+        "\t<key>ProgramArguments</key>",
+        "\t<array>",
+        `\t\t<string>${script}</string>`,
+        "\t</array>",
+        "\t<key>RunAtLoad</key>",
+        "\t<true/>",
+        "</dict>",
+        "</plist>",
+        "",
+      ].join("\n"),
+      { mode: 0o644 },
+    );
+    const boot = Bun.spawnSync({
+      cmd: [path.join(FAKE_DIR, "launchctl"), "bootstrap", `gui/${process.getuid?.()}`, unitPath],
+      env: { ...process.env, ...box.env },
+    });
+    expect(boot.exitCode).toBe(0);
+    const pid = Number.parseInt(
+      (await readFile(path.join(box.stateDir, `${label}.pid`), "utf8")).trim(),
+      10,
+    );
+    return { unitPath, pid };
+  }
+
+  await writeFile(
+    unitPath,
+    ["[Unit]", `Description=${label} 替身`, "", "[Service]", `ExecStart=${script}`, ""].join("\n"),
+    { mode: 0o644 },
+  );
+  const unitName = `${label}.service`;
+  const systemctl = path.join(FAKE_DIR, "systemctl");
+  const env = { ...process.env, ...box.env };
+  expect(Bun.spawnSync({ cmd: [systemctl, "--user", "enable", unitName], env }).exitCode).toBe(0);
+  expect(Bun.spawnSync({ cmd: [systemctl, "--user", "start", unitName], env }).exitCode).toBe(0);
+  const state = (await readFile(path.join(box.stateDir, `${unitName}.state`), "utf8")).trim();
+  return { unitPath, pid: Number.parseInt(state.split(" ")[1] as string, 10) };
+}
+
+/** 用户自己那份 mihomo 的**数据**(内核连读都不该读)。 */
+async function writeForeignData(box: Sandbox): Promise<string> {
+  const file = path.join(box.root, "metacubex", "config.yaml");
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "mixed-port: 33888\nexternal-controller: 127.0.0.1:9090\n");
+  return file;
+}
+
+/** 一份合法的接管快照(`a2 proxy on` 落的那份)。它在 = 现在系统代理由 a2 接管着。 */
+async function writeTakeoverSnapshot(box: Sandbox): Promise<string> {
+  const file = path.join(box.home, "system-proxy.json");
+  await mkdir(box.home, { recursive: true });
+  await writeFile(
+    file,
+    `${JSON.stringify(
+      {
+        takenOverAt: "2026-08-10T02:14:07.221Z",
+        host: "127.0.0.1",
+        port: 7897,
+        services: [
+          {
+            service: "Wi-Fi",
+            http: { enabled: false, host: "", port: 0 },
+            https: { enabled: false, host: "", port: 0 },
+            socks: { enabled: false, host: "", port: 0 },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return file;
+}
+
+test("uninstall --purge(launchd):拆两个 com.a2.* unit + 删整个 $A2_HOME,机读面给出先看后删的账", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  const installed = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  const kernelPid = installed.result.status.pid;
+  const mihomo = await installLiveUnit(box, "launchd", MIHOMO_LABEL);
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(ServiceChangeResultSchema.safeParse(body.result).success).toBe(true);
+  // 顺序即安全性:先拆内核、再拆托管的 mihomo、最后才删数据。
+  expect(body.result.actions).toEqual([
+    "supervisor_unloaded",
+    "unit_removed",
+    "mihomo_unit_removed",
+    "home_purged",
+  ]);
+  // 「先看后删」的对账面:具体到 label 与绝对路径,不用从 actions 反推。
+  expect(body.result.purge).toEqual({
+    removedUnits: [LABEL, MIHOMO_LABEL],
+    removedPaths: [box.home],
+  });
+
+  // 盘上的事实:两个 unit 文件都没了、$A2_HOME 整棵树没了(那份内核拷贝随它一起)。
+  expect(existsSync(box.unitPath)).toBe(false);
+  expect(existsSync(mihomo.unitPath)).toBe(false);
+  expect(existsSync(box.home)).toBe(false);
+  expect(existsSync(box.homeBinPath)).toBe(false);
+  // 「干净移除」是关于进程的承诺:两条命都真的没了。
+  await waitFor("内核进程退出", () => !isAlive(kernelPid));
+  await waitFor("a2 自管的 mihomo 退出", () => !isAlive(mihomo.pid));
+});
+
+test("红线:purge 整场不碰用户自己的 mihomo —— unit、配置、进程三样毫发无伤", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  const foreign = await installLiveUnit(box, "launchd", FOREIGN_LABEL);
+  const foreignUnitBytes = await readFile(foreign.unitPath, "utf8");
+  const foreignData = await writeForeignData(box);
+  const foreignDataBytes = await readFile(foreignData, "utf8");
+  await service(box, ["install"]);
+  await installLiveUnit(box, "launchd", MIHOMO_LABEL);
+  // 分界线:此后日志里的每一条都是**被测命令自己发的**(上面那几条是测试搭现场发的)。
+  const callsBefore = (await supervisorCalls(box)).length;
+
+  const body = parseJsonStdout(
+    await runCli(["service", "uninstall", "--purge", "--json"], { home: box.home, env: box.env }),
+  );
+
+  // ① 清单里只可能有 com.a2.*(契约层还有一条 pattern 钉着,见 invalid-service-change-purge-foreign-unit)。
+  for (const label of body.result.purge.removedUnits) {
+    expect(label.startsWith("com.a2.")).toBe(true);
+  }
+  expect(body.result.purge.removedUnits).not.toContain(FOREIGN_LABEL);
+  // ② 删掉的路径只可能是 $A2_HOME 这一条。
+  expect(body.result.purge.removedPaths).toEqual([box.home]);
+  // ③ 整条报文里没有"别人"的影子(错把它写进指引/detail 也算越界)。
+  expect(JSON.stringify(body)).not.toContain("metacubex");
+  // ④ purge 发给 supervisor 的每一条命令,目标都只能是我们自己那两个 label ——
+  //    这一条比"清单里没有它"更硬:它证明内核连**问**都没问过别人的 unit。
+  const purgeCalls = (await supervisorCalls(box)).slice(callsBefore);
+  expect(purgeCalls.length).toBeGreaterThan(0);
+  for (const call of purgeCalls) {
+    expect(call).not.toContain("metacubex");
+    expect(call.includes(LABEL) || call.includes(MIHOMO_LABEL)).toBe(true);
+  }
+  // ⑤ 盘上与进程表上的事实:他的 unit、他的配置、他的进程,一样没动。
+  expect(await readFile(foreign.unitPath, "utf8")).toBe(foreignUnitBytes);
+  expect(await readFile(foreignData, "utf8")).toBe(foreignDataBytes);
+  expect(isAlive(foreign.pid)).toBe(true);
+});
+
+test("purge:a2 自管的 mihomo 不在就跳过 —— 不报 mihomo_unit_removed,清单里也没有它", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await service(box, ["install"]);
+
+  const body = parseJsonStdout(
+    await runCli(["service", "uninstall", "--purge", "--json"], { home: box.home, env: box.env }),
+  );
+
+  expect(body.result.actions).toEqual(["supervisor_unloaded", "unit_removed", "home_purged"]);
+  expect(body.result.purge.removedUnits).toEqual([LABEL]);
+  expect(existsSync(box.home)).toBe(false);
+});
+
+test("purge 幂等:全都不在时 actions 为空、账是两个空数组,退出码仍是 0", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(body.result.actions).toEqual([]);
+  expect(body.result.purge).toEqual({ removedUnits: [], removedPaths: [] });
+  expect(body.result.status.state).toBe("not_installed");
+});
+
+test("系统代理仍处接管态:purge 结构化拒绝 + 退出码 1,**一个字节都不删**,指引给两条还原路", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  const installed = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env }),
+  );
+  const mihomo = await installLiveUnit(box, "launchd", MIHOMO_LABEL);
+  const snapshot = await writeTakeoverSnapshot(box);
+  const callsBefore = (await supervisorCalls(box)).length;
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
+
+  // 「这会儿不该发」与用法错同一档(1):还原一次之后,同一条命令就成立了。
+  expect(result.exitCode).toBe(1);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.code).toBe("service_purge_blocked");
+  expect(body.error.detail).toContain(snapshot);
+  // 拒绝即指引:CLI 与面板两条路各给一条,再给"这次就只拆服务"的退路。
+  const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
+  expect(commands).toContain("a2 proxy off");
+  expect(commands).toContain("a2 service uninstall");
+  expect(
+    body.error.guidance.steps.some((step: { description: string }) =>
+      step.description.includes("关闭系统代理(还原)"),
+    ),
+  ).toBe(true);
+
+  // **拒绝时零删除**:服务照跑、两个 unit 都在、home 与快照原样、连一条改状态的 supervisor 命令都没发。
+  expect(existsSync(box.unitPath)).toBe(true);
+  expect(existsSync(mihomo.unitPath)).toBe(true);
+  expect(existsSync(box.home)).toBe(true);
+  expect(existsSync(snapshot)).toBe(true);
+  expect(existsSync(box.homeBinPath)).toBe(true);
+  expect(isAlive(installed.result.status.pid)).toBe(true);
+  expect(isAlive(mihomo.pid)).toBe(true);
+  expect((await supervisorCalls(box)).slice(callsBefore)).toEqual([]);
+
+  // 金标是这条拒绝的手写镜像:静态文本逐字相等、指引步骤同序、context 键集相等
+  // (detail 与两个 context 值都含本次沙盒的真路径,只比键)。
+  const golden = await Bun.file(
+    path.resolve(import.meta.dir, "../contract/golden/response-service-purge-blocked.json"),
+  ).json();
+  expect(body.error.code).toBe(golden.error.code);
+  expect(body.error.message).toBe(golden.error.message);
+  expect(body.error.guidance.summary).toBe(golden.error.guidance.summary);
+  expect(commands).toEqual(
+    golden.error.guidance.steps.map((step: { command?: string }) => step.command),
+  );
+  expect(body.error.guidance.steps.map((step: { description: string }) => step.description)).toEqual(
+    golden.error.guidance.steps.map((step: { description: string }) => step.description),
+  );
+  expect(Object.keys(body.error.guidance.context).sort()).toEqual(
+    Object.keys(golden.error.guidance.context).sort(),
+  );
+});
+
+test("接管快照坏了照样拒绝:判据是**它在不在**,不是它解不解得开", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await service(box, ["install"]);
+  await mkdir(box.home, { recursive: true });
+  await writeFile(path.join(box.home, "system-proxy.json"), "{ 这不是 JSON");
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
+
+  expect(result.exitCode).toBe(1);
+  const body = parseJsonStdout(result);
+  expect(body.error.code).toBe("service_purge_blocked");
+  // 一个解不开的还原依据仍然是还原依据 —— 删掉它同样不可逆。
+  expect(body.error.detail).toContain("解不开");
+  expect(existsSync(box.home)).toBe(true);
+  expect(existsSync(box.unitPath)).toBe(true);
+});
+
+test("不带 --purge 的卸载一字未变:$A2_HOME 与那份拷贝都在,机读面里没有 purge 这个键", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env });
+  await installLiveUnit(box, "launchd", MIHOMO_LABEL);
+
+  const body = parseJsonStdout(await service(box, ["uninstall"]));
+
+  expect(body.result.actions).toEqual(["supervisor_unloaded", "unit_removed"]);
+  expect(body.result.purge).toBeUndefined();
+  expect(existsSync(box.home)).toBe(true);
+  expect(existsSync(box.homeBinPath)).toBe(true);
+  // a2 自管的 mihomo 也不在普通卸载的射程内(「数据面不随控制面起落」)。
+  expect(existsSync(unitPathFor(box, "launchd", MIHOMO_LABEL))).toBe(true);
+});
+
+test("uninstall --purge(systemd):unit 从 XDG 位置删掉,daemon-reload 走到,home 照样清干净", async () => {
+  const box = (sandbox = await makeSandbox("systemd"));
+  await service(box, ["install"]);
+  const mihomo = await installLiveUnit(box, "systemd", MIHOMO_LABEL);
+
+  const body = parseJsonStdout(
+    await runCli(["service", "uninstall", "--purge", "--json"], { home: box.home, env: box.env }),
+  );
+
+  expect(body.result.actions).toEqual([
+    "supervisor_unloaded",
+    "unit_removed",
+    "supervisor_reloaded",
+    "mihomo_unit_removed",
+    "home_purged",
+  ]);
+  expect(body.result.purge).toEqual({
+    removedUnits: [LABEL, MIHOMO_LABEL],
+    removedPaths: [box.home],
+  });
+  expect(existsSync(mihomo.unitPath)).toBe(false);
+  expect(existsSync(box.home)).toBe(false);
+  expect(await supervisorCalls(box)).toContain(`systemctl --user stop ${MIHOMO_LABEL}.service`);
+  await waitFor("a2 自管的 mihomo 退出", () => !isAlive(mihomo.pid));
+});
+
+test("--purge 只对 uninstall 有意义:用在 install/status 上是用法错,什么都不动", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+
+  for (const action of ["install", "status"]) {
+    const result = await runCli(["service", action, "--purge", "--json"], {
+      home: box.home,
+      env: box.env,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const body = parseJsonStdout(result);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("usage");
+    expect(body.error.message).toContain("--purge");
+  }
+  expect(await supervisorCalls(box)).toEqual([]);
+  expect(existsSync(box.unitPath)).toBe(false);
+});
+
+test("人类面也给同一份账:移除的 label、删掉的路径、以及「你自己的 mihomo 不在内」", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await service(box, ["install"]);
+  await installLiveUnit(box, "launchd", MIHOMO_LABEL);
+
+  const human = await runCli(["service", "uninstall", "--purge"], { home: box.home, env: box.env });
+
+  expect(human.exitCode).toBe(0);
+  expect(human.stdout).toContain(`已移除的 unit:${LABEL}、${MIHOMO_LABEL}`);
+  expect(human.stdout).toContain(`已删除的目录:${box.home}`);
+  expect(human.stdout).toContain("你自己装的 mihomo");
+  // 不带旗标那条的注解不该在这里冒出来(它说的是"拷贝保留不删",而这一次正好删了)。
+  expect(human.stdout).not.toContain("保留不删");
+});
+
+/**
+ * **自删合法性**(票面第 3 条):purge 会删掉 `$A2_HOME/bin/a2`,而这条命令可能正是**从那份拷贝**跑的。
+ * 删除正在执行的可执行在 macOS/Linux 上是合法的(inode 活到进程退出),所以它必须跑完、退干净。
+ *
+ * 这条在两种被测体上都跑,但**真正的证明在编译产物那一遍**(`A2_TEST_BIN` / `kernel/scripts/build.sh`):
+ * 那时 `$A2_HOME/bin/a2` 是一份真的单文件产物,进程正在执行的就是被删掉的那些字节;
+ * 源码那一遍拷过去的是个 `exec bun …` 的壳脚本,`sh` 早就 exec 走了,证明力弱一档 —— 如实记在这里。
+ */
+test("自删:从 $A2_HOME/bin/a2 那份拷贝上跑 purge —— 删掉正在执行的自身,照样退出 0 且目录没了", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const env = { ...box.env, ...selfBinEnv(box) };
+  await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env });
+  expect(existsSync(box.homeBinPath)).toBe(true);
+
+  // 注意:跑的是**那份拷贝**,不是被测体自己。
+  const proc = Bun.spawnSync({
+    cmd: [box.homeBinPath, "service", "uninstall", "--purge", "--json"],
+    env: { ...process.env, ...box.env, A2_HOME: box.home },
+  });
+
+  expect(proc.exitCode).toBe(0);
+  const body = JSON.parse(proc.stdout.toString());
+  expect(body.ok).toBe(true);
+  expect(body.result.actions).toContain("home_purged");
+  expect(body.result.purge.removedPaths).toEqual([box.home]);
+  // 自己把自己删了,而且删干净了。
+  expect(existsSync(box.homeBinPath)).toBe(false);
+  expect(existsSync(box.home)).toBe(false);
+  expect(existsSync(box.unitPath)).toBe(false);
+});
+
 // MARK: - 用法面与不支持的平台
 
 test("service 用法错:缺动作 / 未知动作 / 多余参数一律退出码 1 + 指向服务面自己的帮助", async () => {

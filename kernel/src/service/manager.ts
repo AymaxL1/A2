@@ -10,6 +10,7 @@
 // supervisor 是合法的;`status` 只读;其余任何命令仍然只 connect、从不 spawn。
 
 import { existsSync, readFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { callKernel } from "../client/kernel-client.ts";
 import {
@@ -19,9 +20,12 @@ import {
   opSuccess,
   type OpOutcome,
   type ServiceAction,
+  type ServicePurgeReport,
   type ServiceStatusResult,
   type WireError,
 } from "../contract/wire.ts";
+import { mihomoLayout } from "../mihomo/paths.ts";
+import { readSnapshot, snapshotPath } from "../proxy/system-proxy.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts";
 import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
@@ -34,6 +38,7 @@ import {
   type UnitAction,
 } from "./supervisor.ts";
 import {
+  mihomoServicePlan,
   resolveSupervisorKind,
   servicePlan,
   STDERR_LOG_NAME,
@@ -130,17 +135,93 @@ function processReplaced(actions: UnitAction[], supervisor: Supervisor): boolean
   return loadImpliesStart(supervisor, actions);
 }
 
-export async function serviceUninstall(paths: KernelPaths): Promise<OpOutcome> {
+export interface ServiceUninstallOptions {
+  /**
+   * `--purge`(17 票):卸载之后**继续往下清** —— 拆掉 a2 自管的 mihomo unit(`com.a2.mihomo`,
+   * 装着才拆)、再删掉整个 `$A2_HOME`。不给则行为一字不变(只拆内核那一个 unit)。
+   */
+  purge?: boolean;
+}
+
+/**
+ * 卸载。不带 `--purge` 时口径与 15 票一字不变:**只拆内核那一个 unit**。
+ *
+ * 带 `--purge` 时的**顺序即安全性**,四步一步都不能挪:
+ *   ⓪ **拒绝判据前置** —— 系统代理仍处接管态就当场拒绝,**一个字节都不删**(见 `purgeBlockedError`)。
+ *      放在最前面是因为"删一半再拒"比"直接拒"糟得多:那时内核已经没了,而还原依据还在,人两头够不着。
+ *   ① 拆内核 unit(既有路径,含"进程真的没了"的确认);
+ *   ② 拆 `com.a2.mihomo`(装着才拆,不在则整条不报 action);两个 unit 都收拾干净,才轮得到删数据 ——
+ *      反过来先删 `$A2_HOME` 的话,那两个进程会攥着一个已经不存在的配置目录继续跑;
+ *   ③ 删 `$A2_HOME` 整棵树。
+ *
+ * **范围红线**:动得了的 unit 只有 `plan.label` 与 `MIHOMO_SERVICE_LABEL` 两个常量(`com.a2.*`),
+ * 动得了的路径只有 `paths.home` 一条。用户自己装的 mihomo(`io.metacubex.mihomo` 等)无论装在哪、
+ * 数据放在哪,都不在任何一条代码路径的射程内。
+ */
+export async function serviceUninstall(
+  paths: KernelPaths,
+  options: ServiceUninstallOptions = {},
+): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
+    // ⓪ 拒绝判据在**动手之前**。判据是接管记录这个文件在不在(`system-proxy.ts` 的口径:
+    //    "它在 = 现在是我接管着"),不经 daemon —— purge 的典型时刻恰恰是 daemon 已经该没了。
+    if (options.purge && existsSync(snapshotPath(paths))) {
+      return opFailure(await purgeBlockedError(paths));
+    }
+
     const supervisor = createSupervisor(plan);
     // 卸载的承诺是"干净移除",所以要真的确认进程没了 —— 否则下一次 install 会撞上一个野生实例。
     const { actions, state } = await removeUnit(plan, supervisor);
     if (state.pid !== undefined) {
       return opFailure(stillRunningError(plan, state.pid));
     }
+    const serviceActions = kernelActions(actions);
 
-    return opSuccess({ status: statusResult(plan, state), actions: kernelActions(actions) });
+    if (!options.purge) {
+      return opSuccess({ status: statusResult(plan, state), actions: serviceActions });
+    }
+
+    const purge: ServicePurgeReport = { removedUnits: [], removedPaths: [] };
+    if (actions.includes("unit_removed") || actions.includes("supervisor_unloaded")) {
+      purge.removedUnits.push(plan.label);
+    }
+
+    // ② a2 自管的 mihomo。plan 取的是 `a2 mihomo install` **会写的那一份**(同一个 layout、
+    //    同一个渲染器)—— 各拼一次路径就会有"purge 删的不是 install 装的"这种最难查的漂移。
+    const mihomo = mihomoPlanFor(plan, paths);
+    const removedMihomo = await removeUnit(mihomo, createSupervisor(mihomo));
+    if (removedMihomo.state.pid !== undefined) {
+      return opFailure(mihomoStillRunningError(mihomo, removedMihomo.state.pid));
+    }
+    if (removedMihomo.actions.length > 0) {
+      serviceActions.push("mihomo_unit_removed");
+      purge.removedUnits.push(mihomo.label);
+    }
+
+    // ③ 数据面。两个 unit 都收拾干净了,这一步才是安全的。
+    if (existsSync(paths.home)) {
+      await rm(paths.home, { recursive: true, force: true });
+      serviceActions.push("home_purged");
+      purge.removedPaths.push(paths.home);
+    }
+
+    // 状态取删完之后的那一帧:unit 不在、进程不在 —— 与"卸干净了"这句话对得上。
+    return opSuccess({ status: statusResult(plan, state), actions: serviceActions, purge });
   });
+}
+
+/**
+ * `com.a2.mihomo` 的 plan。**唯一目的是拆它**,所以三个路径参数取自 `mihomoLayout`
+ * (与 `a2 mihomo install` 同一个来源),unit 内容本身在移除路径上不参与任何判断。
+ */
+function mihomoPlanFor(plan: ServicePlan, paths: KernelPaths): ServicePlan {
+  const layout = mihomoLayout(paths, process.env);
+  return mihomoServicePlan(
+    plan.kind,
+    paths,
+    { binaryPath: layout.binaryPath, dataDir: layout.dataDir, configPath: layout.configPath },
+    process.env,
+  );
 }
 
 /** unit 层的通用动作词 → 服务面的词表(内核这一份的进程就叫「内核」)。 */
@@ -361,6 +442,64 @@ function notAnsweringError(plan: ServicePlan): WireError {
         { description: "再查一次运行态", command: "a2 status --json" },
       ],
       context: { socketPath: plan.paths.socketPath, unitPath: plan.unitPath, home: plan.paths.home },
+    },
+  };
+}
+
+/**
+ * `--purge` 撞上**系统代理仍处接管态**(17 票)。**拒绝即指引**,而且拒绝时零删除。
+ *
+ * 为什么不"顺手替他还原了再删":还原是一条**显式命令**(ADR 0008 的立场,`a2 proxy off` /
+ * 面板的「关闭系统代理(还原)」)。一次卸载顺手改掉用户的网络配置,与"卸载"这个词承诺的事无关 ——
+ * 而且真出了岔子(某个网络服务写不回去),人会在一次他以为只是"删文件"的操作里丢掉网络。
+ *
+ * detail 里带上快照说了什么(接管时间与指向的 host:port):人得知道"现在系统指着谁"才敢下一步。
+ * 快照读不出来(文件坏了)照样拒绝 —— **判据是文件在不在**,不是它内容合不合法:
+ * 一个解不开的还原依据仍然是还原依据,把它删掉同样是不可逆的。
+ */
+async function purgeBlockedError(paths: KernelPaths): Promise<WireError> {
+  const file = snapshotPath(paths);
+  const snapshot = await readSnapshot(paths);
+  const pointing = snapshot
+    ? `接管于 ${snapshot.takenOverAt || "(时间未记)"},当前把系统代理指向 ${snapshot.host}:${snapshot.port}`
+    : "快照文件解不开(内容坏了),但它在 —— 还原依据仍然只有它一份";
+  return {
+    code: ErrorCode.servicePurgeBlocked,
+    message: "系统代理仍由 a2 接管着,已拒绝 --purge —— 什么都没删。",
+    detail:
+      `${file} 还在:${pointing}。` +
+      "这份快照是把系统代理还原回接管前的唯一依据,而 --purge 要删的正是整个 $A2_HOME —— " +
+      "连它一起删掉,系统就会一直指着一个马上不存在的端口:当场断网,而且再也还原不回去。",
+    guidance: {
+      summary: "先显式还原系统代理,再来 purge。还原是一条独立命令 —— 内核不在卸载里替你改网络设置。",
+      steps: [
+        { description: "还原系统代理(命令行,不需要 daemon 在跑)", command: "a2 proxy off" },
+        { description: "或在面板里点:菜单「关闭系统代理(还原)」" },
+        { description: "还原之后再来一次", command: "a2 service uninstall --purge --json" },
+        { description: "或者这次就只拆服务(数据与 $A2_HOME 原样留下)", command: "a2 service uninstall" },
+      ],
+      context: { home: paths.home, snapshotPath: file },
+    },
+  };
+}
+
+/**
+ * `--purge` 时 a2 自管的 mihomo 拆不干净。与内核那条(`stillRunningError`)同一种姿势:
+ * **进程还在就绝不往下删数据** —— 删掉它的配置与数据目录只会让一个还活着的 mihomo 变成孤魂。
+ */
+function mihomoStillRunningError(plan: ServicePlan, pid: number): WireError {
+  return {
+    code: ErrorCode.serviceOperationFailed,
+    message: "已从 supervisor 卸下 a2 自管的 mihomo,但它的进程仍在运行 —— 已停在这一步,$A2_HOME 未删。",
+    detail: `supervisor 仍报告 ${plan.label} 的 pid ${pid}。`,
+    guidance: {
+      summary: "确认那个进程是不是 a2 自管的那份,是则显式停掉它,然后重跑(幂等)。",
+      steps: [
+        { description: "看它是谁(**别停不属于 a2 的那份**)", command: `ps -p ${pid} -o pid,command` },
+        { description: "确认是 a2 自管的那份后停掉它", command: `kill ${pid}` },
+        { description: "重跑清理", command: "a2 service uninstall --purge" },
+      ],
+      context: { unitPath: plan.unitPath, label: plan.label, pid: String(pid) },
     },
   };
 }

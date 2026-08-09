@@ -11,6 +11,7 @@ import {
   ServiceChangeResultSchema,
   ServiceStatusResultSchema,
   type ServiceChangeResult,
+  type ServicePurgeReport,
   type ServiceStatusResult,
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
@@ -20,12 +21,16 @@ import { SERVICE_USAGE, helpOutcome, serviceUsageOutcome } from "./usage.ts";
 
 /** 把自身单文件拷进 `$A2_HOME/bin/a2` 并让 unit 指向拷贝(15 票 / ADR 0012「面板自足」)。 */
 const COPY_TO_HOME_FLAG = "--copy-to-home";
+/** 卸载之后继续拆 `com.a2.mihomo` 并删掉整个 `$A2_HOME`(17 票 / ADR 0012 第 6 条修订)。 */
+const PURGE_FLAG = "--purge";
+const FLAGS = [COPY_TO_HOME_FLAG, PURGE_FLAG];
 
 export async function serviceCommand(args: string[], paths: KernelPaths): Promise<CommandOutcome> {
-  // `--copy-to-home` 是三条命令里**唯一**的旗标(15 票);`--json` 更早一步就被 `main.ts` 摘掉了,
-  // 走到这里的从来只有子命令自己的参数。
+  // 三条命令一共只认这两个旗标(`--copy-to-home` 归 install、`--purge` 归 uninstall);
+  // `--json` 更早一步就被 `main.ts` 摘掉了,走到这里的从来只有子命令自己的参数。
   const copyToHome = args.includes(COPY_TO_HOME_FLAG);
-  const [action, ...rest] = args.filter((arg) => arg !== COPY_TO_HOME_FLAG);
+  const purge = args.includes(PURGE_FLAG);
+  const [action, ...rest] = args.filter((arg) => !FLAGS.includes(arg));
 
   if (action === undefined) {
     return serviceUsageOutcome("service 需要一个动作:install / uninstall / status");
@@ -42,6 +47,13 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
   if (copyToHome && action !== "install") {
     return serviceUsageOutcome(
       `${COPY_TO_HOME_FLAG} 只对 install 有意义(收到:service ${action} ${COPY_TO_HOME_FLAG})`,
+    );
+  }
+  // 同一口径,而且这一条更要紧:`--purge` 会删掉整个 $A2_HOME —— 把它写在 install 后面还被
+  // 默默忽略,人会以为自己已经清理过了。
+  if (purge && action !== "uninstall") {
+    return serviceUsageOutcome(
+      `${PURGE_FLAG} 只对 uninstall 有意义(收到:service ${action} ${PURGE_FLAG})`,
     );
   }
 
@@ -63,10 +75,10 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
   }
   if (action === "uninstall") {
     return outcomeFromOpOutcome(
-      await serviceUninstall(paths),
+      await serviceUninstall(paths, { purge }),
       "service.uninstall",
       ServiceChangeResultSchema,
-      (result) => renderChange(result, "卸载", UNINSTALL_KEEPS_BIN),
+      (result) => renderChange(result, purge ? "卸载并清理" : "卸载", purge ? undefined : UNINSTALL_KEEPS_BIN),
     );
   }
 
@@ -108,6 +120,24 @@ function renderChange(result: ServiceChangeResult, verb: string, note?: string):
       ? `${verb}:已经是目标状态,本次未改动任何东西。`
       : `${verb}完成:${result.actions.join("、")}`;
   const lines = [head, renderStatus(result.status)];
+  if (result.purge !== undefined) lines.push(...renderPurge(result.purge));
   if (note !== undefined) lines.push(note);
   return lines.join("\n");
+}
+
+/**
+ * `--purge` 的人类面对账:**具体到 label 与绝对路径**(与机读面同一份事实,不是另写一段散文)。
+ * 最后那句红线不是客套 —— 它是这条命令边界的一部分,人在删完之后有权看见它。
+ */
+function renderPurge(purge: ServicePurgeReport): string[] {
+  const lines = [
+    purge.removedUnits.length === 0
+      ? "  已移除的 unit:无(本来就不在)"
+      : `  已移除的 unit:${purge.removedUnits.join("、")}`,
+    purge.removedPaths.length === 0
+      ? "  已删除的目录:无(本来就不在)"
+      : `  已删除的目录:${purge.removedPaths.join("、")}`,
+  ];
+  lines.push("  清理范围恒为 com.a2.* 与 $A2_HOME —— 你自己装的 mihomo 与它的配置从不在内。");
+  return lines;
 }

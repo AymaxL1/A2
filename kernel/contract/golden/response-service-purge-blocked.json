@@ -1,0 +1,34 @@
+{
+  "v": 1,
+  "id": "018f7a20-9c31-7d42-b6a8-5e1f3c8d7051",
+  "ok": false,
+  "error": {
+    "code": "service_purge_blocked",
+    "message": "系统代理仍由 a2 接管着,已拒绝 --purge —— 什么都没删。",
+    "detail": "/Users/alice/.a2/system-proxy.json 还在:接管于 2026-08-10T02:14:07.221Z,当前把系统代理指向 127.0.0.1:7897。这份快照是把系统代理还原回接管前的唯一依据,而 --purge 要删的正是整个 $A2_HOME —— 连它一起删掉,系统就会一直指着一个马上不存在的端口:当场断网,而且再也还原不回去。",
+    "guidance": {
+      "summary": "先显式还原系统代理,再来 purge。还原是一条独立命令 —— 内核不在卸载里替你改网络设置。",
+      "steps": [
+        {
+          "description": "还原系统代理(命令行,不需要 daemon 在跑)",
+          "command": "a2 proxy off"
+        },
+        {
+          "description": "或在面板里点:菜单「关闭系统代理(还原)」"
+        },
+        {
+          "description": "还原之后再来一次",
+          "command": "a2 service uninstall --purge --json"
+        },
+        {
+          "description": "或者这次就只拆服务(数据与 $A2_HOME 原样留下)",
+          "command": "a2 service uninstall"
+        }
+      ],
+      "context": {
+        "home": "/Users/alice/.a2",
+        "snapshotPath": "/Users/alice/.a2/system-proxy.json"
+      }
+    }
+  }
+}

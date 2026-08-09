@@ -44,6 +44,11 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.usage:
     // 「已经在跑」不是能力失败也不是协议错,而是"你这条命令这会儿不该发" —— 与用法错同一档。
     case ErrorCode.daemonAlreadyRunning:
+    // 同一档(17 票):`--purge` 撞上系统代理仍处接管态。命令本身完全成立、什么都没做,
+    // 只是**这会儿不该发** —— 敲一次 `a2 proxy off` 之后同一条命令就成立了。
+    // 不归 5(那是"路走通了、事没办成",而这次连走都没走),也不归 6(那是"在这台机器/
+    // 这个 bin 上根本不成立",而这次只是时机不对)。
+    case ErrorCode.servicePurgeBlocked:
       return ExitCode.usage;
     // dangerous 被拒的两种:没人能替你确认(第①层默拒 / 在途降级)、有人看了但不同意(第③层)。
     case ErrorCode.confirmationUnavailable:

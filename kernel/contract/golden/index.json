@@ -141,6 +141,12 @@
       "why": "显式升级(15 票):拷贝内容变了而 unit 一个字没动,于是只有 bin_copied + kernel_restarted —— 换了文件不等于换了进程"
     },
     {
+      "file": "service-change-purge.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "卸载补全(17 票 --purge):两个 com.a2.* unit 都拆了 + $A2_HOME 删了,purge 那份「先看后删」的账逐条对得上 actions"
+    },
+    {
       "file": "response-service-unsupported-platform.json",
       "schema": "ResponseEnvelope",
       "kind": "valid",
@@ -157,6 +163,12 @@
       "schema": "ResponseEnvelope",
       "kind": "valid",
       "why": "服务面拒绝之三(15 票):源码态的 a2 用了 --copy-to-home —— 这条请求在这个形态的 bin 上不成立(退出码 6),指引给出编译产物那条路"
+    },
+    {
+      "file": "response-service-purge-blocked.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之四(17 票):系统代理仍处接管态时 --purge 被拒(退出码 1,「这会儿不该发」),**拒绝时零删除**,指引给出还原的两条路(CLI / 面板)"
     },
     {
       "file": "mihomo-status-absent.json",
@@ -277,6 +289,12 @@
       "schema": "ServiceChangeResult",
       "kind": "invalid",
       "why": "收敛动作不在已登记词表内 —— actions 是审计素材,不能是自由文本"
+    },
+    {
+      "file": "invalid-service-change-purge-foreign-unit.json",
+      "schema": "ServiceChangeResult",
+      "kind": "invalid",
+      "why": "**红线在契约层**(17 票):purge 的移除清单里出现了别人的 unit(io.metacubex.mihomo)—— label 形状恒为 com.a2.*,用户自己装的 mihomo 连「被记进清单」都不合法"
     },
     {
       "file": "invalid-service-status-missing-bin-path.json",

@@ -78,9 +78,35 @@
           "supervisor_unloaded",
           "supervisor_reloaded",
           "kernel_started",
-          "kernel_restarted"
+          "kernel_restarted",
+          "mihomo_unit_removed",
+          "home_purged"
         ]
       }
+    },
+    "purge": {
+      "type": "object",
+      "properties": {
+        "removedUnits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^com\\.a2\\.[a-z0-9]+$"
+          }
+        },
+        "removedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "removedUnits",
+        "removedPaths"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

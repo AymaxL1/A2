@@ -156,6 +156,19 @@ export const ErrorCode = {
    * 与 `service_unsupported_platform` 同档(那条说的是这台机器,这条说的是这个 bin)。
    */
   serviceSelfCopyUnsupported: "service_self_copy_unsupported",
+  /**
+   * `service uninstall --purge` 撞上**系统代理仍处接管态**(17 票)——**拒绝,且一个字节都不删**。
+   *
+   * 为什么非拒不可:接管快照(`<A2_HOME>/system-proxy.json`)是把系统代理还原回接管前的**唯一依据**,
+   * 而 purge 要删的正是整个 `$A2_HOME`。连它一起删掉 = 系统代理永远指着一个马上就不存在的端口,
+   * 当场断网、且再也还原不回去。**绝不"顺手替他还原"**:还原是一条显式命令(ADR 0008 的立场),
+   * 内核不在一次卸载里替人改他的网络配置。
+   *
+   * 归 1 不归 5/6(与 `daemon_already_running` 同档):命令本身完全成立,只是**这会儿不该发** ——
+   * 敲一次 `a2 proxy off` 之后同一条命令就成立了。5 是"路走通了、事没办成"(这次连走都没走),
+   * 6 是"在这台机器/这个 bin 上根本不成立"(这次只是时机不对)。
+   */
+  servicePurgeBlocked: "service_purge_blocked",
 
   // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
 
@@ -508,6 +521,22 @@ export const ServiceActionSchema = z.enum([
    * 面板/订阅者断后自行重连,重连拿到的是新内核的一份全量快照。
    */
   "kernel_restarted",
+  /**
+   * 拆掉了 **a2 自管的** mihomo unit(`com.a2.mihomo`:bootout + 删 unit 文件)。
+   * **只在 `uninstall --purge` 里出现**,而且只在那个 unit 真的在时才出现(不在则整条不报)。
+   *
+   * 为什么内核的卸载会碰它:`--purge` 承诺的是「a2 在这台机器上留下的东西没了」,而 a2 托管的
+   * mihomo 正是 a2 装的。**红线**:范围恒是 `com.a2.*` 那两个 label —— 用户自己装的 mihomo
+   * (`io.metacubex.mihomo` 等)在任何路径下都不在清理范围内,契约层由 `ServicePurgeReport`
+   * 的 label 形状(`^com\.a2\.`)钉着。
+   */
+  "mihomo_unit_removed",
+  /**
+   * 删掉了整个 `$A2_HOME`(17 票 `uninstall --purge`)。**不可撤销**,所以它有三道前置:
+   * 系统代理未处接管态(否则结构化拒绝、零删除)、内核进程真的没了、托管的 mihomo 也真的没了。
+   * 删的**只有** `$A2_HOME` 这一棵树,路径在 `purge.removedPaths` 里如实列出(先看后删)。
+   */
+  "home_purged",
 ]);
 export type ServiceAction = z.infer<typeof ServiceActionSchema>;
 
@@ -540,12 +569,41 @@ export const ServiceStatusResultSchema = z.object({
 });
 export type ServiceStatusResult = z.infer<typeof ServiceStatusResultSchema>;
 
+/**
+ * 内核自己碰得到的 unit label 的形状(17 票的**红线在契约层的投影**)。
+ *
+ * `purge` 的移除清单只允许 `com.a2.*` —— 于是"用户自己装的 mihomo(`io.metacubex.mihomo`)
+ * 出现在清理范围里"这件事**在 schema 层就不合法**,不必等到读代码或读测试才发现。
+ * 导出的 JSON Schema 里它是一条 `pattern`,agent 与 Swift 侧读同一份约束。
+ */
+export const A2_UNIT_LABEL_PATTERN = /^com\.a2\.[a-z0-9]+$/;
+
+/**
+ * `--purge` 的**对账面**(17 票):这一次到底摘掉了哪几个 unit、删掉了哪几棵树。
+ *
+ * 为什么要单列而不是让人从 `actions` 反推:`actions` 说的是"做了哪一类事",而删除是不可撤销的 ——
+ * 「先看后删」要求报文里有**具体到 label 与绝对路径**的账,人和 agent 才能在事后核对
+ * (以及在事前用 `--json` 看一眼同一形状的空账:两个数组都空 = 没什么可删的)。
+ */
+export const ServicePurgeReportSchema = z.object({
+  /** 本次真的从 supervisor 摘下并删掉 unit 文件的 label(有序;恒是 `com.a2.*`)。 */
+  removedUnits: z.array(z.string().regex(A2_UNIT_LABEL_PATTERN)),
+  /** 本次真的删掉的根路径(恒是 `$A2_HOME` 这一条;没删则为空数组)。 */
+  removedPaths: z.array(z.string().min(1)),
+});
+export type ServicePurgeReport = z.infer<typeof ServicePurgeReportSchema>;
+
 /** `a2 service install|uninstall` 的 result:收敛后的状态 + 本次真改了什么。 */
 export const ServiceChangeResultSchema = z.object({
   /** 收敛后的服务状态(与 `a2 service status` 同一形状,免得再问一次)。 */
   status: ServiceStatusResultSchema,
   /** 本次实际执行的动作;**空数组 = 本来就是这个样子**(幂等复跑)。 */
   actions: z.array(ServiceActionSchema),
+  /**
+   * 只有 `uninstall --purge` 才有(17 票)。**在场本身就是信号**:这一次走的是 purge 那条路;
+   * 不在场 = 这是一次普通的 install/uninstall,`$A2_HOME` 一个字节都没动。
+   */
+  purge: ServicePurgeReportSchema.optional(),
 });
 export type ServiceChangeResult = z.infer<typeof ServiceChangeResultSchema>;
 

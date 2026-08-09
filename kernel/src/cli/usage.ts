@@ -62,10 +62,11 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
 
 用法:
   a2 [--json] service install [--copy-to-home]   装成系统托管的常驻服务并确保它跑着(幂等)
-  a2 [--json] service uninstall                  停掉并干净移除(幂等)
+  a2 [--json] service uninstall [--purge]        停掉并干净移除(幂等);--purge 连数据一起清
   a2 [--json] service status                     查安装态与运行态(只读)
 
-除 --copy-to-home 外不接受任何参数:unit 名恒为 com.a2.kernel,内核只碰这一个 unit。
+除 --copy-to-home / --purge 外不接受任何参数:unit 名恒为 com.a2.kernel 与 com.a2.mihomo,
+内核只碰这两个 —— 你自己装的 mihomo(io.metacubex.mihomo 等)在任何路径下都不在射程内。
 三条命令都可 --json(与走 daemon 的命令同一形状的包封)—— 面板的引导路径走的就是这条机读面。
 
 --copy-to-home(面板自足,ADR 0012):
@@ -75,7 +76,20 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
   **重启会掐断所有在途长连接**:已注册角色随连接消失,在途 dangerous 确认按「断线即默拒」收尾
   (08 票语义,不因升级而例外);面板/订阅者断后自行重连,重连即拿到新内核的全量快照。
   只有编译产物能这么装:源码态跑的 a2 没有可分发的"自身",会结构化拒绝(service_self_copy_unsupported)。
-  卸载**不删**这份拷贝:它在数据同侧,清理是另一个显式动作。
+  卸载**不删**这份拷贝:它在数据同侧,清理是另一个显式动作 —— 就是下面这个 --purge。
+
+--purge(卸载补全,17 票 / ADR 0012 第 6 条修订):
+  在"拆内核 unit"之后**继续往下清**,顺序固定、每一步都可从 --json 里核对:
+    ① 拆 com.a2.kernel(与不带旗标时逐字相同)
+    ② 拆 com.a2.mihomo —— **a2 自管的那份** mihomo 服务;它不在则整条跳过、不报 action
+    ③ 删掉整个 $A2_HOME(内核拷贝、订阅、插件、日志、a2 自己下的 mihomo 二进制与数据)
+  机读面给的是**先看后删的账**:result.purge.removedUnits(label)与 result.purge.removedPaths(绝对路径)。
+  **红线**:范围恒是 com.a2.* 与 $A2_HOME。你自己装的 mihomo、它的配置与数据,任何路径下都不动。
+  **系统代理仍处接管态时拒绝执行**(service_purge_blocked,退出码 1)且**一个字节都不删** ——
+  接管快照 $A2_HOME/system-proxy.json 是还原的唯一依据,连它一起删就再也还原不回去了。
+  先 a2 proxy off(或面板的「关闭系统代理(还原)」)再来。还原永远是显式命令,卸载不替你做。
+  从 $A2_HOME/bin/a2 那份拷贝上跑它是合法的:删掉正在执行的自身在 macOS/Linux 上没问题
+  (inode 活到进程退出),命令照常跑完、退出码 0。
 
 托管形态:
   macOS                launchd user 域 agent(~/Library/LaunchAgents),KeepAlive.Crashed 自愈 + RunAtLoad 自启
@@ -91,13 +105,15 @@ status 的三态(机读字段 result.state):
 机读面(--json)里与面板有关的两个字段:
   result.status.binPath  unit 实际指向的可执行(读的是**盘上那份 unit**;未安装时给的是 install 会写的那个)
   result.actions         本次真改了什么;空数组 = 本来就是这样(bin_copied 只在拷贝内容真的变了时出现)
+  result.purge           只有 --purge 才有:removedUnits(移除的 label)+ removedPaths(删掉的绝对路径)
 
 环境变量:
   A2_HOME              覆写 ~/.a2;install 会把它写进 unit(supervisor 不读 shell 配置)
   A2_SERVICE_SUPERVISOR 覆写 supervisor 选择(launchd|systemd)。仅测试与诊断用
   A2_SELF_BIN          覆写 --copy-to-home 要拷的那份可分发单文件。仅测试与诊断用
 
-退出码:0 成功 / 1 用法错 / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 这条请求在这台机器或这个 bin 上不成立
+退出码:0 成功 / 1 用法错,以及「这会儿不该发」(--purge 撞上系统代理仍处接管态:service_purge_blocked)
+       / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 这条请求在这台机器或这个 bin 上不成立
        (本平台无已支持的 supervisor;或源码态的 a2 用了 --copy-to-home)`;
 
 export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据面不随控制面起落)
