@@ -246,8 +246,13 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
             return "supervisor 报错,或装完没跑起来"
         case "service_purge_blocked":
             // 退出码 1 的粗分类是「用法错」,而这条**不是**你点错了:是系统代理还没还原,
-            //   内核为此拒绝执行且什么都没删。照粗分类说会误导人,所以这里说准。
-            return "系统代理还没还原,清理已被拒绝 —— 什么都没删"
+            //   内核为此拒绝执行。照粗分类说会误导人,所以这里说准。
+            //   (「什么都没删」不在这句里 —— 内核那条 message 已经说了,这一行不复读。)
+            return "系统代理还没还原,清理被拒;还原之后再来一次即可"
+        case "service_purge_home_mismatch":
+            return "盘上那份服务是为另一个 A2_HOME 装的,清理被拒"
+        case "service_purge_unsafe_home":
+            return "这个 A2_HOME 不能整棵删(是根 / 家目录 / 一根符号链接)"
         default:
             return nil
         }

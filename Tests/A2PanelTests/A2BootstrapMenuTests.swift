@@ -94,6 +94,40 @@ struct A2BootstrapMenuTests {
         #expect(item(m, titled: "安装并启动内核")?.enabled == true)
     }
 
+    @Test("17 分支⑦ purge 被拒:失败行下面把内核的指引**逐行原样**摊开(拒绝即指引的最后一跳)")
+    func branchPurgeBlockedShowsGuidance() throws {
+        let m = model(A2PanelFixtures.bootstrapPurgeBlocked)
+        let all = items(m)
+        let failureIndex = try #require(all.firstIndex { $0.title.hasPrefix("⚠️ 引导失败:") })
+        let failure = try #require(A2PanelFixtures.bootstrapPurgeBlocked.bootstrap.lastFailure)
+
+        // 失败行本身:内核原话 + 机读坐标 + 那句说准的白话(退出码 1 的粗分类会误导人)。
+        #expect(all[failureIndex].title.contains("service_purge_blocked"))
+        #expect(all[failureIndex].title.contains("系统代理还没还原"))
+
+        // 紧随其后的**每一行**都是 guidance,顺序与内核给的一模一样,一个字不改写。
+        let expected = failure.guidanceLines
+        #expect(expected.count == 5, "摘要 + 四条做法")
+        let rendered = Array(all[(failureIndex + 1)...].prefix(expected.count))
+        #expect(rendered.map(\.title) == expected)
+        #expect(rendered.allSatisfy { $0.kind == .info && !$0.enabled },
+                "指引是只读信息,不该有一条是能点的")
+        // 两条路都在,而且是**原样的命令**(壳不替它编、也不替它挑)。
+        #expect(rendered.contains { $0.title.contains("a2 proxy off") })
+        #expect(rendered.contains { $0.title.contains("关闭系统代理(还原)") })
+    }
+
+    @Test("17 没有 guidance 的失败:失败行之后一行都不多(16 票那批的菜单一个字节没变)")
+    func failureWithoutGuidanceAddsNoLines() throws {
+        let m = model(A2PanelFixtures.bootstrapFailed)
+        let all = items(m)
+        let failureIndex = try #require(all.firstIndex { $0.title.hasPrefix("⚠️ 引导失败:") })
+        #expect(A2PanelFixtures.bootstrapFailed.bootstrap.lastFailure?.guidanceLines.isEmpty == true)
+        #expect(all.indices.contains(failureIndex + 1) == false
+                || all[failureIndex + 1].kind != .info
+                || !all[failureIndex + 1].title.hasPrefix("↳ "))
+    }
+
     @Test("16 分支⑤已连 + 版本失配:出「升级内核 vX→vY(重启服务,不断网)」,同一条 install")
     func branchUpgrade() throws {
         let m = model(A2PanelFixtures.bootstrapUpgrade)

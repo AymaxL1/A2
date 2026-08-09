@@ -1,0 +1,35 @@
+[header disabled] A2 Panel · 代理
+[separator]
+[info disabled] 内核:已连接 v0.1.0
+[info disabled] 确认器:在场(dangerous 会弹到这里)
+[info disabled] ⚠️ 引导失败:系统代理仍由 a2 接管着,已拒绝 --purge —— 什么都没删。(service_purge_blocked · 退出码 1 —— 系统代理还没还原,清理被拒;还原之后再来一次即可)
+[info disabled] ↳ 先显式还原系统代理,再来 purge。还原是一条独立命令 —— 内核不在卸载里替你改网络设置。
+[info disabled] ↳ 还原系统代理(命令行,不需要 daemon 在跑):a2 proxy off
+[info disabled] ↳ 或在面板里点:菜单「关闭系统代理(还原)」
+[info disabled] ↳ 还原之后再来一次:a2 service uninstall --purge --json
+[info disabled] ↳ 或者这次就只拆服务(数据与 $A2_HOME 原样留下):a2 service uninstall
+[separator]
+[info disabled] mihomo:未运行  → proxy.status  @basicStatus
+[separator]
+[action disabled] 开启系统代理  → proxy.system.enable  @systemProxyToggle  (mihomo 未运行,接管后会指向死端口)
+[action enabled checked] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
+[separator]
+[action disabled] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch  (mihomo 未运行)
+[action disabled] 模式:全局  → proxy.mode.set {mode=global}  @modeSwitch  (mihomo 未运行)
+[action disabled] 模式:直连  → proxy.mode.set {mode=direct}  @modeSwitch  (mihomo 未运行)
+[separator]
+[info disabled] 代理组:mihomo 未运行,不可用
+[action disabled] 选择节点  → proxy.node.select  @nodeSelect  (无可用代理组)
+[action disabled] 延迟测速  → proxy.latency.test  @latencyTest  (无可用代理组)
+[separator]
+[info disabled] 订阅:无  → proxy.subscription.list  @subscriptionManage
+[group disabled] 更新订阅  (尚无订阅)
+[group disabled] 删除订阅…  (尚无订阅)
+[action enabled] 添加 / 替换订阅源…  → proxy.subscription.add prompts[name,source]  @subscriptionManage
+[separator]
+[group enabled] 高级
+  [bootstrap enabled] 停止并卸载内核服务…  ⇒ a2 service uninstall
+  [info disabled] (默认只拆服务;确认框里可勾选「同时删除 ~/.a2」)
+[separator]
+[about enabled] 关于 A2 Panel
+[quit enabled] 退出面板(代理继续运行)

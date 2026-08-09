@@ -40,7 +40,7 @@ struct A2PanelSnapshotTests {
             .appendingPathComponent("Snapshots/a2-panel")
     }()
 
-    @Test("10 快照:每种主要状态逐张与 golden 一致(像素 + 模型文本;16 票起含六条引导分支)",
+    @Test("10 快照:每种主要状态逐张与 golden 一致(像素 + 模型文本;17 票起含七条引导分支)",
           arguments: A2PanelFixtures.fixtures.map(\.name))
     func snapshotMatchesGolden(_ name: String) throws {
         let fixture = try #require(A2PanelFixtures.fixtures.first { $0.name == name })

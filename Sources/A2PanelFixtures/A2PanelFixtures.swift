@@ -304,11 +304,42 @@ public enum A2PanelFixtures {
                                     embeddedKernelVersion: "0.1.0",
                                     serviceState: .running))
 
+    /// ⑪ 已连 + 上一次 purge 被拒(17 票 CR 尾款)——**失败面把内核给的指引原样摊开**。
+    ///
+    /// 为什么值一张图:`guidanceLines` 是"拒绝即指引"在壳上的最后一跳。前十张里没有一张带 guidance
+    /// 的失败(08 那条的内核报文本来就没有 guidance),于是这条从解析到菜单的路只有单测走过、
+    /// 没有任何一份 golden 画过它。这一张把它钉在两个渲染器上(文本 + 像素)。
+    ///
+    /// 报文逐字取自金标 `response-service-purge-blocked.json`(那是内核那条拒绝的手写镜像)。
+    public static let bootstrapPurgeBlocked = Fixture(
+        name: "11-bootstrap-purge-blocked",
+        title: "已连 · 勾了「同时删除 ~/.a2」但系统代理还没还原(拒绝 + 指引原样呈现)",
+        state: mihomoDown.state,
+        bootstrap: A2BootstrapState(
+            embeddedBinAvailable: true,
+            embeddedKernelVersion: "0.1.0",
+            serviceState: .running,
+            lastFailure: A2BootstrapFailure(
+                code: "service_purge_blocked",
+                message: "系统代理仍由 a2 接管着,已拒绝 --purge —— 什么都没删。",
+                exitCode: 1,
+                guidance: A2Guidance(
+                    summary: "先显式还原系统代理,再来 purge。还原是一条独立命令 —— 内核不在卸载里替你改网络设置。",
+                    steps: [
+                        A2GuidanceStep(description: "还原系统代理(命令行,不需要 daemon 在跑)",
+                                       command: "a2 proxy off"),
+                        A2GuidanceStep(description: "或在面板里点:菜单「关闭系统代理(还原)」"),
+                        A2GuidanceStep(description: "还原之后再来一次",
+                                       command: "a2 service uninstall --purge --json"),
+                        A2GuidanceStep(description: "或者这次就只拆服务(数据与 $A2_HOME 原样留下)",
+                                       command: "a2 service uninstall"),
+                    ]))))
+
     /// 快照与状态反映断言共用的全部状态(顺序即产物编号顺序)。
     public static let fixtures: [Fixture] = [
         mihomoDown, mihomoRunning, activeSubscription, disconnected,
         bootstrapNotInstalled, bootstrapInstalledNotRunning, bootstrapInstalling,
-        bootstrapFailed, bootstrapUpgrade, bootstrapAdvanced,
+        bootstrapFailed, bootstrapUpgrade, bootstrapAdvanced, bootstrapPurgeBlocked,
     ]
 
     // ============ 确认器装置 ============

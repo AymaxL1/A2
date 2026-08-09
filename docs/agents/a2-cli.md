@@ -28,7 +28,7 @@ a2 proxy status --json           # 等价写法：域子命令面
 | 码 | 含义 | 你该怎么办 |
 |---|---|---|
 | 0 | 成功 | 读 `result` |
-| 1 | 用法错（参数写错、未知子命令） | 按 `guidance` 改命令再试 |
+| 1 | 用法错（参数写错、未知子命令）**或「这会儿/这儿不该发」**（`daemon_already_running`、`service_purge_blocked`、`service_purge_home_mismatch`） | 前者按 `guidance` 改命令；后者**别改命令**——先按 `guidance` 把状态弄对（如 `a2 proxy off`），原样重试即可 |
 | 2 | denied（dangerous 被拒） | **不要重试**：把 `guidance` 原样转告用户，由人去完成 |
 | 3 | 超时（确认器在场，但没人在窗口内做决定） | 告诉用户"那条确认还没人点"，可稍后重来 |
 | 4 | daemon 不可达（没装 / 没跑） | 转告用户跑 `a2 service install`——内核**永不隐式拉起** daemon |
@@ -117,6 +117,12 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
   `daemon_already_running` 同档——命令没错，只是这会儿不该发）。`guidance` 里给的是 `a2 proxy off`
   与面板那条路。**别替用户"顺手还原一下再重试"**：还原是显式命令，那一步该由人自己决定。
   还原之后同一条命令就成立了。
+- 另有两道**删除前的门**，都在动手之前拒绝、零删除：
+  `service_purge_unsafe_home`（退出码 6）——`$A2_HOME` 是 `/`、是家目录本身、是家目录的祖先，
+  或者是一根**符号链接**（删链不删树 = 假账）；`guidance.context.reason` 给机读的原因，
+  symlink 那两档另给 `linkTarget`。`service_purge_home_mismatch`（退出码 1）——盘上那份
+  `com.a2.kernel` unit 记着的是**另一个** `A2_HOME`：label 每用户一个而 `A2_HOME` 每次调用一个，
+  站错地方就会拆掉别的 home 的数据面。指引会告诉你该去哪个 `A2_HOME` 下执行。
 
 ## 别处的权威
 

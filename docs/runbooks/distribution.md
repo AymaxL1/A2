@@ -208,12 +208,14 @@ sh install.sh --uninstall # 删掉 bin
 rm -rf ~/.a2              # 可选：插件、订阅、日志、a2 自管的 mihomo 目录全在这里
 ```
 
-中间三条也可以合成一条（17 票）：`a2 service uninstall --purge` 会依次拆 `com.a2.kernel`、拆 a2 自管的
-`com.a2.mihomo`、删掉整个 `$A2_HOME`，并在 `--json` 里列出移除的 label 与删掉的路径。**第一条仍不能跳**：
-系统代理还处接管态时它会结构化拒绝（退出码 1）且什么都不删——还原依据就在 `$A2_HOME` 里。
-（从 `$A2_HOME/bin/a2` 那份拷贝上跑它是合法的：删掉正在执行的自身在 macOS/Linux 上没问题。）
+第 2、3、5 条可以合成一条（17 票）：`a2 service uninstall --purge` 会依次拆 `com.a2.kernel`、拆 a2 自管的
+`com.a2.mihomo`、删掉整个 `$A2_HOME`，并在 `--json` 里列出移除的 label 与删掉的路径。
+**第 1 条仍不能跳**：系统代理还处接管态时它会结构化拒绝（退出码 1）且什么都不删——还原依据就在
+`$A2_HOME` 里。**第 4 条仍须单独跑**：`install.sh --uninstall` 删的是 **PATH 上那份 bin**
+（`~/.local/bin/a2` 之类），它在 `$A2_HOME` 之外，`--purge` 够不着也不该够得着。
+（从 `$A2_HOME/bin/a2` 那份拷贝上跑 `--purge` 是合法的：删掉正在执行的自身在 macOS/Linux 上没问题。）
 
-**顺序不是建议，是硬约束**：上面前三条的执行者正是 `a2` 自己 —— bin 删了就没有工具能收拾它们了。
+**顺序不是建议，是硬约束**：上面第 1–3 条的执行者正是 `a2` 自己 —— bin 删了就没有工具能收拾它们了。
 所以 `install.sh --uninstall` 会**先看后删**：只要 `~/Library/LaunchAgents/com.a2.*.plist`、
 `~/.config/systemd/user/com.a2.*.service` 或 `<A2_HOME>/system-proxy.json` 还在，它就**拒绝删 bin**
 并把该先跑的命令打出来。这些判据全是**文件在不在**，脚本不调用任何 supervisor。
@@ -254,7 +256,9 @@ a2 service uninstall --purge --json    # 拒绝时退出码 1（先 a2 proxy off
 **没勾那一格时留下 `~/.a2` 是有意的**：数据同侧的东西不该被一次点击带走——与 `install.sh --uninstall`
 「先看后删」是同一种姿势；要清就得**再勾一次那一格**（或者敲上面那条 `--purge`）。
 
-（面板本身除 TCC 授权外不写任何系统状态；它装出来的那两个 launchd 服务是**你点出来的**，按上面卸。）
+（面板本身除 TCC 授权外不写任何系统状态；它装出来的那个 launchd 服务 `com.a2.kernel` 是**你点出来的**，
+按上面卸。`com.a2.mihomo` **不是面板装的**——面板的执行器白名单里没有 `mihomo` 那一族，
+它只可能来自你自己在终端跑的 `a2 mihomo install`；勾了那一格时 `--purge` 会连它一起拆掉。）
 
 ---
 

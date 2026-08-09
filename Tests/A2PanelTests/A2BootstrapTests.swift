@@ -251,8 +251,9 @@ struct A2BootstrapReadingTests {
                                    "mihomo_unit_removed", "home_purged"])
         #expect(change.status.state == .notInstalled)
         // 壳**有意不读** result.purge 那份对账面(镜像豁免的口径,见 A2Bootstrap.swift 头注):
-        //   菜单要说的"删了什么"在 actions 里就够了。这条断言把那个取舍钉住 ——
-        //   哪天真要读它,就得先去改豁免注记。
+        //   菜单要说的"删了什么"在 actions 里就够了。**如实说**:真正让"壳读不到 purge"成立的是
+        //   `A2BootstrapChangeFacts` 里压根没有那个字段(类型层的事实),不是下面这一行断言 ——
+        //   这一行只记下"面板呈现的那份账来自 actions"。哪天要读它,得先去改豁免注记。
         #expect(change.actions.contains("home_purged"))
     }
 
