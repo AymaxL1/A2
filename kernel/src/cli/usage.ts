@@ -85,9 +85,15 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
     ③ 删掉整个 $A2_HOME(内核拷贝、订阅、插件、日志、a2 自己下的 mihomo 二进制与数据)
   机读面给的是**先看后删的账**:result.purge.removedUnits(label)与 result.purge.removedPaths(绝对路径)。
   **红线**:范围恒是 com.a2.* 与 $A2_HOME。你自己装的 mihomo、它的配置与数据,任何路径下都不动。
-  **系统代理仍处接管态时拒绝执行**(service_purge_blocked,退出码 1)且**一个字节都不删** ——
-  接管快照 $A2_HOME/system-proxy.json 是还原的唯一依据,连它一起删就再也还原不回去了。
-  先 a2 proxy off(或面板的「关闭系统代理(还原)」)再来。还原永远是显式命令,卸载不替你做。
+  动手之前有四道门,任何一道不过都**当场拒绝、一个字节都不删**:
+    · 目标形状不成立(service_purge_unsafe_home,6):$A2_HOME 是 /、是家目录本身、是家目录的上级,
+      或者**是一根符号链接** —— 符号链接上的 rm -rf 只删链不删树,报"删干净了"是假账。
+    · 站错了 home(service_purge_home_mismatch,1):盘上那份 unit 记着的是**另一个** A2_HOME。
+      label 每用户一个而 A2_HOME 每次调用一个,站错地方就会拆掉别的 home 的数据面。
+    · **系统代理仍处接管态**(service_purge_blocked,1):接管快照 $A2_HOME/system-proxy.json 是
+      还原的唯一依据,连它一起删就再也还原不回去了。先 a2 proxy off(或面板的「关闭系统代理(还原)」)
+      再来 —— 还原永远是显式命令,卸载不替你做。
+    · 两个 unit 里任何一个"卸下了但进程还在",也停在那一步(service_operation_failed,5),数据不删。
   从 $A2_HOME/bin/a2 那份拷贝上跑它是合法的:删掉正在执行的自身在 macOS/Linux 上没问题
   (inode 活到进程退出),命令照常跑完、退出码 0。
 
@@ -112,9 +118,12 @@ status 的三态(机读字段 result.state):
   A2_SERVICE_SUPERVISOR 覆写 supervisor 选择(launchd|systemd)。仅测试与诊断用
   A2_SELF_BIN          覆写 --copy-to-home 要拷的那份可分发单文件。仅测试与诊断用
 
-退出码:0 成功 / 1 用法错,以及「这会儿不该发」(--purge 撞上系统代理仍处接管态:service_purge_blocked)
-       / 5 操作失败(supervisor 报错、装完没跑起来)/ 6 这条请求在这台机器或这个 bin 上不成立
-       (本平台无已支持的 supervisor;或源码态的 a2 用了 --copy-to-home)`;
+退出码:0 成功
+       1 用法错,以及「这会儿/这儿不该发」(service_purge_blocked、service_purge_home_mismatch ——
+         命令没错,把状态弄对或换个 home 再原样重来)
+       5 操作失败(supervisor 报错、装完没跑起来、卸下了但进程还在)
+       6 这条请求在这台机器 / 这个 bin / 这个 $A2_HOME 上根本不成立(本平台无已支持的 supervisor;
+         源码态的 a2 用了 --copy-to-home;--purge 的目标是 / 或家目录或一根符号链接)`;
 
 export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据面不随控制面起落)
 

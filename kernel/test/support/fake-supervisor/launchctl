@@ -96,6 +96,12 @@ case "$verb" in
   bootout)
     label="$(label_of_target "${2:-}")"
     pidfile="$(pidfile_of_label "$label")"
+    # 故障注入(17 票 CR 尾款):`A2_FAKE_BOOTOUT_KEEPS_PROCESS=<label>` —— bootout 报成功,
+    # 但进程仍在(真机上的对位物:那个进程忽略 SIGTERM、或正卡在收尾里)。
+    # 这是 manager 那两条 "unit 卸下了但进程还在" 分支唯一能被驱动到的路。
+    if [ -f "$pidfile" ] && [ "${A2_FAKE_BOOTOUT_KEEPS_PROCESS:-}" = "$label" ]; then
+      exit 0
+    fi
     if [ -f "$pidfile" ]; then
       pid=$(cat "$pidfile")
       kill "$pid" 2>/dev/null

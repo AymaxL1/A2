@@ -169,6 +169,29 @@ export const ErrorCode = {
    * 6 是"在这台机器/这个 bin 上根本不成立"(这次只是时机不对)。
    */
   servicePurgeBlocked: "service_purge_blocked",
+  /**
+   * `--purge` 的目标 `$A2_HOME` 本身不是一个可以整棵删掉的东西(17 票 CR 尾款):
+   * 文件系统根、用户家目录本身、家目录的祖先(`/Users`)、相对路径,或者**它是一根符号链接**
+   * (删链不删树:数据全在链目标里,而报文会说"删干净了" —— 那是假账)。
+   *
+   * 归 6(与 `service_unsupported_platform` / `service_self_copy_unsupported` 同档):
+   * 那两条说"这条请求在这台机器 / 这个 bin 上不成立",这一条说"在这个 `$A2_HOME` 上不成立"。
+   * `A2_HOME` 是公开覆写项,而 agent 的模板展开出错正是这种形状 —— 所以它是一道**必须存在**的地板,
+   * 不是防呆。`guidance.context.reason` 给出机读的拒绝原因。
+   */
+  servicePurgeUnsafeHome: "service_purge_unsafe_home",
+  /**
+   * 盘上那份 `com.a2.kernel` unit 记着的 `A2_HOME` 与本次调用的不是同一个(17 票 CR 尾款)。
+   *
+   * 为什么这是一道门:label 是**每用户一个常量**,而 `$A2_HOME` 是**每次调用现算**的。
+   * 在 `A2_HOME=/tmp/x` 下 purge,拆掉的是为真 home 装的那两个 unit,而接管快照判据看的是
+   * `/tmp/x` 那份 —— 真 home 的还原依据根本不会被看见。放行 = 拆掉可能正承载系统代理的
+   * `com.a2.mihomo`,当场断网。
+   *
+   * 归 1(与 `daemon_already_running` / `service_purge_blocked` 同档):命令没错,是**站错了地方** ——
+   * 到那个 home 去执行、或先把那边收拾干净,这条就成立了。
+   */
+  servicePurgeHomeMismatch: "service_purge_home_mismatch",
 
   // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
 
@@ -586,10 +609,18 @@ export const A2_UNIT_LABEL_PATTERN = /^com\.a2\.[a-z0-9]+$/;
  * (以及在事前用 `--json` 看一眼同一形状的空账:两个数组都空 = 没什么可删的)。
  */
 export const ServicePurgeReportSchema = z.object({
-  /** 本次真的从 supervisor 摘下并删掉 unit 文件的 label(有序;恒是 `com.a2.*`)。 */
+  /**
+   * 本次真的**从 supervisor 摘下**的 label(unit 文件在则一并删掉);有序,恒是 `com.a2.*`。
+   *
+   * 措辞要紧:判据是"这一次对它做了收敛动作",而**不是**"它的文件被删了" —— 半装状态
+   * (supervisor 认识它但文件早没了)同样算摘下,它也确实该记进账里。
+   */
   removedUnits: z.array(z.string().regex(A2_UNIT_LABEL_PATTERN)),
-  /** 本次真的删掉的根路径(恒是 `$A2_HOME` 这一条;没删则为空数组)。 */
-  removedPaths: z.array(z.string().min(1)),
+  /**
+   * 本次真的删掉的根路径(恒是 `$A2_HOME` 这一条;没删则为空数组)。
+   * **绝对路径**:相对路径在删除的账上毫无意义(读账的人不知道相对谁),schema 层就钉死。
+   */
+  removedPaths: z.array(z.string().regex(/^\//)),
 });
 export type ServicePurgeReport = z.infer<typeof ServicePurgeReportSchema>;
 

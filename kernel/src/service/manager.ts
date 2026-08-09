@@ -28,6 +28,7 @@ import { mihomoLayout } from "../mihomo/paths.ts";
 import { readSnapshot, snapshotPath } from "../proxy/system-proxy.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts";
+import { unsafeHomeOnDisk, unsafeHomeShape, type PurgeRefusal } from "./purge-guard.ts";
 import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
 import {
   createSupervisor,
@@ -38,12 +39,14 @@ import {
   type UnitAction,
 } from "./supervisor.ts";
 import {
+  MIHOMO_SERVICE_LABEL,
   mihomoServicePlan,
   resolveSupervisorKind,
   servicePlan,
   STDERR_LOG_NAME,
   STDOUT_LOG_NAME,
   unitBinaryPath,
+  unitHomePath,
   type ServicePlan,
   type ServicePlanOptions,
 } from "./unit.ts";
@@ -146,9 +149,13 @@ export interface ServiceUninstallOptions {
 /**
  * 卸载。不带 `--purge` 时口径与 15 票一字不变:**只拆内核那一个 unit**。
  *
- * 带 `--purge` 时的**顺序即安全性**,四步一步都不能挪:
- *   ⓪ **拒绝判据前置** —— 系统代理仍处接管态就当场拒绝,**一个字节都不删**(见 `purgeBlockedError`)。
- *      放在最前面是因为"删一半再拒"比"直接拒"糟得多:那时内核已经没了,而还原依据还在,人两头够不着。
+ * 带 `--purge` 时的**顺序即安全性**,一步都不能挪:
+ *   ⓪ **四道拒绝判据全部前置**,任一不过就当场拒绝、**一个字节都不删**:
+ *      ⓪a 目标形状(`purge-guard.ts` 的纯判据:不许是 `/`、家目录本身、家目录的祖先、相对路径);
+ *      ⓪b 目标是不是符号链接(删链不删树 = 假账,如实拒绝并告诉他真实目标在哪);
+ *      ⓪c **盘上那两份 unit 服务的 home 与本次的 `$A2_HOME` 一致**(见 `unitRecordedHome`);
+ *      ⓪d 系统代理仍处接管态(见 `purgeBlockedError`)。
+ *      全部放在最前面是因为"删一半再拒"比"直接拒"糟得多:那时内核已经没了,而还原依据还在,人两头够不着。
  *   ① 拆内核 unit(既有路径,含"进程真的没了"的确认);
  *   ② 拆 `com.a2.mihomo`(装着才拆,不在则整条不报 action);两个 unit 都收拾干净,才轮得到删数据 ——
  *      反过来先删 `$A2_HOME` 的话,那两个进程会攥着一个已经不存在的配置目录继续跑;
@@ -157,16 +164,45 @@ export interface ServiceUninstallOptions {
  * **范围红线**:动得了的 unit 只有 `plan.label` 与 `MIHOMO_SERVICE_LABEL` 两个常量(`com.a2.*`),
  * 动得了的路径只有 `paths.home` 一条。用户自己装的 mihomo(`io.metacubex.mihomo` 等)无论装在哪、
  * 数据放在哪,都不在任何一条代码路径的射程内。
+ *
+ * ============================================================================
+ * 一处必须说清的皱褶:**label 是每用户一个,而 home 是每次调用一个**
+ * ============================================================================
+ * `com.a2.kernel` / `com.a2.mihomo` 这两个 label 是常量(`unit.ts`,任何参数都改不了),
+ * 于是**每个用户在同一时刻只可能有一套 a2 服务**;而 `$A2_HOME` 是每次调用现算的(环境变量可覆写)。
+ * 两者交叉出一个真实的坑:在 `A2_HOME=/tmp/x` 下跑 purge,拆掉的却是**为真 home 装的**那两个 unit,
+ * 而 ⓪d 的接管快照判据看的是 `/tmp/x/system-proxy.json` —— 真 home 那份接管记录根本不会被看见。
+ * 于是"fail-closed 的门"在最需要它的那条路径上是虚掩的:一次 purge 会拆掉正承载着系统代理的
+ * 用户级 `com.a2.mihomo`,当场断网。
+ *
+ * ⓪c 就是把这扇门真的关上:**盘上那两份 unit 各自带着它服务的那个 home 的指纹** ——
+ * 内核那份记着安装时的 `A2_HOME`(`servicePlan` 写进去的),mihomo 那份是它跑的二进制路径
+ * (`<home>/mihomo/bin/mihomo`)。任一与本次的 home 不一致就拒绝,并指引到那个 home 去执行。
+ * 两份都不在则跳过这一条 —— 没有 unit 就没有"被托管的数据面",当前 home 的快照判据照常管用。
  */
 export async function serviceUninstall(
   paths: KernelPaths,
   options: ServiceUninstallOptions = {},
 ): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
-    // ⓪ 拒绝判据在**动手之前**。判据是接管记录这个文件在不在(`system-proxy.ts` 的口径:
-    //    "它在 = 现在是我接管着"),不经 daemon —— purge 的典型时刻恰恰是 daemon 已经该没了。
-    if (options.purge && existsSync(snapshotPath(paths))) {
-      return opFailure(await purgeBlockedError(paths));
+    if (options.purge) {
+      const refusal = unsafeHomeShape(paths.home) ?? (await unsafeHomeOnDisk(paths.home));
+      // ⓪a/⓪b 目标本身不成立 —— 这条请求在这个 $A2_HOME 上根本不该被执行。
+      if (refusal) return opFailure(unsafeHomeError(paths, refusal));
+      // ⓪c 这两个 unit 是不是给这个 home 装的(见上文那段皱褶)。**两个都要核**:
+      //    内核那份记着 `A2_HOME`,mihomo 那份没有(它不认识这个变量),但它的 argv[0] 恒是
+      //    `<home>/mihomo/bin/mihomo` —— 那就是它服务的那个 home 的指纹。
+      //    只核内核那一份是不够的:内核 unit 不在、而 mihomo unit 是别的 home 装的,
+      //    这条路上照样会拆掉一个正承载着系统代理的数据面。
+      const mismatch =
+        unitRecordedHome(plan) ?? unitRecordedHome(mihomoPlanFor(plan, paths));
+      if (mismatch) return opFailure(homeMismatchError(plan, mismatch));
+      // ⓪d 判据是接管记录这个文件在不在(`system-proxy.ts` 的口径:"它在 = 现在是我接管着"),
+      //    不经 daemon —— purge 的典型时刻恰恰是 daemon 已经该没了。**它是 home 相对的**,
+      //    所以必须排在 ⓪c 之后:home 都错了的话,这一条看的是错那个 home 的快照。
+      if (existsSync(snapshotPath(paths))) {
+        return opFailure(await purgeBlockedError(paths));
+      }
     }
 
     const supervisor = createSupervisor(plan);
@@ -208,6 +244,55 @@ export async function serviceUninstall(
     // 状态取删完之后的那一帧:unit 不在、进程不在 —— 与"卸干净了"这句话对得上。
     return opSuccess({ status: statusResult(plan, state), actions: serviceActions, purge });
   });
+}
+
+/** ⓪c 的读数:**哪一个** unit 对不上,以及它盘上那份到底是给谁装的(读不出则缺席)。 */
+interface HomeMismatch {
+  unitPath: string;
+  label: string;
+  /** 从盘上那份 unit 推出来的 home;形状解不出时缺席(那一格同样拒绝,见下)。 */
+  home?: string;
+}
+
+/**
+ * 盘上这个 unit 是给哪个 `$A2_HOME` 装的 —— 对得上返回 undefined,对不上返回它的读数。
+ *
+ * 两个 unit 各有各的指纹,由 `plan.label` 分派:
+ *   * `com.a2.kernel` —— unit 里**明写着** `A2_HOME`(`servicePlan` 无条件注入,supervisor 不读 shell 配置);
+ *   * `com.a2.mihomo` —— 有意**不**注入 `A2_HOME`(mihomo 不认识它),但它的 argv[0] 恒是
+ *     `<home>/mihomo/bin/mihomo`,那就是它服务的那个 home 的指纹。这里不自己拼路径去比,
+ *     而是拿**本次 plan 会写的那个 argv[0]** 与盘上那份逐字比 —— 同源比较,不会各算各的。
+ *
+ * 三种收场:
+ *   * **unit 不在** → 不拒(没有那一份被托管的东西,也就没有"删错谁"的风险);
+ *   * **读得出且相等** → 不拒;
+ *   * **读得出但不等 / 读不出** → 拒。最后那一格是有意的 fail-closed:本内核写的 unit 必然带着
+ *     这两个指纹之一,读不出来说明它不是本内核写的、或者被改坏了 —— 那时我们对"这台机器上正被
+ *     托管的是哪个 home"一无所知,而下一步是不可逆的删除。不猜。
+ */
+function unitRecordedHome(plan: ServicePlan): HomeMismatch | undefined {
+  if (!existsSync(plan.unitPath)) return undefined;
+
+  let content: string | undefined;
+  try {
+    content = readFileSync(plan.unitPath, "utf8");
+  } catch {
+    content = undefined;
+  }
+  const identity = { unitPath: plan.unitPath, label: plan.label };
+  if (content === undefined) return identity;
+
+  if (plan.label === MIHOMO_SERVICE_LABEL) {
+    const binary = unitBinaryPath(plan.kind, content);
+    if (binary === (plan.programArguments[0] as string)) return undefined;
+    // `<home>/mihomo/bin/mihomo` → `<home>`:往上三级。推不出来就只报 unit,不编一个 home 出来。
+    const derived = binary === undefined ? undefined : path.dirname(path.dirname(path.dirname(binary)));
+    return { ...identity, ...(derived === undefined ? {} : { home: derived }) };
+  }
+
+  const recorded = unitHomePath(plan.kind, content);
+  if (recorded === plan.paths.home) return undefined;
+  return { ...identity, ...(recorded === undefined ? {} : { home: recorded }) };
 }
 
 /**
@@ -442,6 +527,101 @@ function notAnsweringError(plan: ServicePlan): WireError {
         { description: "再查一次运行态", command: "a2 status --json" },
       ],
       context: { socketPath: plan.paths.socketPath, unitPath: plan.unitPath, home: plan.paths.home },
+    },
+  };
+}
+
+/**
+ * ⓪a/⓪b:`$A2_HOME` 本身不是一个可以被 `rm -rf` 的目标(17 票 CR 尾款)。
+ *
+ * 归 6 不归 5/1(与 `service_unsupported_platform` / `service_self_copy_unsupported` 同档):
+ * 那两条说的是"这条请求在这台机器 / 这个 bin 上根本不成立",这一条说的是"在这个 `$A2_HOME` 上
+ * 根本不成立" —— 同一种"请求本身不成立"。它**不是** 1(那一档是"命令没错、这会儿不该发",
+ * 等状态变了同一条命令就成立;而 `A2_HOME=/` 无论等到什么时候都不该被删),也不是 5(什么都没执行)。
+ *
+ * `context.reason` 是机读词表(`PurgeRefusalReason`),agent 据此分支;symlink 那两档另给 `linkTarget`,
+ * 免得用户还得自己去 `readlink` 一次才知道数据在哪。
+ */
+function unsafeHomeError(paths: KernelPaths, refusal: PurgeRefusal): WireError {
+  const symlink = refusal.reason === "symlink" || refusal.reason === "dangling_symlink";
+  return {
+    code: ErrorCode.servicePurgeUnsafeHome,
+    message: symlink
+      ? "$A2_HOME 是一根符号链接,已拒绝 --purge —— 删它只会删掉那根链,数据一个字节都不会少。"
+      : "$A2_HOME 不是一个可以整棵删掉的目标,已拒绝 --purge —— 什么都没删。",
+    detail: refusal.detail,
+    guidance: {
+      summary: symlink
+        ? "链目标是你自己指过去的地方,该不该删由你决定 —— 内核只拆服务,不替你处置链那一头的树。"
+        : "把 A2_HOME 指回 a2 自己的数据目录(缺省 ~/.a2)再来;这一次什么都没删。",
+      steps: symlink
+        ? [
+            { description: "看这根链指向哪儿", command: `readlink ${paths.home}` },
+            { description: "只拆服务(不删任何数据)", command: "a2 service uninstall" },
+            {
+              description: "确认要清的话,自己处置链目标那棵树",
+              command: refusal.linkTarget ? `ls -la ${refusal.linkTarget}` : `ls -la ${paths.home}/`,
+            },
+          ]
+        : [
+            { description: "看这次 A2_HOME 到底指着哪儿", command: "a2 service status --json" },
+            { description: "用缺省 home 重来(或把 A2_HOME 指对)", command: "a2 service uninstall --purge" },
+            { description: "只拆服务(不碰任何数据)", command: "a2 service uninstall" },
+          ],
+      context: {
+        home: paths.home,
+        reason: refusal.reason,
+        ...(refusal.linkTarget ? { linkTarget: refusal.linkTarget } : {}),
+      },
+    },
+  };
+}
+
+/**
+ * ⓪c:盘上那份 unit 是给**另一个** `$A2_HOME` 装的(17 票 CR 尾款)。
+ *
+ * 归 1(与 `daemon_already_running` / `service_purge_blocked` 同档):命令本身完全成立,
+ * 只是**不该在这儿发** —— 到那个 home 去执行,或者先把那边收拾干净,这条就成立了。
+ * 不归 6:这不是"这条请求根本不成立",而是"你站错了地方"。
+ *
+ * 为什么必须拒(而不是"顺手把那两个 unit 也拆了"):那两个 unit 服务的是**另一个 home 的数据面**,
+ * 它的接管快照在那边,这次调用连看都看不到。放行 = 拆掉一个可能正承载着系统代理的 mihomo,当场断网。
+ */
+function homeMismatchError(plan: ServicePlan, mismatch: HomeMismatch): WireError {
+  const known = mismatch.home;
+  return {
+    code: ErrorCode.servicePurgeHomeMismatch,
+    message: known
+      ? `盘上这份 ${mismatch.label} 是为另一个 A2_HOME 装的,已拒绝 --purge —— 什么都没删。`
+      : `盘上这份 ${mismatch.label} 读不出它服务的 A2_HOME,已拒绝 --purge —— 什么都没删。`,
+    detail: known
+      ? `${mismatch.unitPath} 服务的是 ${known},而这次调用的是 ${plan.paths.home}。` +
+        "unit 的 label 是每用户一个常量,所以拆掉它影响的是那个 home 的数据面 —— " +
+        "而这次调用连那边的接管快照(还原依据)都看不见,放行等于蒙着眼睛动别人的东西。"
+      : `${mismatch.unitPath} 在,但里面读不出它服务的那个 A2_HOME —— 本内核写的 unit 必然带着这个指纹` +
+        "(内核那份写在 A2_HOME 里,mihomo 那份写在它跑的二进制路径里)," +
+        "所以这份要么不是本内核写的、要么被改坏了。删除不可逆,不猜。",
+    guidance: {
+      summary: known
+        ? "到那个 A2_HOME 下执行(或先在那边把服务与系统代理收拾干净),这条命令就成立了。"
+        : "先看一眼那份 unit 到底是什么,再决定手工处置还是重装一次收敛回来。",
+      steps: known
+        ? [
+            { description: "到那个 home 下清理(先看后删)", command: `A2_HOME=${known} a2 service uninstall --purge --json` },
+            { description: "只拆服务、不动数据的话,这条不挑 home", command: "a2 service uninstall" },
+            { description: "确认当前这次调用用的是哪个 home", command: "a2 service status --json" },
+          ]
+        : [
+            { description: "看那份 unit 的内容", command: `cat ${mismatch.unitPath}` },
+            { description: "重装一次让它收敛回本内核写的形状(幂等)", command: "a2 service install" },
+            { description: "只拆服务、不动数据", command: "a2 service uninstall" },
+          ],
+      context: {
+        unitPath: mismatch.unitPath,
+        label: mismatch.label,
+        home: plan.paths.home,
+        ...(known ? { installedHome: known } : {}),
+      },
     },
   };
 }

@@ -49,6 +49,9 @@ export function exitCodeForErrorCode(code: string): number {
     // 不归 5(那是"路走通了、事没办成",而这次连走都没走),也不归 6(那是"在这台机器/
     // 这个 bin 上根本不成立",而这次只是时机不对)。
     case ErrorCode.servicePurgeBlocked:
+    // 同一档(17 票 CR 尾款):purge 站错了 home。命令没错、什么都没做,到那个 home 去执行
+    // (或先把那边收拾干净)这条就成立了 —— 与上面两条是同一种"此刻/此地不该发"。
+    case ErrorCode.servicePurgeHomeMismatch:
       return ExitCode.usage;
     // dangerous 被拒的两种:没人能替你确认(第①层默拒 / 在途降级)、有人看了但不同意(第③层)。
     case ErrorCode.confirmationUnavailable:
@@ -99,6 +102,10 @@ export function exitCodeForErrorCode(code: string): number {
     // 同理(15 票):`--copy-to-home` 在源码态的 bin 上根本不成立 —— 没有可分发的"自身"可拷。
     // 那条说的是这台机器,这条说的是这个 bin,同一档。
     case ErrorCode.serviceSelfCopyUnsupported:
+    // 同理(17 票 CR 尾款):`--purge` 在这个 `$A2_HOME` 上根本不成立 —— 它是 `/`、是家目录本身、
+    // 是家目录的祖先,或者是一根符号链接(删链不删树)。上一条说的是这个 bin,这条说的是这个 home。
+    // 与 1 的分界:1 那一档等状态变了同一条命令就成立,而这些形状**等到什么时候都不该被删**。
+    case ErrorCode.servicePurgeUnsafeHome:
     // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
     case ErrorCode.systemProxyUnsupported:
     // 长连接协议面的两条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活。

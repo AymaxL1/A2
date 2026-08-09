@@ -381,6 +381,46 @@ function xmlUnescape(value: string): string {
   return value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
 }
 
+/**
+ * 盘上那份 unit 记着的 `A2_HOME`(17 票 CR 尾款)。**解不动就返回 undefined**,同 `unitBinaryPath`:
+ * 绝不猜 —— 这个值是 `--purge` 的一道 fail-closed 门,猜错就是把别人那个 home 的数据删了。
+ *
+ * 为什么它答得了「这份服务是给谁装的」:`servicePlan()` 把安装时的 `A2_HOME` **写进了 unit**
+ * (supervisor 不读 shell 配置,不写进去托管实例就会去管 `~/.a2`)。于是盘上那份 unit 里的
+ * 这一格,就是"这台机器上正被托管的那个内核服务的是哪个 home"的**唯一事实**。
+ *
+ * 与 `unitBinaryPath` 同一条纪律:两个渲染器各有一个反向物,逐条对位,有往返断言守着
+ * (render → parse ≡ 原 home,含带空格 / `&` / `%` 的病态路径)。
+ */
+export function unitHomePath(kind: SupervisorKind, content: string): string | undefined {
+  return kind === "launchd" ? launchdHomePath(content) : systemdHomePath(content);
+}
+
+/** `renderLaunchdPlist` 的反向:`EnvironmentVariables` 那个 dict 里 `A2_HOME` 后面紧跟的那个 `<string>`。 */
+function launchdHomePath(content: string): string | undefined {
+  const block = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(content)?.[1];
+  if (block === undefined) return undefined;
+  const value = /<key>A2_HOME<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(block)?.[1];
+  return value === undefined ? undefined : xmlUnescape(value);
+}
+
+/**
+ * `renderSystemdUnit` 的反向:`Environment=` 那行里的 `A2_HOME=…`。
+ *
+ * 渲染时整条 `KEY=VALUE` 一起过 `systemdQuote`,所以这里也整条取回来再拆第一个 `=` ——
+ * 分开处理会在"值里带空格因而整条被加了引号"那种真实路径上读出半截。
+ */
+function systemdHomePath(content: string): string | undefined {
+  for (const match of content.matchAll(/^Environment=(.*)$/gm)) {
+    const token = systemdFirstToken(match[1] as string);
+    if (token === undefined) continue;
+    const separator = token.indexOf("=");
+    if (separator <= 0) continue;
+    if (token.slice(0, separator) === "A2_HOME") return token.slice(separator + 1);
+  }
+  return undefined;
+}
+
 /** `renderSystemdUnit` 的反向:`ExecStart=` 那行的头一个词(按 `systemdQuote` 的词法拆)。 */
 function systemdBinaryPath(content: string): string | undefined {
   const line = /^ExecStart=(.*)$/m.exec(content)?.[1];
