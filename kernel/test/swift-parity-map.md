@@ -452,7 +452,7 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 | APP-5 | e2e 档 `.app` 内 `aahost` 真起得来、UDS/能力面/`install-cli` 全链 | **淘汰(前提没了)** | `.app` 里已无 CLI、无内嵌内核;壳的活体那一关由旗舰 e2e 承担(它跑的是壳的真代码路径)。**代价如实记**:「双击 `.app` 真能起来并挂上状态栏」没有自动化断言 —— 那要 GUI 会话,归人工项 |
 | APP-6 | 内核 argv 的绝对路径确实在 `.app` 内(`Bundle.module` 落点结论的运行时证明) | **淘汰(前提没了)** | 不再随包分发内核,没有落点问题可证。实测结论留在 git 历史与 `build-app.sh` 的历史注释里 |
 | APP-7 | 随包 GPL-3.0 全文完整(SHA-256 现算现比) | **改判** | 不再随包分发二进制 → 义务面收缩为「调用外部程序」(ADR 0007 修订版)。全文移到 `docs/legal/`,声明落点改为 `a2 about`(顺延 13)+ `A2AboutWindow.declaration`(静态文本) |
-| APP-8 | `.app` 内全部 Mach-O 已签且身份一致 | **映射(改判为结构红线)** | APP8:包里**只该有一个** Mach-O —— 多一个就说明有人悄悄改了分发形态(把「都签了」升级成「不该有第二个」) |
+| APP-8 | `.app` 内全部 Mach-O 已签且身份一致 | **映射(改判为结构红线)** | APP8:包里**只该有一个** Mach-O —— 多一个就说明有人悄悄改了分发形态(把「都签了」升级成「不该有第二个」)。**(2026-08-10 14 票再改判:恰 2 个 —— `a2-panel` + `Resources/a2`,且比的是路径集合、不是个数;内嵌内核见 [ADR 0012](../../docs/adr/0012-panel-self-sufficient-bootstrap.md)。「都签了」那半边也回来了:先内后外两条 codesign,APP6 的资源封印顺带盯着内嵌 bin 有没有被动过)** |
 | APP-9 | `aa proxy license` 报出的内核版本与 `MIHOMO-VERSION.txt` 一致 | **顺延 13** | `proxy.license` 能力随 GPL 义务面收缩淘汰(07 票 H 组已登记);版本单一来源已搬到 `kernel/contract/MIHOMO-VERSION.txt`,`cli-mihomo.test.ts` ▸ 锁版元数据同源 守着 |
 | APP-10 | 子进程红线原文经能力面暴露 | 顺延 13 | 同上,落点改为 `a2 about` 的随包静态文本 |
 

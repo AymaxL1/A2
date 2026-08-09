@@ -67,7 +67,12 @@ EXE_NAME="a2-panel"          # CFBundleExecutable,与 Package.swift 的 product 
 # 内嵌内核 bin 在包里的名字(14 票)。面板按 `Bundle.main.resourceURL/a2` 找它 —— 改这个名字
 #   就要连壳那侧一起改,所以它在这里、只有这一处。
 KERNEL_EXE_NAME="a2"
-APP_VERSION="0.1.0"          # CFBundleShortVersionString 与 CFBundleVersion 共用这一个值
+# CFBundleShortVersionString 与 CFBundleVersion 共用这一个值。
+# ⚠️ 它与**内核版本**(`kernel/package.json` → `runtime/version.ts`)是**两个独立的数**,眼下恰好都是
+#   0.1.0。14 票起包里嵌着内核,于是「壳版本是否随内核走」成了一个要答的问题 —— **发版前待裁**:
+#   要么钉死"同版"(那就加一条硬对账断言),要么明确分开走(那就在发布说明里写清两个版本号)。
+#   在裁定之前:**内核发版时来这里同步核对一次**。本票有意不做硬对账 —— 现在钉死等于替用户先裁了。
+APP_VERSION="0.1.0"
 MIN_MACOS="13.0"             # 与 Package.swift 的 platforms: [.macOS(.v13)] 保持一致
 
 CODESIGN_IDENTITY="${AA_CODESIGN_IDENTITY:--}"
@@ -111,16 +116,41 @@ else
   }
 fi
 
-# bun(14 票起):包里那个内核 bin 是它编出来的,版本权威也要问它。找法与 check.sh 同一套。
-BUN_BIN="${AA_BUN:-}"
-if [ -z "$BUN_BIN" ] || { ! command -v "$BUN_BIN" >/dev/null 2>&1 && [ ! -x "$BUN_BIN" ]; }; then
+# bun(14 票起):包里那个内核 bin 是它编出来的,版本权威也要问它。
+#
+# `AA_BUN` **指了却不可用 → 硬 FAIL**(14 票 CR 尾款):与 `AA_KERNEL_BIN` 同一宽严。显式给的 seam 值
+#   不对就是配置错;静默回落 PATH 会让「我明明指了另一份 bun」变成一个查不出来的谜(而那份 bun 的版本
+#   决定了包里内核 bin 的字节)。
+# ⚠️ 上面 `AA_SWIFT` 那段**有意保留**「指了不可用就往下试候选」的旧形态 —— 那是 10 票起的仓库惯例
+#   (check.sh 的候选表也是那个形态),本票不动它;真要统一成硬 FAIL,得连 check.sh 一起改,属另一张票。
+if [ -n "${AA_BUN:-}" ]; then
+  BUN_BIN="$AA_BUN"
+  command -v "$BUN_BIN" >/dev/null 2>&1 || [ -x "$BUN_BIN" ] || {
+    echo "FAIL: AA_BUN 指的 bun 不可用(不存在 / 没有执行位): $BUN_BIN"
+    echo "  它是显式给进来的 seam —— 不静默回落 PATH,免得包里那份内核是另一个 bun 编的。"
+    exit 1
+  }
+else
   BUN_BIN="$(command -v bun 2>/dev/null)"
   [ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN_BIN="$HOME/.bun/bin/bun"
+  [ -n "$BUN_BIN" ] || {
+    echo "FAIL: 找不到 bun —— 14 票起 .app 里嵌着内核 bin(内核是 TS,ADR 0010),没有它出不了包。"
+    echo "  装法:curl -fsSL https://bun.sh/install | bash(装完在 ~/.bun/bin/bun);或 AA_BUN=<绝对路径>。"
+    exit 1
+  }
 fi
-[ -n "$BUN_BIN" ] || {
-  echo "FAIL: 找不到 bun —— 14 票起 .app 里嵌着内核 bin(内核是 TS,ADR 0010),没有它出不了包。"
-  echo "  装法:curl -fsSL https://bun.sh/install | bash(装完在 ~/.bun/bin/bun);或 AA_BUN=<绝对路径>。"
-  exit 1
+
+# ---- 一次性 `A2_HOME`(施工红线的落点)-------------------------------------------
+# 本脚本要**实跑内核**三次(问版本单一来源、APP9、APP11)。每一次都必须把 `A2_HOME` 指到一个一次性目录:
+#   真 `~/.a2` 是用户的家当,出个包不该碰它一个字节。
+# **`mktemp` 失败必须当场红,不能让 `A2_HOME=""` 把命令放回默认的 `~/.a2`** —— 那不只是踩红线,
+#   还会让「跑完一次性目录里没有残留」那半边断言变成**恒真**(空字符串目录里当然什么都没有)。
+#   式样与 `release-assemble.sh::panel_kernel_version_of` 的 rc-check 一致:失败即非零返回,调用方判红。
+throwaway_home() {  # → stdout 目录路径;造不出来则非零返回
+  local dir
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/a2-app-throwaway-XXXXXX")" || return 1
+  [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  printf '%s' "$dir"
 }
 
 # ---- 构建 ----------------------------------------------------------------------
@@ -151,7 +181,10 @@ BIN="$("$SWIFT_BIN" build --scratch-path "$SCRATCH" --show-bin-path 2>/dev/null)
 #       它是"上游刚做完"的信物,不是"跳过重建"的后门。
 #     * **单独跑时**:自己恒重建一次 `kernel/dist/a2`。这是"包里那份内核就是当前源码"的唯一保证:
 #       `.app` 里嵌一版旧内核而门禁照绿,正是 ②b 当年要挡的那种假绿 —— 只是这次假绿会被**发出去**。
-#       代价实测约 1 秒(bun compile 很快),不值得为它设计任何缓存。
+#   **代价的统一口径**(14 票 CR 尾款,与 check.sh ①/②b 的注释同一句):`bun build --compile` 本机
+#   **热缓存下约 1 秒**(2026-08-09 实测,产物 64MiB);**冷的那一次**(首次编译 / 换了 `--target`
+#   要先下目标运行时)是十几秒到几分钟,那是 bun 预热的代价,不是这条命令稳态的样子。
+#   所以恒重建不必设计任何缓存 —— 稳态就是一秒。
 #   编译命令(入口 + 旗标)与 check.sh ②b、`kernel/scripts/build.sh` 是同一条,有对账断言钉着
 #   (`kernel/test/release-manifest.test.ts` ▸ 内核编译命令三处一致)。
 KERNEL_SRC="$ROOT/kernel/dist/$KERNEL_EXE_NAME"
@@ -171,7 +204,14 @@ fi
 
 # 版本权威**问源码入口要**(`src/runtime/version.ts` → `package.json` 那条单一来源),
 #   不在 shell 里再解析一遍那份 JSON —— 多一处解析就多一个会漂的真值。APP9 拿它与内嵌 bin 自报的对账。
-KERNEL_VERSION="$( ( cd "$ROOT/kernel" && "$BUN_BIN" run ./src/cli/main.ts version ) 2>/dev/null | tr -d '\r\n' )"
+# 这也是**一次跑内核**,所以照样配一次性 `A2_HOME`(14 票 CR 尾款):`version` 眼下不写盘,
+#   但「跑内核必配 throwaway」是红线口径,不留「先污染、后报警」的窗口 —— 哪天它顺手落个缓存,
+#   落的也是这个用完就删的目录。
+VERSION_HOME="$(throwaway_home)" || {
+  echo "FAIL: 造不出一次性 A2_HOME(mktemp 失败)—— 拒绝拿真 ~/.a2 去跑内核入口"; exit 1; }
+KERNEL_VERSION="$( ( cd "$ROOT/kernel" && A2_HOME="$VERSION_HOME" "$BUN_BIN" run ./src/cli/main.ts version ) \
+  2>/dev/null | tr -d '\r\n' )"
+rm -rf "$VERSION_HOME"
 [ -n "$KERNEL_VERSION" ] || { echo "FAIL: 问不出内核版本(源码入口 a2 version 没有输出)"; exit 1; }
 
 # ---- 组装 bundle ---------------------------------------------------------------
@@ -292,15 +332,19 @@ fi
 #   拷错文件、拷了上一版、拷了个空文件 —— 光看"有没有这个文件"一条都看不出来。
 #   `A2_HOME` 指到一次性目录:门禁跑这条时**绝不许碰真 `~/.a2`**(顺带验一件事:`version` 是无副作用的,
 #   跑完那个目录里应当一个文件都没有 —— 与 `a2 about` 同类的 no-op 命令口径)。
+#   造不出那个目录就**当场红**(14 票 CR 尾款):不许退化成"拿真 `~/.a2` 跑一次,顺便把无残留验成恒真"。
 EMBED_BIN="$APP/Contents/Resources/$KERNEL_EXE_NAME"
-EMBED_HOME="$(mktemp -d "${TMPDIR:-/tmp}/a2-app-verify-XXXXXX")"
-EMBED_VERSION="$(A2_HOME="$EMBED_HOME" "$EMBED_BIN" version 2>/dev/null | tr -d '\r\n')"
-EMBED_LEFTOVER="$(ls -A "$EMBED_HOME" 2>/dev/null | wc -l | tr -d ' ')"
-rm -rf "$EMBED_HOME"
-if [ "$EMBED_VERSION" = "$KERNEL_VERSION" ] && [ "$EMBED_LEFTOVER" = "0" ]; then
-  v_ok "APP9 内嵌内核 bin 实跑 version = $KERNEL_VERSION(= 版本单一来源),且没在一次性 A2_HOME 里留下任何文件"
+if EMBED_HOME="$(throwaway_home)"; then
+  EMBED_VERSION="$(A2_HOME="$EMBED_HOME" "$EMBED_BIN" version 2>/dev/null | tr -d '\r\n')"
+  EMBED_LEFTOVER="$(ls -A "$EMBED_HOME" 2>/dev/null | wc -l | tr -d ' ')"
+  rm -rf "$EMBED_HOME"
+  if [ "$EMBED_VERSION" = "$KERNEL_VERSION" ] && [ "$EMBED_LEFTOVER" = "0" ]; then
+    v_ok "APP9 内嵌内核 bin 实跑 version = $KERNEL_VERSION(= 版本单一来源),且没在一次性 A2_HOME 里留下任何文件"
+  else
+    v_bad "APP9 内嵌内核 bin 对不上:自报 '$EMBED_VERSION',单一来源是 '$KERNEL_VERSION';一次性 A2_HOME 残留 $EMBED_LEFTOVER 项"
+  fi
 else
-  v_bad "APP9 内嵌内核 bin 对不上:自报 '$EMBED_VERSION',单一来源是 '$KERNEL_VERSION';一次性 A2_HOME 残留 $EMBED_LEFTOVER 项"
+  v_bad "APP9 造不出一次性 A2_HOME(mktemp 失败,TMPDIR='${TMPDIR:-/tmp}')—— 拒绝拿真 ~/.a2 去跑内嵌 bin"
 fi
 
 # **架构**:内嵌 bin 必须是 arm64 **单架构** Mach-O。`lipo -archs` 是判"胖不胖"的权威,
@@ -327,20 +371,24 @@ fi
 #
 # 判据四条:退出码 0 · 机读面是一条可解析的包封且 `ok=true` · `result.binPath` 在
 #   (15 票新增的必填字段,面板据它判"托管的是不是我这份内核")· 一次性 A2_HOME 无残留。
-SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/a2-app-smoke-XXXXXX")"
-SMOKE_OUT="$(A2_HOME="$SMOKE_HOME" "$EMBED_BIN" service status --json 2>/dev/null)"
-SMOKE_RC=$?
-SMOKE_OK="$(printf '%s' "$SMOKE_OUT" | plutil -extract ok raw -o - -- - 2>/dev/null)"
-SMOKE_BINPATH="$(printf '%s' "$SMOKE_OUT" | plutil -extract result.binPath raw -o - -- - 2>/dev/null)"
-SMOKE_BINPATH_RC=$?
-SMOKE_LEFTOVER="$(ls -A "$SMOKE_HOME" 2>/dev/null | wc -l | tr -d ' ')"
-rm -rf "$SMOKE_HOME"
-if [ "$SMOKE_RC" -eq 0 ] && [ "$SMOKE_OK" = "true" ] \
-   && [ "$SMOKE_BINPATH_RC" -eq 0 ] && [ -n "$SMOKE_BINPATH" ] && [ "$SMOKE_LEFTOVER" = "0" ]; then
-  v_ok "APP11 内嵌 bin 跑得动面板要调的那条只读命令(service status --json → ok=true,binPath=$SMOKE_BINPATH,一次性 A2_HOME 无残留)"
+# 一次性目录造不出来就当场红,与 APP9 同一条守卫(14 票 CR 尾款把 `mktemp` 的 rc 检查补齐)。
+if SMOKE_HOME="$(throwaway_home)"; then
+  SMOKE_OUT="$(A2_HOME="$SMOKE_HOME" "$EMBED_BIN" service status --json 2>/dev/null)"
+  SMOKE_RC=$?
+  SMOKE_OK="$(printf '%s' "$SMOKE_OUT" | plutil -extract ok raw -o - -- - 2>/dev/null)"
+  SMOKE_BINPATH="$(printf '%s' "$SMOKE_OUT" | plutil -extract result.binPath raw -o - -- - 2>/dev/null)"
+  SMOKE_BINPATH_RC=$?
+  SMOKE_LEFTOVER="$(ls -A "$SMOKE_HOME" 2>/dev/null | wc -l | tr -d ' ')"
+  rm -rf "$SMOKE_HOME"
+  if [ "$SMOKE_RC" -eq 0 ] && [ "$SMOKE_OK" = "true" ] \
+     && [ "$SMOKE_BINPATH_RC" -eq 0 ] && [ -n "$SMOKE_BINPATH" ] && [ "$SMOKE_LEFTOVER" = "0" ]; then
+    v_ok "APP11 内嵌 bin 跑得动面板要调的那条只读命令(service status --json → ok=true,binPath=$SMOKE_BINPATH,一次性 A2_HOME 无残留)"
+  else
+    v_bad "APP11 内嵌 bin 的 service status --json 不可用:rc=$SMOKE_RC ok='$SMOKE_OK' binPath 取值 rc=$SMOKE_BINPATH_RC 值='$SMOKE_BINPATH' 残留 $SMOKE_LEFTOVER 项"
+    echo "      stdout:"; printf '%s\n' "$SMOKE_OUT" | head -5 | sed 's/^/        /'
+  fi
 else
-  v_bad "APP11 内嵌 bin 的 service status --json 不可用:rc=$SMOKE_RC ok='$SMOKE_OK' binPath 取值 rc=$SMOKE_BINPATH_RC 值='$SMOKE_BINPATH' 残留 $SMOKE_LEFTOVER 项"
-  echo "      stdout:"; printf '%s\n' "$SMOKE_OUT" | head -5 | sed 's/^/        /'
+  v_bad "APP11 造不出一次性 A2_HOME(mktemp 失败,TMPDIR='${TMPDIR:-/tmp}')—— 拒绝拿真 ~/.a2 去跑内嵌 bin"
 fi
 
 # ---- 收口 ----------------------------------------------------------------------

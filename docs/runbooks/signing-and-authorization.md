@@ -165,7 +165,7 @@ security find-identity -v -p codesigning
 ### 3.3 切换后必须重跑的核验
 
 ```bash
-bash Scripts/check.sh   # ⑤ 步就是 build-app.sh:出包 + 先内后外签名 + APP1–APP10 核验
+bash Scripts/check.sh   # ⑤ 步就是 build-app.sh:出包 + 先内后外签名 + APP1–APP11 核验
 codesign -dvvv ".build/check/app/A2 Panel.app" | grep -E 'Authority|TeamIdentifier'
 codesign -dvvv ".build/check/app/A2 Panel.app/Contents/Resources/a2" | grep -E 'Authority|TeamIdentifier'
 ```
@@ -287,7 +287,8 @@ Gatekeeper（缺的是公证票，不是证书），都能通过 `codesign --ver
 2. 装 bun（`curl -fsSL https://bun.sh/install | bash`）——内核是 TS，没有它跑不了门禁的 ①③④ 步；
    14 票起 **`.app` 出包也要它**（包里嵌的那份内核 bin 是它编的）。
 3. `bash Scripts/check.sh` → 期望 `步 FAIL=0`、rc=0。这一步会连带把 `.app` 构建 + 内嵌内核 + 先内后外
-   ad-hoc 签名 + 10 条核验跑一遍。
+   ad-hoc 签名 + **APP1–APP11** 跑一遍（第 11 条是 16 票加的：内嵌 bin 以一次性 `A2_HOME` 实跑
+   `service status --json`，只读、不碰真环境）。
 4. `bash Scripts/build-app.sh --output .build/app` → 双击 `.build/app/A2 Panel.app`，按 §5 走一遍授权仪式。
 5. 只有当 §0.1 那条例外成立时，才按 §3 上开发证书。上了之后重跑第 3 步。
 

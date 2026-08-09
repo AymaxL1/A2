@@ -178,7 +178,14 @@ panel_kernel_version_of() {  # $1=zip → stdout 版本(取不到则非零返回
   else
     rm -rf "$work"; return 1
   fi
-  bin="$(find "$work" -type f -path "*/Contents/Resources/$PANEL_KERNEL_NAME" | head -n 1)"
+  # **恰好一个**(14 票 CR 尾款,与 APP8「恰 N 个可执行」同一纪律):zip 里出现两份 `.app`
+  #   (压错了目录、误把 `--output` 整个压进去)时,`head -n 1` 会静默挑第一个,于是"我们验的是哪一份"
+  #   变成运气问题 —— 而元数据只记一个版本号。多匹配就当场非零返回,让调用方红。
+  local matches count
+  matches="$(find "$work" -type f -path "*/Contents/Resources/$PANEL_KERNEL_NAME")"
+  count="$(printf '%s\n' "$matches" | grep -c .)"
+  [ "$count" = "1" ] || { rm -rf "$work"; return 1; }
+  bin="$matches"
   [ -n "$bin" ] && [ -x "$bin" ] || { rm -rf "$work"; return 1; }
   home="$(mktemp -d "${TMPDIR:-/tmp}/a2-panel-home-XXXXXX")" || { rm -rf "$work"; return 1; }
   version="$(A2_HOME="$home" "$bin" version 2>/dev/null | tr -d '\r\n')"
@@ -200,8 +207,9 @@ if [ -n "$APP_SOURCE" ]; then
   esac
   PANEL_KERNEL_VERSION="$(panel_kernel_version_of "$APP_ZIP")" || die \
     "面板包里问不出内嵌内核的版本($(basename "$APP_ZIP"))。
-  它必须含 Contents/Resources/$PANEL_KERNEL_NAME 且能在本机跑起来 —— 14 票起 .app 是自带内核的完整包
-  (ADR 0012);拿一个 14 票之前的旧 .app 来随附,就会停在这里。
+  zip 里必须**恰好一份** Contents/Resources/$PANEL_KERNEL_NAME 且能在本机跑起来 —— 14 票起 .app 是
+  自带内核的完整包(ADR 0012)。三种停在这里的情形:①拿了 14 票之前的旧 .app;②zip 里压进了两份 .app
+  (那样"验的是哪一份"就成了运气);③那份 bin 跑不起来。
   重出一个:bash Scripts/build-app.sh --output .build/app"
   echo "-- 随附壳:$(basename "$APP_ZIP")(内嵌内核 $PANEL_KERNEL_VERSION)"
 fi

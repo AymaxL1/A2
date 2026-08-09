@@ -118,8 +118,17 @@ if [ -z "$SWIFT_BIN" ]; then
 fi
 export AA_SWIFT="$SWIFT_BIN"   # 下游脚本(build-app.sh / a2-flagship-e2e.sh)直接用,不重复探测
 
-BUN_BIN="$(command -v bun 2>/dev/null)"
-[ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN_BIN="$HOME/.bun/bin/bun"
+# 候选顺序与 swift 那段同构:**`AA_BUN` 在最前**(14 票 CR 尾款)。此前这里直接取 PATH 上的 bun,
+#   于是用户显式指定的 `AA_BUN` 先被无视、再被下面那句 `export AA_BUN` 静默覆写掉 —— seam 进出不对称。
+BUN_BIN="${AA_BUN:-}"
+if [ -n "$BUN_BIN" ] && ! command -v "$BUN_BIN" >/dev/null 2>&1 && [ ! -x "$BUN_BIN" ]; then
+  echo "  提示:AA_BUN='$BUN_BIN' 不可用,往下试 PATH 与 ~/.bun/bin(与 AA_SWIFT 同一种回落形态)。"
+  BUN_BIN=""
+fi
+if [ -z "$BUN_BIN" ]; then
+  BUN_BIN="$(command -v bun 2>/dev/null)"
+  [ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN_BIN="$HOME/.bun/bin/bun"
+fi
 if [ -z "$BUN_BIN" ]; then
   echo "FAIL: 找不到 bun —— 内核是 TS(ADR 0010),没有它跑不了 ① ③ 两步。"
   echo "  装法:curl -fsSL https://bun.sh/install | bash(装完 bun 在 ~/.bun/bin/bun)"
@@ -160,7 +169,7 @@ fi
 # ---- ① bun test(内核 CLI 面 + 契约金标 TS 半边)----------------------------------------
 # **两种被测体各跑一遍**是内核侧自 07 票起的纪律,但那要先有编译产物;这里跑的是源码入口那一遍
 #   (产物那一遍由 `kernel/scripts/build.sh` 之后的显式复跑负责,不进这条命令 ——
-#   编译一次 60MiB 的单文件要十几秒,门禁不为它买单)。
+#   贵的不是编译本身[见 ②b 的口径:热缓存约 1 秒],而是**对产物再跑一整遍测试**的那 80 秒)。
 run_step "① bun test(内核 CLI 面 + 契约金标 TS 半边)" "$BUILD/bun-test.log" \
   env -C "$ROOT/kernel" "$BUN_BIN" test
 
@@ -177,18 +186,25 @@ run_step "② swift test(契约金标 Swift 半边 + 客户端协议 + 壳纯逻
 # 11 票时这里是一道"新鲜度守卫":`find -newer` 比 mtime,陈旧才重建。12 票把它换成**恒重建**,
 # 因为那道守卫本身有洞、而且补不干净:①**删掉**一个源文件不会让任何东西变新,守卫看不见;
 # ②`tsconfig.json` 之类不在比对清单里;③mtime 本来就不是内容的可靠代理(checkout、复制、
-# 时钟回拨都能骗过它)。补一条漏一条,不如认下这十几秒 —— 重建是幂等的、产物不入库、没有副作用,
+# 时钟回拨都能骗过它)。补一条漏一条,不如认下这点时间 —— 重建是幂等的、产物不入库、没有副作用,
 # 而"假绿"的代价是整条 e2e 白跑。
+# **代价的统一口径**(14 票 CR 尾款;12 票写的"十几秒"是冷缓存那一次的数):`bun build --compile`
+# 本机**热缓存下约 1 秒**(2026-08-09 实测,产物 64MiB);冷的那一次(首次编译 / 换 `--target` 要先下
+# 目标运行时)十几秒到几分钟。`build-app.sh` 那边的恒重建写的是同一句话。
 # 只编译、不复跑产物那一遍测试:那是 `kernel/scripts/build.sh` 的活(再花 80 秒),门禁不为它买单。
 #
 # 14 票起这一步还多一个消费者:**⑤ 的 `.app` 里嵌着这份内核 bin**。它的新鲜度判据不另立一套 ——
 # 就是这里的恒重建,产物路径经 `AA_KERNEL_BIN` 传给 `build-app.sh`(与 `AA_SWIFT` 同一种 seam:
 # 上游已经做好的事,下游直接用,不重复做)。
 DIST_BIN="$ROOT/kernel/dist/a2"
-run_step "②b 重建 kernel/dist/a2(恒重建 —— e2e 与 .app 只许验/嵌当前这版内核)" "$BUILD/kernel-build.log" \
-  env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"
-export AA_KERNEL_BIN="$DIST_BIN"   # ⑤ 直接嵌这份(刚重建的),不重复编译一次
-export AA_BUN="$BUN_BIN"           # ⑤ 要问内核版本的单一来源(源码入口),bun 也别重复探
+# **只有重建成功才把它递给 ⑤**(14 票 CR 尾款):重建失败时那个路径上躺的是**上一轮的产物**,
+#   把它当"刚重建好的"递过去,⑤ 就会安安静静把旧内核嵌进包里 —— 这一步已经红了,不该再顺手制造第二处假绿。
+#   不递的后果是 ⑤ 自己恒重建(照样会撞同一个编译错误)或撞缺文件红,两种都是诚实的红。
+if run_step "②b 重建 kernel/dist/a2(恒重建 —— e2e 与 .app 只许验/嵌当前这版内核)" "$BUILD/kernel-build.log" \
+     env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"; then
+  export AA_KERNEL_BIN="$DIST_BIN"   # ⑤ 直接嵌这份(刚重建的),不重复编译一次
+fi
+export AA_BUN="$BUN_BIN"             # ⑤ 要问内核版本的单一来源(源码入口),bun 也别重复探
 
 # ---- ③ 旗舰 e2e ------------------------------------------------------------------------
 run_step "③ 旗舰 e2e(真 a2 bin + 假 mihomo + 壳的真代码路径)" "$BUILD/flagship-e2e.log" \
@@ -199,7 +215,7 @@ run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dan
   "$BUILD/plugin-e2e.log" bash "$ROOT/Scripts/a2-plugin-e2e.sh"
 
 # ---- ⑤ `.app` 出包(a2-panel 身份 + 内嵌内核 + 先内后外 ad-hoc 签名)---------------------
-run_step "⑤ .app 出包(a2-panel · 内嵌内核 bin · 先内后外 ad-hoc 签名 · APP1–APP10 核验)" \
+run_step "⑤ .app 出包(a2-panel · 内嵌内核 bin · 先内后外 ad-hoc 签名 · APP1–APP11 核验)" \
   "$BUILD/build-app.log" bash "$ROOT/Scripts/build-app.sh" --output "$BUILD/app"
 
 # ---- 收口 ------------------------------------------------------------------------------
@@ -218,7 +234,7 @@ echo "   ① bun test        : ${BUN_COUNT:-?} 条"
 echo "   ② swift test      : ${SWIFT_COUNT:-?} 条"
 echo "   ③ 旗舰 e2e        : ${FLAGSHIP_COUNT:-?} 条"
 echo "   ④ 插件 e2e        : ${PLUGIN_COUNT:-?} 条"
-echo "   ⑤ .app 出包       : 结构 + 内嵌内核 + ad-hoc 签名核验(APP1–APP10)"
+echo "   ⑤ .app 出包       : 结构 + 内嵌内核 + ad-hoc 签名核验(APP1–APP11)"
 echo "----------------------------------------"
 echo " 结果: 步 PASS=$STEPS_OK  FAIL=$STEPS_FAIL"
 if [ "$STEPS_FAIL" -eq 0 ]; then
