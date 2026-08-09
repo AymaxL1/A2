@@ -115,9 +115,13 @@ public final class A2BootstrapCoordinator {
 
     /// 发起一次引导操作。在途时**直接丢弃**(见文件头①)。
     ///
+    /// - Parameter purge: 只有卸载用得上,而且**只可能来自用户在确认框里亲手勾的那一下**
+    ///   (17 票;默认 false)。编排层对它不作任何判断 —— 勾了就换白名单里的另一条命令,
+    ///   删什么、拒不拒绝全在内核里,壳不含业务逻辑(ADR 0008 第 5 条)。
+    ///
     /// 返回值:真的发出去了没有。渲染器不看它 —— 它是给用例断言在途守卫用的。
     @discardableResult
-    public func perform(_ action: A2BootstrapMenuAction) -> Bool {
+    public func perform(_ action: A2BootstrapMenuAction, purge: Bool = false) -> Bool {
         guard let runner, state.inFlight == nil else { return false }
         state.inFlight = action
         // 上一次的失败在**这一次发起时**就清掉:菜单不该同时显示"安装中…"和上一轮的红字。
@@ -128,7 +132,7 @@ public final class A2BootstrapCoordinator {
         state.hasUsedBootstrap = true
         publish()
 
-        run { runner.run(action.command) } then: { [weak self] output in
+        run { runner.run(action.command(purge: purge)) } then: { [weak self] output in
             guard let self else { return }
             switch A2BootstrapReading.serviceChange(output) {
             case let .success(facts):

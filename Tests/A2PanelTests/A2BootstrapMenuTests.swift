@@ -113,9 +113,11 @@ struct A2BootstrapMenuTests {
         let uninstall = try #require(item(m, titled: "停止并卸载内核服务…"))
         #expect(uninstall.enabled)
         #expect(uninstall.bootstrapAction == .uninstall)
-        // 口径与 CLI 逐字同源:只拆服务,数据留下。
+        // 口径与 CLI 逐字同源:默认只拆服务、数据留下,**而那一格勾选也必须写出来**(17 票)——
+        //   少了后半句,这一行就在替一个能删数据的入口打掩护。
         #expect(advanced.children.contains {
             $0.kind == .info && $0.title.contains("只拆服务") && $0.title.contains("~/.a2")
+                && $0.title.contains("勾选")
         })
     }
 

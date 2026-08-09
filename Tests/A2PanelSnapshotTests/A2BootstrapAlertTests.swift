@@ -59,6 +59,72 @@ struct A2BootstrapAlertTests {
         #expect(cancel.keyEquivalent == "\r")
     }
 
+    // ========================================================================
+    // 17 票:卸载框里那个 accessory 勾选框(「同时删除 ~/.a2」)
+    // ========================================================================
+
+    @Test("17 卸载框挂着一个勾选框,标题取自数据,而且**默认不勾**")
+    func uninstallConfirmationCarriesAnUncheckedCheckbox() throws {
+        let confirmation = try #require(A2BootstrapMenuAction.uninstall.confirmation)
+        let checkbox = try #require(confirmation.checkbox)
+
+        let alert = A2BootstrapPresenter.makeTwoButtonAlert(
+            title: confirmation.title,
+            body: confirmation.body,
+            primaryTitle: confirmation.confirmTitle,
+            safeTitle: confirmation.cancelTitle,
+            style: .warning,
+            checkbox: checkbox)
+
+        let button = try #require(alert.accessoryView as? NSButton)
+        #expect(button.title == checkbox.label)
+        #expect(button.state == .off, "会删数据的那一格绝不预勾")
+        #expect(A2BootstrapPresenter.isChecked(alert) == false)
+        // **不是** suppression 按钮:那个的语义是"下次别问了",与这里问的事无关。
+        #expect(alert.showsSuppressionButton == false)
+    }
+
+    @Test("17 勾上之后读得回来(`presentConfirmation` 就是靠这条把那一下带给内核的)")
+    func checkboxStateIsReadBack() throws {
+        let confirmation = try #require(A2BootstrapMenuAction.uninstall.confirmation)
+        let alert = A2BootstrapPresenter.makeTwoButtonAlert(
+            title: confirmation.title, body: confirmation.body,
+            primaryTitle: confirmation.confirmTitle, safeTitle: confirmation.cancelTitle,
+            style: .warning, checkbox: confirmation.checkbox)
+
+        let button = try #require(alert.accessoryView as? NSButton)
+        button.state = .on
+
+        #expect(A2BootstrapPresenter.isChecked(alert))
+    }
+
+    @Test("17 那一格**不抢回车**:回车仍归「取消」,主操作手里依旧没有")
+    func checkboxDoesNotStealReturn() throws {
+        let confirmation = try #require(A2BootstrapMenuAction.uninstall.confirmation)
+        let alert = A2BootstrapPresenter.makeTwoButtonAlert(
+            title: confirmation.title, body: confirmation.body,
+            primaryTitle: confirmation.confirmTitle, safeTitle: confirmation.cancelTitle,
+            style: .warning, checkbox: confirmation.checkbox)
+
+        let checkbox = try #require(alert.accessoryView as? NSButton)
+        let destroy = try #require(alert.buttons.first { $0.title == confirmation.confirmTitle })
+        let cancel = try #require(alert.buttons.first { $0.title == confirmation.cancelTitle })
+        #expect(checkbox.keyEquivalent == "")
+        #expect(destroy.keyEquivalent == "")
+        #expect(cancel.keyEquivalent == "\r")
+    }
+
+    @Test("17 fail-safe:没挂勾选框的弹框读出来恒是「没勾」(读不出来就当没勾,宁可少删)")
+    func alertWithoutCheckboxReadsAsUnchecked() {
+        let alert = A2BootstrapPresenter.makeTwoButtonAlert(
+            title: A2BootstrapPrompt.title, body: A2BootstrapPrompt.body,
+            primaryTitle: A2BootstrapPrompt.installTitle, safeTitle: A2BootstrapPrompt.laterTitle,
+            style: .informational)
+
+        #expect(alert.accessoryView == nil)
+        #expect(A2BootstrapPresenter.isChecked(alert) == false)
+    }
+
     @Test("16 反向证明缺陷真实存在:不清那一行的话,`NSAlert` 会让**两个**按钮都拿着回车")
     func addButtonGivesTheFirstButtonReturnByDefault() {
         // 这是 16 票第一版写的那种弹框(只给第二个按钮绑,不清第一个)。

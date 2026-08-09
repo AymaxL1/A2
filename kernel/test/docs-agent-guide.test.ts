@@ -47,11 +47,17 @@ afterEach(async () => {
 /**
  * 文档里出现的能力 id 候选:反引号或表格里那些形如 `a.b[.c]` 的小写点分词。
  *
- * 两类同形但显然不是能力 id 的东西先摘掉:**文件名**(`*.sh` / `*.json` / …)与
- * **报文字段路径**(`error.code` 之类)。判据是显式清单而不是"看着像" ——
+ * 三类同形但显然不是能力 id 的东西先摘掉:**文件名**(`*.sh` / `*.json` / …)、
+ * **报文字段路径**(`error.code` 之类)与 **supervisor 的 unit label**(反向域名,17 票起指引里
+ * 会点名 `com.a2.mihomo` 与红线对象 `io.metacubex.mihomo`)。判据是显式清单而不是"看着像" ——
  * 清单之外的一切都要真的在注册表里,包括写错一个字母的 `proxy.staus`。
+ *
+ * unit label 这一类**只按前缀白名单摘**(不是"凡是三段就放过"):本项目的能力 id 一律以域名打头
+ * (`proxy.` / `capabilities.` / `plugin.` …),没有一个以 `com.` 或 `io.` 开头,所以这条摘除
+ * 不可能顺手放过一个写错的能力 id。
  */
 const REPORT_FIELD_PREFIXES = ["error.", "result.", "guidance.", "context.", "steps."];
+const UNIT_LABEL_PREFIXES = ["com.a2.", "io.metacubex."];
 
 function capabilityIdsIn(text: string): string[] {
   const found = new Set<string>();
@@ -59,6 +65,7 @@ function capabilityIdsIn(text: string): string[] {
     const token = match[1] as string;
     if (/\.(sh|json|md|ts|js|txt|yaml|yml|plist|invalid)$/.test(token)) continue;
     if (REPORT_FIELD_PREFIXES.some((prefix) => token.startsWith(prefix))) continue;
+    if (UNIT_LABEL_PREFIXES.some((prefix) => token.startsWith(prefix))) continue;
     found.add(token);
   }
   // 表格与代码块里的裸写法(`a2 capabilities call proxy.status --json` 这种)也算数。

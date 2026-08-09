@@ -22,7 +22,7 @@
 //     * 改变系统状态的仍然只有**用户的一次显式点击**:首启说明框上那个按钮,或菜单里那一项。
 //       首启弹不弹由一个纯函数决定(`A2BootstrapDecision`,四个输入全组合有断言);
 //       用户点过「稍后」就再不自动问,菜单项常驻可随时再装。
-//     * 壳仍然**不含业务逻辑**:它只发四条白名单命令、解析机读 JSON、呈现结果
+//     * 壳仍然**不含业务逻辑**:它只发五条白名单命令、解析机读 JSON、呈现结果
 //       (ADR 0012 第 3 条;装什么、幂等不幂等、要不要重启,全在内核的 `service install` 里)。
 // 反过来,**隐式那条仍然禁止**:没有"发现连不上就悄悄装一个"、没有定时自查、没有静默升级。
 //
@@ -74,7 +74,7 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
             onInvoke: { [weak self] capability, input in
                 self?.session?.call(capability: capability, input: input)
             },
-            onBootstrap: { [weak self] action in self?.bootstrap?.perform(action) },
+            onBootstrap: { [weak self] action, purge in self?.bootstrap?.perform(action, purge: purge) },
             onAbout: { [weak self] in self?.about.show() },
             onQuit: { NSApp.terminate(nil) })
         self.menuBar = menuBar

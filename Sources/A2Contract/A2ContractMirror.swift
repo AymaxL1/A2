@@ -146,7 +146,7 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             // **16 票起「壳压根不会请求」不再是真话**:执行器白名单第四条就是 `version --json`,
             // 壳靠它问**内嵌那份 bin** 自报的版本,再与快照里线上内核的 `status.version` 比,
             // 不一致才出「升级内核」项。两个版本来自两个不同的进程,快照那一份答不了内嵌那一份。
-            return "bin 自报的本地事实(无 op),CLI 输出面专用。16 票起壳会对**内嵌的那份 bin** 跑一次 `version --json`(白名单四条之一)来问它自己的版本 —— 只取一个 `version` 字符串,经 A2JSON 取值即可;线上内核那一份仍从快照的 status 里拿(已是 typed)。"
+            return "bin 自报的本地事实(无 op),CLI 输出面专用。16 票起壳会对**内嵌的那份 bin** 跑一次 `version --json`(白名单五条之一)来问它自己的版本 —— 只取一个 `version` 字符串,经 A2JSON 取值即可;线上内核那一份仍从快照的 status 里拿(已是 typed)。"
         case .helpResult:
             return "bin 自报的本地事实(无 op),CLI 输出面专用;帮助文本是给人和 agent 读的,壳压根不会请求。"
         case .capabilityListResult, .capabilityDescribeResult:
@@ -156,6 +156,11 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
         case .arbitrationStatusResult:
             return "仲裁面壳经快照 arbitration + arbitration/audit 两族推送拿到同一批事实(已是 typed),这条是 CLI 的查询面。"
         case .serviceStatusResult, .serviceChangeResult:
+            // **17 票复核后维持豁免,且读的字段一个没多**:`--purge` 给 `ServiceChangeResult` 加了个
+            // 可选的 `purge` 对账面(removedUnits / removedPaths),壳**有意不读** —— 菜单要说的
+            // "这次删了什么"在 `actions` 里(`mihomo_unit_removed` / `home_purged`)就够了,
+            // 那份带绝对路径的账是给人和 agent 核对的机读面。拒绝那条(`service_purge_blocked`)
+            // 的指引来自**包封里的 `A2WireError.guidance`**,那是已镜像契约,不动本条豁免。
             // **16 票起这是既成事实**:壳经嵌入 bin 走 `service install --copy-to-home --json` /
             // `service uninstall --json` / `service status --json`(ADR 0012 的执行器白名单)。
             // 但界没变:那是**经 CLI 机读面**拿到的一条包封,不是长连接上的协议帧 ——

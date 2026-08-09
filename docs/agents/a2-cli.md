@@ -98,13 +98,25 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
 |---|---|
 | `service status` 的 `binPath` | unit **实际指向**的那个可执行（读盘上那份 unit 的事实值）。unit 还不存在时给的是本次 `install` 会写进去的那个。「托管的是不是我这份内核」只有它答得了 |
 | `service install --copy-to-home` | 把**当前这个 a2 单文件自己**原子拷进 `$A2_HOME/bin/a2`，并让 unit 指向那份拷贝。幂等（判据是内容）；拷贝换了而服务正跑着时会显式重启，如实报 `kernel_restarted`。mac 菜单栏壳「A2 Panel」走的就是这条（见 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md)） |
+| `service uninstall --purge` | 拆完 `com.a2.kernel` 之后**继续往下清**：拆 a2 自管的 `com.a2.mihomo`（不在则跳过、不报 action）→ 删掉整个 `$A2_HOME`。机读面多一个 `result.purge`：`removedUnits`（移除的 label）+ `removedPaths`（删掉的绝对路径），这是「先看后删」的对账面 |
 
-`--copy-to-home` 只对 `install` 有意义，用在别的子命令上是用法错（不会被默默忽略）。
-源码态跑它会得到 `service_self_copy_unsupported`（退出码 6）——那时的"自身"是 bun 而不是 a2，
-拷过去只是个跑不起来的空壳；拒绝时 unit / bin / supervisor 三处一个字节都不动。
+`--copy-to-home` 只对 `install` 有意义，`--purge` 只对 `uninstall` 有意义；用在别的子命令上是用法错
+（不会被默默忽略）。源码态跑 `--copy-to-home` 会得到 `service_self_copy_unsupported`（退出码 6）——
+那时的"自身"是 bun 而不是 a2，拷过去只是个跑不起来的空壳；拒绝时 unit / bin / supervisor 三处一个字节都不动。
 `actions` 是封闭词表（`bin_copied` / `unit_written` / `unit_removed` / `supervisor_*` /
-`kernel_started` / `kernel_restarted`），**空数组是合法且常见的**：幂等复跑什么都不改。
-`uninstall` **只拆 unit**——`$A2_HOME/bin/a2` 那份拷贝与 `~/.a2` 里的数据要清理请显式删。
+`kernel_started` / `kernel_restarted` / `mihomo_unit_removed` / `home_purged`），
+**空数组是合法且常见的**：幂等复跑什么都不改。
+不带 `--purge` 的 `uninstall` **只拆 unit**——`$A2_HOME/bin/a2` 那份拷贝与 `~/.a2` 里的数据要清理请显式删
+（就是 `--purge`，或者你自己 `rm -rf`）。
+
+`--purge` 的两条边界，转告用户时**别漏**：
+
+- **范围恒是 `com.a2.*` 与 `$A2_HOME`**。用户自己装的 mihomo（`io.metacubex.mihomo` 等）无论装在哪、
+  数据放在哪都不在清理范围内——`removedUnits` 的取值形状在 JSON Schema 里就限定成 `^com\.a2\.`。
+- **系统代理仍处接管态时它会拒绝，而且什么都不删**：`service_purge_blocked`（退出码 1，与
+  `daemon_already_running` 同档——命令没错，只是这会儿不该发）。`guidance` 里给的是 `a2 proxy off`
+  与面板那条路。**别替用户"顺手还原一下再重试"**：还原是显式命令，那一步该由人自己决定。
+  还原之后同一条命令就成立了。
 
 ## 别处的权威
 

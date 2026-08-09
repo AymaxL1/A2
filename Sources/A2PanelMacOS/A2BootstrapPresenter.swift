@@ -44,21 +44,41 @@ public enum A2BootstrapPresenter {
     ///
     /// 只造不弹 —— 于是"回车到底落在哪个按钮上"是一条可断言的事实
     /// (`A2BootstrapAlertTests`,连"不加那行清除就会落在主操作上"都一并钉住了)。
+    ///
+    /// - Parameter checkbox: 给了就在框里挂一个 accessory 勾选框(17 票的「同时删除 ~/.a2」)。
+    ///   **有意不用 `NSAlert.showsSuppressionButton`**:那个的语义是"下次别再问我",
+    ///   而这里问的是"这一次要不要多做一件事" —— 借用它会让语义与系统约定对不上,
+    ///   而且 suppression 的状态天然是"记住的",这一格恰恰**每次都必须重新问**。
     public static func makeTwoButtonAlert(title: String,
                                           body: String,
                                           primaryTitle: String,
                                           safeTitle: String,
-                                          style: NSAlert.Style) -> NSAlert {
+                                          style: NSAlert.Style,
+                                          checkbox: A2BootstrapConfirmationCheckbox? = nil) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = body
         alert.alertStyle = style
+        if let checkbox {
+            let button = NSButton(checkboxWithTitle: checkbox.label, target: nil, action: nil)
+            button.state = checkbox.initiallyChecked ? .on : .off
+            // 手搭的 `NSButton` 缺省不带 keyEquivalent(有断言钉着),所以它不会去抢回车。
+            button.sizeToFit()
+            alert.accessoryView = button
+            alert.window.initialFirstResponder = nil
+        }
         let primary = alert.addButton(withTitle: primaryTitle)
         let safe = alert.addButton(withTitle: safeTitle)
         // 顺序要紧:先把主操作那个**自动获得**的回车摘掉,再绑给安全那个。
         primary.keyEquivalent = ""
         safe.keyEquivalent = "\r"
         return alert
+    }
+
+    /// 读回勾选框此刻的状态。没有勾选框(或它不是我们挂的那个)一律 `false` —— **fail-safe**:
+    /// 读不出来就当没勾,宁可少删,绝不多删。
+    public static func isChecked(_ alert: NSAlert) -> Bool {
+        (alert.accessoryView as? NSButton)?.state == .on
     }
 
     /// 弹一次首启说明框。返回 `true` = 用户点了「安装并启动」。
@@ -72,17 +92,29 @@ public enum A2BootstrapPresenter {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// 弹一次引导动作的确认框(目前只有卸载用得上)。返回 `true` = 用户批准。
+    /// 用户在确认框上做的那个决定:批没批准 + 那个勾选框勾没勾。
+    public struct Choice: Sendable, Equatable {
+        public let approved: Bool
+        /// 勾选框的状态。没有勾选框时恒 `false`。
+        public let checked: Bool
+    }
+
+    /// 弹一次引导动作的确认框(目前只有卸载用得上)。
     ///
     /// 住在这里而不是渲染器里:回车归属那条规矩只该有**一处**实现
     /// —— 分头写正是 16 票第一版漏掉一半的原因。
-    public static func presentConfirmation(_ confirmation: A2BootstrapConfirmation) -> Bool {
+    ///
+    /// **取消时勾选状态一律作废**(`checked` 恒 false):用户勾了又点取消,是"我不做这件事",
+    /// 而不是"我不做但把那一格记下来"。
+    public static func presentConfirmation(_ confirmation: A2BootstrapConfirmation) -> Choice {
         let alert = makeTwoButtonAlert(title: confirmation.title,
                                        body: confirmation.body,
                                        primaryTitle: confirmation.confirmTitle,
                                        safeTitle: confirmation.cancelTitle,
-                                       style: .warning)
+                                       style: .warning,
+                                       checkbox: confirmation.checkbox)
         NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal() == .alertFirstButtonReturn
+        let approved = alert.runModal() == .alertFirstButtonReturn
+        return Choice(approved: approved, checked: approved && isChecked(alert))
     }
 }

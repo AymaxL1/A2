@@ -37,16 +37,19 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
     case uninstall
 
     /// 本动作发的那条白名单命令。
-    public var command: A2BootstrapCommand {
+    ///
+    /// `purge` 只对卸载有意义,而且它**只可能来自用户在确认框里亲手勾的那一下**
+    /// (17 票:默认不勾)——菜单项本身永远是不勾的那条,角标也照不勾的那条画。
+    public func command(purge: Bool) -> A2BootstrapCommand {
         switch self {
         case .install:   return .serviceInstall
-        case .uninstall: return .serviceUninstall
+        case .uninstall: return purge ? .serviceUninstallPurge : .serviceUninstall
         }
     }
 
     /// 菜单右侧角标 = **这一项到底会跑什么**(与能力项的能力 id 角标同一个位置、同一种用意:
-    /// 让不读 Swift 的人也能一眼核对)。
-    public var badge: String { command.displayCommand }
+    /// 让不读 Swift 的人也能一眼核对)。默认那条 —— 会不会变成 `--purge` 由弹框里那一下决定。
+    public var badge: String { command(purge: false).displayCommand }
 
     /// 点下去要先弹的确认框。`nil` = 不弹。
     ///
@@ -60,21 +63,47 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
         case .uninstall:
             return A2BootstrapConfirmation(
                 title: "停止并卸载 a2 内核服务?",
+                // 两种模式**各自如实**写在同一个框里:勾选框是不可能一边勾一边改文案的
+                //   (那要给 NSButton 挂 action 去改 informativeText,而那段逻辑没人验得了)。
+                //   于是"不勾会怎样"与"勾了会怎样"都摆在这儿,用户点之前两边都看得见。
                 body: [
                     "这会停掉常驻内核并移除 launchd 用户服务 com.a2.kernel。",
                     "",
-                    "只拆服务 —— ~/.a2 里的数据(订阅、插件、日志)与 ~/.a2/bin/a2 那份内核拷贝都留下,",
-                    "要清理请显式删它们。",
+                    "不勾下面那个勾选框:只拆服务 —— ~/.a2 里的数据(订阅、插件、日志)与",
+                    "~/.a2/bin/a2 那份内核拷贝都留下,随时可以从菜单再装回来。",
+                    "",
+                    "勾上「同时删除 ~/.a2」:除了拆服务,还会拆掉 a2 托管的 mihomo 服务 com.a2.mihomo,",
+                    "并删掉整个 ~/.a2(内核拷贝、订阅、插件、日志,以及 a2 自己下载的那份 mihomo)。",
+                    "这一步不可撤销。",
+                    "你自己装的 mihomo(io.metacubex.mihomo)与它的配置「不在」清理范围内,一个字节都不动。",
+                    "",
                     // 「先还原系统代理」这句得留余地:菜单里那一项只在**连得上内核**时才有
                     //   (它是一条能力调用),而卸载往往正好发生在连不上的时候。给两条路。
                     "系统代理若还被 a2 接管着,请先还原:菜单里的「关闭系统代理(还原)」——",
                     "菜单上没有那一项(面板此刻没连上内核)时,在终端敲 a2 proxy off。",
-                    "",
-                    "随时可以从菜单再装回来。",
+                    "没还原就勾了删除的话,内核会拒绝执行并告诉你怎么办 —— 那时什么都不会被删。",
                 ].joined(separator: "\n"),
                 confirmTitle: "停止并卸载",
-                cancelTitle: "取消")
+                cancelTitle: "取消",
+                // 勾选框只放一句短的(它是按钮标题);细节在正文里,两处不重复说同一件事。
+                checkbox: A2BootstrapConfirmationCheckbox(
+                    label: "同时删除 ~/.a2(内核拷贝、数据与 a2 托管的 mihomo)"))
         }
+    }
+}
+
+/// 确认框里那个可选的勾选框(17 票)。**不是** `NSAlert` 的 suppression 按钮:
+/// 那个的语义是"下次别问了",而这里问的是"这一次要不要多做一件事" —— 两码事,不能借用。
+public struct A2BootstrapConfirmationCheckbox: Sendable, Equatable {
+    /// 勾选框自己的标题(一行,进 `NSButton`)。
+    public let label: String
+    /// 初始状态。**恒为 false**:破坏性的那一侧绝不预勾(与「默认按钮是取消」同一条规矩)。
+    /// 留成字段而不是写死在渲染器里,是为了让"默认不勾"这件事在**数据里看得见、可断言**。
+    public let initiallyChecked: Bool
+
+    public init(label: String, initiallyChecked: Bool = false) {
+        self.label = label
+        self.initiallyChecked = initiallyChecked
     }
 }
 
@@ -85,12 +114,19 @@ public struct A2BootstrapConfirmation: Sendable, Equatable {
     public let confirmTitle: String
     /// **默认按钮**:取消。与 dangerous 确认器同一条规矩 —— 沉默不是同意。
     public let cancelTitle: String
+    /// 可选的勾选框。`nil` = 这个框只有两个按钮(首启说明框那种)。
+    public let checkbox: A2BootstrapConfirmationCheckbox?
 
-    public init(title: String, body: String, confirmTitle: String, cancelTitle: String) {
+    public init(title: String,
+                body: String,
+                confirmTitle: String,
+                cancelTitle: String,
+                checkbox: A2BootstrapConfirmationCheckbox? = nil) {
         self.title = title
         self.body = body
         self.confirmTitle = confirmTitle
         self.cancelTitle = cancelTitle
+        self.checkbox = checkbox
     }
 }
 

@@ -69,23 +69,34 @@ enum BootstrapGolden {
 // ① 白名单
 // ============================================================================
 
-@Suite("16 引导白名单(ADR 0012 第 3 条:四条,一条不多)")
+@Suite("16/17 引导白名单(ADR 0012 第 3 条:五条,一条不多)")
 struct A2BootstrapWhitelistTests {
 
-    @Test("16 白名单逐字对照 ADR 0012 —— 多一条少一条都要在这里当场红")
-    func argumentsAreExactlyTheFour() {
+    @Test("17 白名单逐字对照 ADR 0012 —— 多一条少一条都要在这里当场红")
+    func argumentsAreExactlyTheFive() {
         let table = A2BootstrapCommand.allCases.map { $0.arguments }
         #expect(table == [
             ["service", "install", "--copy-to-home", "--json"],
             ["service", "uninstall", "--json"],
+            ["service", "uninstall", "--purge", "--json"],
             ["service", "status", "--json"],
             ["version", "--json"],
         ])
     }
 
-    @Test("16 白名单只有四条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
-    func whitelistHasFourEntries() {
-        #expect(A2BootstrapCommand.allCases.count == 4)
+    @Test("17 白名单只有五条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
+    func whitelistHasFiveEntries() {
+        #expect(A2BootstrapCommand.allCases.count == 5)
+    }
+
+    @Test("17 --purge 只出现在卸载那一条上(它是唯一会删数据的形态)")
+    func purgeAppearsOnlyOnUninstall() {
+        for command in A2BootstrapCommand.allCases where command.arguments.contains("--purge") {
+            #expect(command == .serviceUninstallPurge)
+            #expect(command.arguments == ["service", "uninstall", "--purge", "--json"])
+        }
+        #expect(A2BootstrapCommand.serviceUninstall.arguments.contains("--purge") == false,
+                "不勾那条绝不能悄悄带上 --purge")
     }
 
     @Test("16 每条都走机读面(`--json`),一条散文都不解析")
@@ -95,7 +106,7 @@ struct A2BootstrapWhitelistTests {
         }
     }
 
-    @Test("16 白名单里没有任何改状态的第五条(只碰 service 三条 + version)")
+    @Test("17 白名单里没有任何越界的那一条(只碰 service 四条 + version)")
     func noCommandOutsideTheServiceSurface() {
         for command in A2BootstrapCommand.allCases {
             let head = command.arguments[0]
@@ -110,10 +121,82 @@ struct A2BootstrapWhitelistTests {
         #expect(A2BootstrapMenuAction.uninstall.badge == "a2 service uninstall")
     }
 
-    @Test("16 两个菜单动作各自绑死一条命令(装 = 幂等 install,卸 = uninstall)")
+    @Test("17 菜单动作 → 命令:装恒是幂等 install;卸按那一格分两条(默认那条不删数据)")
     func menuActionsMapToCommands() {
-        #expect(A2BootstrapMenuAction.install.command == .serviceInstall)
-        #expect(A2BootstrapMenuAction.uninstall.command == .serviceUninstall)
+        #expect(A2BootstrapMenuAction.install.command(purge: false) == .serviceInstall)
+        // 装那一路根本没有"勾选"这回事:传 true 也只能是同一条命令(白名单里没有别的装法)。
+        #expect(A2BootstrapMenuAction.install.command(purge: true) == .serviceInstall)
+        #expect(A2BootstrapMenuAction.uninstall.command(purge: false) == .serviceUninstall)
+        #expect(A2BootstrapMenuAction.uninstall.command(purge: true) == .serviceUninstallPurge)
+    }
+
+    @Test("17 角标画的是**默认**那条(菜单项本身永远不是删数据的那一条)")
+    func badgeShowsTheNonDestructiveForm() {
+        #expect(A2BootstrapMenuAction.uninstall.badge == "a2 service uninstall")
+        #expect(A2BootstrapMenuAction.uninstall.badge.contains("--purge") == false)
+    }
+}
+
+// ============================================================================
+// ①b 卸载确认框:那一格勾选(17 票)
+// ============================================================================
+
+@Suite("17 卸载确认框(默认不勾;两种模式各自如实)")
+struct A2BootstrapConfirmationTests {
+
+    private var confirmation: A2BootstrapConfirmation {
+        get throws { try #require(A2BootstrapMenuAction.uninstall.confirmation) }
+    }
+
+    @Test("17 装那一项没有确认框(首启说明框已经问过一次,菜单项是用户自己去点的)")
+    func installHasNoConfirmation() {
+        #expect(A2BootstrapMenuAction.install.confirmation == nil)
+    }
+
+    @Test("17 勾选框在,而且**默认不勾** —— 破坏性的那一侧绝不预勾")
+    func checkboxIsPresentAndUnchecked() throws {
+        let checkbox = try #require(try confirmation.checkbox)
+        #expect(checkbox.initiallyChecked == false)
+        #expect(checkbox.label.contains("~/.a2"))
+        #expect(checkbox.label.contains("同时删除"))
+    }
+
+    @Test("17 正文把**两种模式**都说清:不勾留下什么,勾了删什么")
+    func bodyDescribesBothModes() throws {
+        let body = try confirmation.body
+        // 不勾:只拆服务,数据与那份拷贝留下。
+        #expect(body.contains("只拆服务"))
+        #expect(body.contains("~/.a2/bin/a2"))
+        // 勾了:托管的 mihomo + 整个 ~/.a2,而且明说不可撤销。
+        #expect(body.contains("com.a2.mihomo"))
+        #expect(body.contains("不可撤销"))
+    }
+
+    @Test("17 红线写进文案:用户自己装的 mihomo 永远不在清理范围内")
+    func bodyStatesTheRedLine() throws {
+        let body = try confirmation.body
+        #expect(body.contains("io.metacubex.mihomo"))
+        #expect(body.contains("不在」清理范围内") || body.contains("不在清理范围内"))
+    }
+
+    @Test("17 文案给出还原系统代理的两条路,并说清「没还原就删不了、而且什么都不会删」")
+    func bodyExplainsTheProxyPrecondition() throws {
+        let body = try confirmation.body
+        #expect(body.contains("关闭系统代理(还原)"))
+        #expect(body.contains("a2 proxy off"))
+        #expect(body.contains("拒绝执行"))
+    }
+
+    @Test("17 正文里没有 Markdown(它进的是 NSAlert 的纯文本,星号会原样画在屏幕上)")
+    func bodyHasNoMarkdown() throws {
+        #expect(try confirmation.body.contains("**") == false)
+        #expect(try confirmation.checkbox?.label.contains("**") != true)
+    }
+
+    @Test("17 默认按钮仍是取消(沉默不是同意;那一格勾没勾都不改这条)")
+    func cancelIsStillTheSafeSide() throws {
+        #expect(try confirmation.cancelTitle == "取消")
+        #expect(try confirmation.confirmTitle == "停止并卸载")
     }
 }
 
@@ -158,6 +241,48 @@ struct A2BootstrapReadingTests {
         let change = try #require(try A2BootstrapReading.serviceChange(run).get())
         #expect(change.actions.contains("bin_copied"))
         #expect(change.actions.contains("kernel_restarted"))
+    }
+
+    @Test("17 purge 样本:两个 com.a2.* 都拆了 + home 删了,actions 原样取出")
+    func purgeSampleParses() throws {
+        let run = try BootstrapGolden.success("service-change-purge.json")
+        let change = try #require(try A2BootstrapReading.serviceChange(run).get())
+        #expect(change.actions == ["supervisor_unloaded", "unit_removed",
+                                   "mihomo_unit_removed", "home_purged"])
+        #expect(change.status.state == .notInstalled)
+        // 壳**有意不读** result.purge 那份对账面(镜像豁免的口径,见 A2Bootstrap.swift 头注):
+        //   菜单要说的"删了什么"在 actions 里就够了。这条断言把那个取舍钉住 ——
+        //   哪天真要读它,就得先去改豁免注记。
+        #expect(change.actions.contains("home_purged"))
+    }
+
+    @Test("17 purge 被拒:code/退出码/指引三样原样透传,菜单里能读到「先 a2 proxy off」")
+    func purgeBlockedIsCarriedThrough() throws {
+        let run = try BootstrapGolden.failure("response-service-purge-blocked.json", exitCode: 1)
+        guard case let .failure(failure) = A2BootstrapReading.serviceChange(run) else {
+            Issue.record("失败包封必须解析成失败"); return
+        }
+        #expect(failure.code == "service_purge_blocked")
+        #expect(failure.exitCode == 1)
+        // 退出码 1 的粗分类是「用法错」,而这条不是你点错了 —— 失败行必须说准。
+        #expect(failure.displayLine.contains("系统代理还没还原"))
+        #expect(failure.displayLine.contains("什么都没删"))
+        #expect(failure.displayLine.contains("用法错") == false)
+        // 指引原样呈现:摘要 + 每一条做法(两条路都在)。
+        let guidance = failure.guidanceLines
+        #expect(guidance.first?.contains("先显式还原系统代理") == true)
+        #expect(guidance.contains { $0.contains("a2 proxy off") })
+        #expect(guidance.contains { $0.contains("关闭系统代理(还原)") })
+    }
+
+    @Test("17 没有 guidance 的失败一行都不多出(16 票那批失败呈现一个字节没变)")
+    func failuresWithoutGuidanceStaySingleLine() throws {
+        let run = try BootstrapGolden.failure("response-unknown-op.json", exitCode: 6)
+        guard case let .failure(failure) = A2BootstrapReading.serviceChange(run) else {
+            Issue.record("失败包封必须解析成失败"); return
+        }
+        #expect(failure.guidance == nil)
+        #expect(failure.guidanceLines.isEmpty)
     }
 
     @Test("16 幂等样本:actions 是空数组,壳原样呈现(不替它编一句「已完成」)")
@@ -427,6 +552,54 @@ struct A2BootstrapCoordinatorTests {
 
         #expect(runner.issued == [.serviceUninstall, .serviceStatus])
         #expect(coordinator.state.serviceState == .notInstalled)
+    }
+
+    @Test("17 勾了那一格:发的是 `service uninstall --purge`(而不是默认那条)")
+    func purgeIssuesTheOtherWhitelistedCommand() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceUninstallPurge] =
+            try BootstrapGolden.success("service-change-purge.json")
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall, purge: true)
+
+        #expect(runner.issued == [.serviceUninstallPurge, .serviceStatus])
+        #expect(runner.issued.contains(.serviceUninstall) == false, "勾了那一格就不该再发默认那条")
+        #expect(coordinator.state.serviceState == .notInstalled)
+        #expect(coordinator.state.lastFailure == nil)
+    }
+
+    @Test("17 缺省不勾:`perform(.uninstall)` 发的仍是不删数据的那条(默认值不许漂)")
+    func defaultPerformNeverPurges() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        #expect(runner.issued.contains(.serviceUninstallPurge) == false)
+    }
+
+    @Test("17 purge 被拒:失败连同指引落进状态,状态态势由随后那次 status 说了算")
+    func purgeBlockedIsRecordedWithGuidance() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceUninstallPurge] =
+            try BootstrapGolden.failure("response-service-purge-blocked.json", exitCode: 1)
+        // 拒绝时内核什么都没删,所以随后那次 status 读到的仍是"跑着"。
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall, purge: true)
+
+        let failure = try #require(coordinator.state.lastFailure)
+        #expect(failure.code == "service_purge_blocked")
+        #expect(failure.guidanceLines.contains { $0.contains("a2 proxy off") })
+        #expect(coordinator.state.serviceState == .running, "拒绝 = 零删除,服务照跑")
+        #expect(coordinator.state.inFlight == nil)
     }
 
     @Test("16 失败如实落地:内核的 code / message / 退出码原样进状态,**不重试**")

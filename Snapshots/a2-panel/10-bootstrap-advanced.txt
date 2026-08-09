@@ -23,7 +23,7 @@
 [separator]
 [group enabled] 高级
   [bootstrap enabled] 停止并卸载内核服务…  ⇒ a2 service uninstall
-  [info disabled] (只拆服务;~/.a2 的数据与拷贝的内核 bin 都留下)
+  [info disabled] (默认只拆服务;确认框里可勾选「同时删除 ~/.a2」)
 [separator]
 [about enabled] 关于 A2 Panel
 [quit enabled] 退出面板(代理继续运行)

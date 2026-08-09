@@ -130,7 +130,7 @@ JSON 解析器）。这条约定有断言钉着（`kernel/test/release-manifest.
 - 15 票交付**内核侧机制**：`service install --copy-to-home`、`service status` 的 `binPath`；
 - 16 票交付**面板侧引导**：首启说明框（触发判据是纯函数，四输入全组合有断言）、
   菜单的「安装并启动内核 / 启动内核 / 升级内核 vX→vY」与「高级 → 停止并卸载内核服务」（带确认），
-  执行器只发 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 那四条白名单命令、只读机读 JSON。
+  执行器只发 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 那五条白名单命令、只读机读 JSON。
 
 门禁 ⑤ 步每次都在验：恰两个可执行、内嵌 bin 自报版本 = 本次构建的内核版本、arm64 单架构，
 外加 **APP11**——内嵌 bin 以一次性 `A2_HOME` 实跑一次 `service status --json`（**只读**），
@@ -208,6 +208,11 @@ sh install.sh --uninstall # 删掉 bin
 rm -rf ~/.a2              # 可选：插件、订阅、日志、a2 自管的 mihomo 目录全在这里
 ```
 
+中间三条也可以合成一条（17 票）：`a2 service uninstall --purge` 会依次拆 `com.a2.kernel`、拆 a2 自管的
+`com.a2.mihomo`、删掉整个 `$A2_HOME`，并在 `--json` 里列出移除的 label 与删掉的路径。**第一条仍不能跳**：
+系统代理还处接管态时它会结构化拒绝（退出码 1）且什么都不删——还原依据就在 `$A2_HOME` 里。
+（从 `$A2_HOME/bin/a2` 那份拷贝上跑它是合法的：删掉正在执行的自身在 macOS/Linux 上没问题。）
+
 **顺序不是建议，是硬约束**：上面前三条的执行者正是 `a2` 自己 —— bin 删了就没有工具能收拾它们了。
 所以 `install.sh --uninstall` 会**先看后删**：只要 `~/Library/LaunchAgents/com.a2.*.plist`、
 `~/.config/systemd/user/com.a2.*.service` 或 `<A2_HOME>/system-proxy.json` 还在，它就**拒绝删 bin**
@@ -217,23 +222,39 @@ rm -rf ~/.a2              # 可选：插件、订阅、日志、a2 自管的 mih
 
 ⚠️ **删掉 `.app` 不会卸掉服务**——这正是「unit 指向 `~/.a2/bin/a2` 拷贝」的直接后果
 （[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 第 4 条：换来的是挪包/删包不断服）。
-卸载与安装**对等**，从面板里点就行：
+所以顺序是**先在面板里卸，再删 app**。
 
-```
-面板菜单 →「高级」→「停止并卸载内核服务」（带确认弹窗）
-```
+**零残留三步**（17 票起；除 macOS 惯例的偏好 plist 外不留东西）：
 
-它走的是与安装同一条白名单命令（`service uninstall`），**只拆 unit**。剩下的东西按需自己清：
+1. **系统代理若还开着，先还原**：菜单「关闭系统代理（还原）」——菜单上没有那一项（面板此刻没连上内核）
+   时，在终端敲 `a2 proxy off`。**这一步不能跳**：还原依据（`~/.a2/system-proxy.json`）就在 `~/.a2` 里，
+   没还原就勾第 2 步那一格的话，内核会**拒绝执行并告诉你怎么办**，那时什么都不会被删。
+2. **菜单卸载，并勾上那一格**：
+
+   ```
+   面板菜单 →「高级」→「停止并卸载内核服务…」→ 勾「同时删除 ~/.a2」→「停止并卸载」
+   ```
+
+   勾了走的是白名单里的 `service uninstall --purge`：依次拆 `com.a2.kernel`、拆 **a2 自管的**
+   `com.a2.mihomo`、删掉整个 `~/.a2`（内核拷贝、订阅、插件、日志、a2 自己下的那份 mihomo）。
+   ⚠️ **你自己装的 mihomo（`io.metacubex.mihomo`）与它的配置永远不在清理范围内**，一个字节都不动。
+   不勾就是 16 票的老行为：只拆 unit，`~/.a2` 原样留着（随时可以从菜单再装回来）。
+3. **退出面板，把 `.app` 拖进垃圾桶**（先退出面板，免得一个跑着的进程被连包删掉）：
+
+   ```bash
+   rm -rf "/Applications/A2 Panel.app"     # 或者直接拖进垃圾桶
+   ```
+
+命令行里同一件事是一条命令（面板不在手边、或者你本来就在终端里时用它）：
 
 ```bash
-rm -rf ~/.a2                    # 那份拷贝的 bin、插件、订阅、日志、a2 自管的 mihomo 都在这里
-rm -rf "/Applications/A2 Panel.app"
+a2 service uninstall --purge --json    # 拒绝时退出码 1（先 a2 proxy off），成功时 result.purge 列出删了什么
 ```
 
-留下 `~/.a2` 是**有意的**：数据同侧的东西不该被一次点击带走——与 `install.sh --uninstall`
-「先看后删」是同一种姿势。若你还用系统代理/mihomo，先按上面 §4 的前三条顺序收拾干净再删。
+**没勾那一格时留下 `~/.a2` 是有意的**：数据同侧的东西不该被一次点击带走——与 `install.sh --uninstall`
+「先看后删」是同一种姿势；要清就得**再勾一次那一格**（或者敲上面那条 `--purge`）。
 
-（面板本身除 TCC 授权外不写任何系统状态；它装出来的那个 launchd 服务是**你点出来的**，按上面卸。）
+（面板本身除 TCC 授权外不写任何系统状态；它装出来的那两个 launchd 服务是**你点出来的**，按上面卸。）
 
 ---
 

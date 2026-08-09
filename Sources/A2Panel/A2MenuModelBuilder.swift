@@ -374,6 +374,9 @@ public enum A2MenuModelBuilder {
         // 失败**如实一行**,含退出码语义。不重试、不掩饰:点了没成,用户有权知道内核说了什么。
         if let failure = bootstrap.lastFailure {
             items.append(.info("⚠️ 引导失败:\(failure.displayLine)"))
+            // 内核给了指引就原样摊在下面(17 票:`service_purge_blocked` 那条的价值全在这几行 ——
+            //   "先 a2 proxy off 再来"。壳一个字不改写,也不替它挑哪条更重要)。
+            for line in failure.guidanceLines { items.append(.info(line)) }
         }
         return items
     }
@@ -399,8 +402,9 @@ public enum A2MenuModelBuilder {
                     bootstrapAction: .uninstall,
                     disabledReason: reason),
                 // 卸载的口径必须与 CLI 逐字同源(`a2 service uninstall` 的人类面也这么说):
-                //   只拆 unit,数据同侧的东西不由一次点击带走。
-                .info("(只拆服务;~/.a2 的数据与拷贝的内核 bin 都留下)"),
+                //   默认只拆 unit,数据同侧的东西不由一次点击带走 —— 除非用户在确认框里
+                //   亲手勾上那一格(17 票)。这一行必须把"还有那一格"说出来,否则它就在撒谎。
+                .info("(默认只拆服务;确认框里可勾选「同时删除 ~/.a2」)"),
             ])
     }
 }

@@ -3,9 +3,9 @@
 // ============================================================================
 // 这一层是什么(以及它**不是**什么)
 // ============================================================================
-// 是:面板经 `.app` 里那份内嵌内核 bin 发起**四条白名单命令**、解析机读 JSON、把结果交出去。
+// 是:面板经 `.app` 里那份内嵌内核 bin 发起**五条白名单命令**、解析机读 JSON、把结果交出去。
 // 不是:第二条通往内核的路。壳与内核说话的正路仍是 UDS 长连接(`A2PanelSession`);
-//       本层只在**内核还没装/没跑**或**要换版本**的那几个时刻用得上,一共四条命令,一条不多。
+//       本层只在**内核还没装/没跑**、**要换版本**或**要卸干净**的那几个时刻用得上,一共五条,一条不多。
 //
 // **白名单是硬的**(ADR 0012 第 3 条):`A2BootstrapCommand` 是全仓唯一构造 argv 的地方,
 //   没有 `run(arbitrary:)` 之类的口子。想多发一条命令就得改这个枚举 —— 那会当场撞上
@@ -21,7 +21,10 @@
 // `ServiceStatusResult` / `ServiceChangeResult` 有意豁免于 Swift 契约镜像
 // (理由原文见 `A2ContractMirror.swift` 的豁免表)。面板只读其中**四个字段**:
 //   `state`、`binPath`、`status.state`、`actions`。
-// 包封本身(`A2ResponseEnvelope` / `A2WireError`)是**已镜像**的契约,双端金标钉着;
+// **17 票复核后仍是这四个**:`--purge` 给 result 加了个 `purge` 对账面(移除的 label + 删掉的路径),
+//   壳**有意不读**它 —— 那是给人和 agent 核账的机读面,而菜单要说的"删了什么"在 `actions` 里
+//   (`mihomo_unit_removed` / `home_purged`)就够了,多读一个字段就要多守一份豁免口径。
+// 包封本身(`A2ResponseEnvelope` / `A2WireError`,含 `guidance`)是**已镜像**的契约,双端金标钉着;
 // 剩下那四个字段经 `A2JSON` 取值,并由本目录的解析用例**直接喂 `kernel/contract/golden/` 的真样本**
 // —— 契约漂了,解析用例当场红。这比多两个会独立漂移的 typed 类型更省、也更硬。
 //
@@ -31,10 +34,10 @@ import Foundation
 import A2Contract
 
 // ============================================================================
-// ① 白名单:四条,一条不多
+// ① 白名单:五条,一条不多
 // ============================================================================
 
-/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条)。
+/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条,17 票起五条)。
 ///
 /// 每一条都带 `--json`:壳只看机读面,人类面的散文一个字都不解析
 /// (散文会为了好读而改,机读包封改一次就要动契约与金标)。
@@ -44,6 +47,13 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     case serviceInstall
     /// 停服并拆 unit。**只拆 unit** —— `~/.a2` 与那份拷贝留下(ADR 0012 第 6 条)。
     case serviceUninstall
+    /// 停服、拆 unit,**再连 `~/.a2` 一起删**(17 票:卸载确认框里那个默认不勾的勾选框)。
+    ///
+    /// 与上一条**不共用一个 case**,理由与"白名单是硬的"是同一条:一个会删数据的动作若只是
+    /// 上一条的一个布尔参数,argv 就不再是一份**可以逐字对照的名单** —— 那份逐字断言也就守不住它。
+    /// 删什么、不删什么全在内核里判(壳不含业务逻辑);系统代理仍处接管态时内核会结构化拒绝,
+    /// 壳原样呈现那条指引,一个字不改写。
+    case serviceUninstallPurge
     /// 问服务态(不经 daemon —— daemon 没跑时恰恰最需要它答话)。
     case serviceStatus
     /// 问内嵌 bin 自己的版本(启动时问一次并缓存,不轮询 —— ADR 0012 第 5 条)。
@@ -52,10 +62,11 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     /// 传给内嵌 bin 的 argv。**全仓唯一构造引导 argv 的地方**。
     public var arguments: [String] {
         switch self {
-        case .serviceInstall:   return ["service", "install", "--copy-to-home", "--json"]
-        case .serviceUninstall: return ["service", "uninstall", "--json"]
-        case .serviceStatus:    return ["service", "status", "--json"]
-        case .version:          return ["version", "--json"]
+        case .serviceInstall:        return ["service", "install", "--copy-to-home", "--json"]
+        case .serviceUninstall:      return ["service", "uninstall", "--json"]
+        case .serviceUninstallPurge: return ["service", "uninstall", "--purge", "--json"]
+        case .serviceStatus:         return ["service", "status", "--json"]
+        case .version:               return ["version", "--json"]
         }
     }
 
@@ -93,7 +104,7 @@ public protocol A2BootstrapRunner: AnyObject {
 
 /// 真实现:起子进程跑内嵌 bin。
 ///
-/// **不设超时**,理由如实写在这里:白名单四条命令都是 a2 的 CLI 面,而 a2 **永不交互阻塞**
+/// **不设超时**,理由如实写在这里:白名单五条命令都是 a2 的 CLI 面,而 a2 **永不交互阻塞**
 /// (ADR 0005)—— 它不会挂在那里等谁。真挂住了那是内核缺陷,而半路 kill 掉一次在途的
 /// `service install` 会留下一个装了一半的服务,比让菜单显示「安装中…」更糟。
 ///
@@ -126,7 +137,7 @@ public final class A2BootstrapProcessRunner: A2BootstrapRunner {
         }
         // 先读干净再等退出:反过来在输出超过管道缓冲时会死锁(这里只有一行 JSON,但顺序不该赌)。
         // **顺序读两条管道**理论上仍能互锁(stdout 读到 EOF 之前 stderr 写满 64KiB 就卡住)。
-        //   这里不管它,理由是有界:白名单四条的机读输出各是一行 JSON、stderr 至多几行诊断,
+        //   这里不管它,理由是有界:白名单五条的机读输出各是一行 JSON、stderr 至多几行诊断,
         //   离管道容量差着数量级。真要根治得开两条读线程 —— 为一个够不到的边界加并发不划算。
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()
@@ -188,11 +199,18 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
     public let message: String
     /// 子进程退出码。
     public let exitCode: Int32
+    /// 内核给的「人类如何完成」(17 票)。**已镜像契约的一部分**(`A2Guidance` 在 `A2WireError` 里,
+    /// 双端金标钉着),所以带上它不需要动 `ServiceChangeResult` 的镜像豁免 —— 它压根不在 result 里。
+    ///
+    /// 为什么非带不可:17 票的 `service_purge_blocked` 是**拒绝即指引**的典型 ——
+    /// 光说"被拒了"对用户毫无用处,他要的是"先 `a2 proxy off`"这一句。壳原样转达,不改写、不摘要。
+    public let guidance: A2Guidance?
 
-    public init(code: String?, message: String, exitCode: Int32) {
+    public init(code: String?, message: String, exitCode: Int32, guidance: A2Guidance? = nil) {
         self.code = code
         self.message = message
         self.exitCode = exitCode
+        self.guidance = guidance
     }
 
     /// 退出码的粗分类,**给人看的一句话**。
@@ -226,6 +244,10 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
             return "这台机器上没有已支持的 supervisor"
         case "service_operation_failed":
             return "supervisor 报错,或装完没跑起来"
+        case "service_purge_blocked":
+            // 退出码 1 的粗分类是「用法错」,而这条**不是**你点错了:是系统代理还没还原,
+            //   内核为此拒绝执行且什么都没删。照粗分类说会误导人,所以这里说准。
+            return "系统代理还没还原,清理已被拒绝 —— 什么都没删"
         default:
             return nil
         }
@@ -238,6 +260,19 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
         coordinates.append("退出码 \(exitCode)")
         let note = Self.codeMeaning(code) ?? Self.exitCodeMeaning(exitCode)
         return "\(message)(\(coordinates.joined(separator: " · ")) —— \(note))"
+    }
+
+    /// 跟在失败行**下面**的那几行:内核给的摘要 + 每一条具体做法。没有 guidance 就一行都不出。
+    ///
+    /// 为什么摊成多行而不是塞进 `displayLine`:菜单项是单行的,把三四条命令挤进一行等于没写。
+    /// 这仍是 16 票那个失败面(引导区段的 info 块),不是新开的窗 —— 只是它现在有话要转达。
+    public var guidanceLines: [String] {
+        guard let guidance else { return [] }
+        var lines = ["↳ \(guidance.summary)"]
+        for step in guidance.steps {
+            lines.append(step.command.map { "↳ \(step.description):\($0)" } ?? "↳ \(step.description)")
+        }
+        return lines
     }
 }
 
@@ -277,8 +312,9 @@ public enum A2BootstrapReading {
             return .failure(failure)
         case let .success(envelope):
             if let error = envelope.error {
+                // guidance 原样带上(17 票):`service_purge_blocked` 那条的价值全在指引里。
                 return .failure(A2BootstrapFailure(code: error.code, message: error.message,
-                                                   exitCode: run.exitCode))
+                                                   exitCode: run.exitCode, guidance: error.guidance))
             }
             guard let object = envelope.result?.objectValue else {
                 return .failure(A2BootstrapFailure(code: nil, message: "机读结果不是对象",

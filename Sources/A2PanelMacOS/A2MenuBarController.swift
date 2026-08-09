@@ -14,7 +14,7 @@
 // ============================================================================
 // 16 票:第二个出口(引导项),以及为什么它**不是**第二套逻辑
 // ============================================================================
-// `.bootstrap` 项走的是内嵌内核 bin(ADR 0012 的四条白名单),不经 UDS。本控制器对它做的事与
+// `.bootstrap` 项走的是内嵌内核 bin(ADR 0012 的五条白名单),不经 UDS。本控制器对它做的事与
 // 能力项**同构**:读模型里那个字段 → 交给唯一的出口(`onBootstrap`)→ 完事。
 //   * 「要不要先弹确认」照样是**数据说了算**(`action.confirmation` 非空就弹),
 //     与 prompts 那条同一种姿势 —— 控制器里没有"哪个动作危险"的判断;
@@ -36,14 +36,16 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
 
     private let statusItem: NSStatusItem
     private let onInvoke: (String, [String: A2JSON]) -> Void
-    private let onBootstrap: (A2BootstrapMenuAction) -> Void
+    /// 第二个参数 = 用户在确认框里勾没勾那个「同时删除 ~/.a2」(17 票)。
+    /// 没有确认框、或那个框没有勾选框时恒 false。
+    private let onBootstrap: (A2BootstrapMenuAction, Bool) -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void
 
     private var model: A2MenuModel
 
     public init(onInvoke: @escaping (String, [String: A2JSON]) -> Void,
-                onBootstrap: @escaping (A2BootstrapMenuAction) -> Void,
+                onBootstrap: @escaping (A2BootstrapMenuAction, Bool) -> Void,
                 onAbout: @escaping () -> Void,
                 onQuit: @escaping () -> Void) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -146,9 +148,12 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
         // 「要不要先确认」由**动作自己的数据**说了算(见文件头)。用户不点确认 = 什么都不发。
         //   弹框本身交给 `A2BootstrapPresenter` —— 「回车归安全那一侧」那条规矩只该有一处实现
         //   (16 票第一版在这里另写了一遍,于是漏掉了"清掉主操作那个自动回车"的半句)。
-        if let confirmation = action.confirmation,
-           !A2BootstrapPresenter.presentConfirmation(confirmation) { return }
-        onBootstrap(action)
+        //   17 票:那个框里还可能有一个默认不勾的勾选框(「同时删除 ~/.a2」),
+        //   它的状态与"批没批准"一起回来 —— 取消时它一律作废(见 `presentConfirmation`)。
+        guard let confirmation = action.confirmation else { onBootstrap(action, false); return }
+        let choice = A2BootstrapPresenter.presentConfirmation(confirmation)
+        guard choice.approved else { return }   // 用户不点确认 = 什么都不发
+        onBootstrap(action, choice.checked)
     }
 
     /// 向用户要一个入参。**只收字符串**:类型由内核的 descriptor 声明,壳不替它转
