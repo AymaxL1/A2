@@ -53,7 +53,9 @@ struct A2PanelSnapshotMain {
         var mismatched = 0
 
         for fixture in A2PanelFixtures.fixtures {
-            let model = A2MenuModelBuilder.build(state: fixture.state)
+            // 两份状态一起喂(16 票):内核态 + 面板本地的引导态。
+            //   录制路径与断言路径必须**逐字同一条**,否则录出来的 golden 天生对不上。
+            let model = A2MenuModelBuilder.build(state: fixture.state, bootstrap: fixture.bootstrap)
             let size = A2MenuSnapshotRenderer.pixelSize(for: model)
             let png: Data
             do { png = try A2MenuSnapshotRenderer.renderPNG(model) }

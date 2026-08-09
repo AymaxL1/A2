@@ -126,12 +126,17 @@ public enum A2PanelFixtures {
     // ============ 三种「主要菜单状态」 ============
 
     /// 一个固定装置 = 稳定名(产物文件名)+ 人读标题 + 状态。
+    ///
+    /// 16 票加了第二份状态 `bootstrap`(面板本地的引导状态)。缺省 `.hidden` —— 没有内嵌 bin,
+    /// 引导区段整块不出现,于是 10 票那四份装置连同它们的 golden **一个字节都不用动**。
     public struct Fixture: Sendable {
         public let name: String
         public let title: String
         public let state: A2PanelState
-        public init(name: String, title: String, state: A2PanelState) {
-            self.name = name; self.title = title; self.state = state
+        public let bootstrap: A2BootstrapState
+        public init(name: String, title: String, state: A2PanelState,
+                    bootstrap: A2BootstrapState = .hidden) {
+            self.name = name; self.title = title; self.state = state; self.bootstrap = bootstrap
         }
     }
 
@@ -224,8 +229,87 @@ public enum A2PanelFixtures {
                 systemProxyTakenOver: true, systemProxySupported: true,
                 notes: ["与内核断开,以下代理状态是断开前最后一次读到的"])))
 
-    /// 快照与状态反映断言共用的四种主要状态(顺序即产物编号顺序)。
-    public static let fixtures: [Fixture] = [mihomoDown, mihomoRunning, activeSubscription, disconnected]
+    // ============ 引导装置(16 票 / ADR 0012:六条新分支各一张)============
+    //
+    // 前四种装置刻意保持 `.hidden`(= 10 票的原样),这六种才是引导区段的覆盖面。
+    // 分工与上面那四种相同:**快照画的**与**断言验的**是同一批状态,物理上同一份。
+
+    /// 「还没连上过内核」的那份状态:能力清单**是空的**,因为它只来自快照,而快照要连上才有。
+    /// 这正是一个全新用户第一次打开 `.app` 时菜单真实的样子 —— 装置不许比现实好看。
+    static func neverConnected(_ reason: String) -> A2PanelState {
+        A2PanelState(connection: .disconnected(reason),
+                     kernelStatus: nil,
+                     capabilities: [],
+                     arbitration: nil,
+                     proxy: A2ProxyView())
+    }
+
+    /// ⑤ 断连 + 内核未安装 → 「安装并启动内核」(首启说明框背后的那一态)。
+    public static let bootstrapNotInstalled = Fixture(
+        name: "05-bootstrap-not-installed",
+        title: "断连 · 内核未安装(有内嵌 bin → 可一键装)",
+        state: neverConnected("内核未安装"),
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .notInstalled))
+
+    /// ⑥ 断连 + 已装未跑 → 标题变「启动内核」,动作仍是**同一条幂等 install**。
+    public static let bootstrapInstalledNotRunning = Fixture(
+        name: "06-bootstrap-installed-not-running",
+        title: "断连 · 服务已装但没在跑(标题变「启动内核」,动作同一条)",
+        state: neverConnected("内核未运行"),
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .installedNotRunning))
+
+    /// ⑦ 在途:项**留着但禁用** + 一条「安装中…」。
+    public static let bootstrapInstalling = Fixture(
+        name: "07-bootstrap-installing",
+        title: "断连 · 安装在途(项禁用 + 「安装中…」)",
+        state: neverConnected("内核未安装"),
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .notInstalled,
+                                    inFlight: .install))
+
+    /// ⑧ 失败:如实一行,含 `error.code` 与退出码语义(这里是退出码 6 = 这个 bin 不能自装)。
+    public static let bootstrapFailed = Fixture(
+        name: "08-bootstrap-failed",
+        title: "断连 · 上一次安装失败(退出码 6:这个 bin 不能自装)",
+        state: neverConnected("内核未安装"),
+        bootstrap: A2BootstrapState(
+            embeddedBinAvailable: true,
+            embeddedKernelVersion: "0.1.0",
+            serviceState: .notInstalled,
+            lastFailure: A2BootstrapFailure(
+                code: "service_self_copy_unsupported",
+                message: "当前这个 a2 不是可分发的单文件产物,没有「自身」可以拷进 A2_HOME。",
+                exitCode: 6)))
+
+    /// ⑨ 已连 + 版本失配 → 「升级内核 vX→vY」。线上版本取 `snapshot.status.version`。
+    public static let bootstrapUpgrade = Fixture(
+        name: "09-bootstrap-upgrade",
+        title: "已连 · 包里的内核比线上的新(出「升级内核 v0.1.0→v0.2.0」)",
+        state: mihomoDown.state,
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.2.0",
+                                    serviceState: .running))
+
+    /// ⑩ 已连 + 版本一致 → 引导区段只剩「高级」(能装就能卸,但日常不该和它并排)。
+    public static let bootstrapAdvanced = Fixture(
+        name: "10-bootstrap-advanced",
+        title: "已连 · 版本一致(引导区段只剩「高级 → 停止并卸载内核服务」)",
+        state: mihomoDown.state,
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .running))
+
+    /// 快照与状态反映断言共用的全部状态(顺序即产物编号顺序)。
+    public static let fixtures: [Fixture] = [
+        mihomoDown, mihomoRunning, activeSubscription, disconnected,
+        bootstrapNotInstalled, bootstrapInstalledNotRunning, bootstrapInstalling,
+        bootstrapFailed, bootstrapUpgrade, bootstrapAdvanced,
+    ]
 
     // ============ 确认器装置 ============
 

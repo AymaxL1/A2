@@ -20,6 +20,16 @@
 // * 要问用户哪些参数,从 descriptor 的必填参数**推导**,不另抄一份名单。
 // * 每一项的动作 = `capabilityID` + `params`,渲染器一律经同一个出口发出去。菜单里没有 if。
 //
+// ============================================================================
+// 16 票加了什么:第二个输入(面板本地的引导状态)
+// ============================================================================
+// `build(state:bootstrap:)` 现在收两份状态,泾渭分明:
+//   * `state`     —— **内核说过的话**的投影(快照 + 七族事件),`A2PanelProjection` 的产物;
+//   * `bootstrap` —— **面板自己知道的事**(嵌入 bin 在不在、它是什么版本、服务装没装、有没有在途操作)。
+// 两份并列而不是合并,理由写在 `A2BootstrapState` 头注:合并会让"投影 = 内核事实"这条口径破掉。
+// 缺省 `.hidden`(没有内嵌 bin)时本票新增的区段**一项都不出现**,菜单与 10 票逐字相同 ——
+// 于是既有的四份 golden 一个字节都不用动,这不是巧合,是"引导功能整体隐藏"那条要求的直接后果。
+//
 // 依赖边:A2Panel → A2Contract。零 AppKit。
 
 import A2Contract
@@ -38,7 +48,8 @@ public enum A2MenuModelBuilder {
         }
     }
 
-    public static func build(state: A2PanelState) -> A2MenuModel {
+    public static func build(state: A2PanelState,
+                             bootstrap: A2BootstrapState = .hidden) -> A2MenuModel {
         var byID: [String: A2CapabilityDescriptor] = [:]
         for c in state.capabilities { byID[c.id] = c }
         func has(_ id: String) -> Bool { byID[id] != nil }
@@ -69,6 +80,9 @@ public enum A2MenuModelBuilder {
                 items.append(.info("待确认:\(arbitration.pending.count) 条"))
             }
         }
+        // ---- ⓪′ 引导区段(16 票 / ADR 0012)——**紧跟连接行**,因为它回答的正是那一行提出的问题:
+        //      「没连上,那我该怎么办?」10 票时这个问题的答案只能是"自己去敲 a2 service install"。
+        items.append(contentsOf: bootstrapItems(state: state, bootstrap: bootstrap))
         items.append(.separator())
 
         // ---- ① 基础状态(04 In:内核运行状态 / 监听端口 / 当前模式与节点)----
@@ -258,12 +272,131 @@ public enum A2MenuModelBuilder {
         }
         items.append(.separator())
 
+        // ---- ⑤′ 高级(16 票):卸载与安装**对等**,但它不该和日常操作并排 ----
+        if let advanced = advancedGroup(bootstrap: bootstrap) {
+            items.append(advanced)
+            items.append(.separator())
+        }
+
         // ---- ⑥ 关于 / 退出 ----
         items.append(A2MenuItemModel(kind: .about, title: "关于 A2 Panel"))
         // 「退出」的语义在新架构里变了,标题必须说出来:壳退出**只是断连**,代理照跑
         //   (ADR 0008 / spec:「退出即还原」废除)。用户点它之前就该知道这件事。
         items.append(A2MenuItemModel(kind: .quit, title: "退出面板(代理继续运行)"))
 
-        return A2MenuModel(items: items)
+        // 收口:把分隔线收拾干净(见 `tidySeparators` 的理由)。
+        return A2MenuModel(items: tidySeparators(items))
+    }
+
+    /// 去掉**首尾**与**连续**的分隔线。
+    ///
+    /// 16 票才需要它,原因是本票第一次把「一条能力都还不知道」的状态画进了菜单:全新用户第一次打开
+    /// `.app` 时还没连上内核,而能力清单**只来自快照** —— 于是上面每一段(状态/开关/模式/分组/订阅)
+    /// 都整段缺席,只剩下它们各自那条分隔线,菜单上会连着出现四条横线。
+    /// 那不是"信息为零",是"看起来坏了"。
+    ///
+    /// 收拾的是**呈现**而不是内容:每一段照旧只管"我在不在",不必彼此打听"我前面那段出了没有"
+    /// —— 那种打听正是让构造器长出耦合的开端。既有四份装置里本来就没有连续分隔线,
+    /// 所以这一步对它们**逐字无影响**(golden 一个字节没动,有断言钉着)。
+    ///
+    /// (`public` 的理由与 `A2MenuModel.describe` 同类:它是一条**可单独断言**的纯规则,
+    ///  "只动分隔线、别的一个字不改"这件事值得有一条直接对着它的用例。)
+    public static func tidySeparators(_ items: [A2MenuItemModel]) -> [A2MenuItemModel] {
+        var out: [A2MenuItemModel] = []
+        for item in items {
+            let normalized = item.children.isEmpty
+                ? item
+                : item.withChildren(tidySeparators(item.children))
+            if normalized.kind == .separator {
+                // 开头不要、连着不要。
+                guard let last = out.last, last.kind != .separator else { continue }
+            }
+            out.append(normalized)
+        }
+        while out.last?.kind == .separator { out.removeLast() }
+        return out
+    }
+
+    // ========================================================================
+    // 引导区段(16 票 / ADR 0012)
+    // ========================================================================
+
+    /// 连接行下面那几项。**没有内嵌 bin 就一项都不出** —— 那时壳退回 10 票的形态:
+    /// 只说"没连上、代理不受影响",不给任何点了会失败的入口(与「能力缺席即不出现」同一条姿势)。
+    static func bootstrapItems(state: A2PanelState, bootstrap: A2BootstrapState) -> [A2MenuItemModel] {
+        guard bootstrap.embeddedBinAvailable else { return [] }
+        var items: [A2MenuItemModel] = []
+
+        // 在途:项**留着但禁用**,另给一条 info 说清在干什么。
+        //   为什么不整块换成一条 info:那样菜单会在两帧之间"少一项",用户刚点下去就看见自己点的东西没了。
+        let busy = bootstrap.inFlight != nil
+        let busyReason = bootstrap.inFlight.map { $0 == .install ? "安装中,请稍候" : "卸载中,请稍候" }
+
+        switch state.connection {
+        case .disconnected:
+            // 断连 = 面板连不上内核。装没装由 `service status` 说了算,它答不上来时按"未装"呈现
+            //   —— 那正是幂等 install 该被点的时候(装了就是收敛,没装就是装)。
+            let title = (bootstrap.serviceState == .installedNotRunning)
+                ? "启动内核" : "安装并启动内核"
+            items.append(A2MenuItemModel(
+                kind: .bootstrap,
+                title: title,
+                enabled: !busy,
+                bootstrapAction: .install,
+                disabledReason: busyReason))
+
+        case .connected:
+            // 已连上还要出项,只有一种情形:**线上内核与包里这份不是同一版**。
+            //   线上版本取 `snapshot.status.version`(hello 全量快照里那一个,与 `a2 version` 同源);
+            //   包里那份是启动时问过一次的缓存(不轮询 —— ADR 0012 第 5 条)。
+            if let embedded = bootstrap.embeddedKernelVersion,
+               let live = state.kernelStatus?.version,
+               embedded != live {
+                items.append(A2MenuItemModel(
+                    kind: .bootstrap,
+                    // 「不断网」写进标题:mihomo 挂自己的 unit,换内核不动数据面 —— 用户点之前就该知道。
+                    title: "升级内核 v\(live)→v\(embedded)(重启服务,不断网)",
+                    enabled: !busy,
+                    bootstrapAction: .install,
+                    disabledReason: busyReason))
+            }
+        }
+
+        if let inFlight = bootstrap.inFlight {
+            items.append(.info(inFlight == .install
+                               ? "⏳ 安装中…(经包内内核 bin;装完面板会自动重连)"
+                               : "⏳ 卸载中…"))
+        }
+        // 失败**如实一行**,含退出码语义。不重试、不掩饰:点了没成,用户有权知道内核说了什么。
+        if let failure = bootstrap.lastFailure {
+            items.append(.info("⚠️ 引导失败:\(failure.displayLine)"))
+        }
+        return items
+    }
+
+    /// 「高级」子菜单。有内嵌 bin 就常驻 —— 能装就能卸(ADR 0012 第 6 条),
+    /// 卸不了的时候**置灰并说明为什么**,而不是整项消失。
+    static func advancedGroup(bootstrap: A2BootstrapState) -> A2MenuItemModel? {
+        guard bootstrap.embeddedBinAvailable else { return nil }
+        let reason: String? = {
+            if bootstrap.inFlight != nil { return "有引导操作在途" }
+            if bootstrap.serviceState == .notInstalled { return "服务尚未安装,没有可卸的东西" }
+            if bootstrap.serviceState == nil { return "读不到服务态(`service status` 没答上来)" }
+            return nil
+        }()
+        return A2MenuItemModel(
+            kind: .group,
+            title: "高级",
+            children: [
+                A2MenuItemModel(
+                    kind: .bootstrap,
+                    title: "停止并卸载内核服务…",
+                    enabled: reason == nil,
+                    bootstrapAction: .uninstall,
+                    disabledReason: reason),
+                // 卸载的口径必须与 CLI 逐字同源(`a2 service uninstall` 的人类面也这么说):
+                //   只拆 unit,数据同侧的东西不由一次点击带走。
+                .info("(只拆服务;~/.a2 的数据与拷贝的内核 bin 都留下)"),
+            ])
     }
 }

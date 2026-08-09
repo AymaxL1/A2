@@ -33,6 +33,10 @@
 # 结构断言随之修订(见文末):APP8 从「恰 1 个可执行」改「**恰 2 个,且就是那两条路径**」,
 # 并新增 APP9(内嵌 bin 自报版本 = 内核版本单一来源)与 APP10(arm64 单架构)。
 #
+# **16 票再加一条 APP11**:内嵌 bin 以一次性 `A2_HOME` 实跑 `service status --json` ——
+#   即「面板引导链第一步要调的那条命令」在包内真的可用(只读;门禁永不跑 install/uninstall)。
+#   于是本脚本的核验清单是 **APP1–APP11**。
+#
 # **签名顺序变成先内后外**:先签 `Contents/Resources/a2`,再签 bundle(同一 identity)。
 # 12/15 票那套编排当年为随包 GPL 二进制而立、随它一起废除,现在为内嵌内核而回来,理由与当年同构。
 # **不许用 `--deep`**(Apple 已弃用的批量签法,会掩盖"哪一层没签上")。
@@ -308,6 +312,35 @@ if [ "$EMBED_ARCHS" = "arm64" ] && grep -q "Mach-O 64-bit executable arm64" <<<"
   v_ok "APP10 内嵌内核 bin 是 arm64 单架构 Mach-O(lipo -archs = arm64)"
 else
   v_bad "APP10 内嵌内核 bin 不是 arm64 单架构:lipo -archs = '$EMBED_ARCHS';file = '$EMBED_FILE'"
+fi
+
+# **面板将要调的那条命令,在包里真的可用**(16 票 / [ADR 0012](../docs/adr/0012-panel-self-sufficient-bootstrap.md))。
+#   APP9 证明的是 `version` 跑得动 —— 那条命令什么都不问,不碰文件系统也不碰 supervisor。
+#   而面板引导链的第一步问的是 **`service status --json`**:它要解析 `A2_HOME`、算出 unit 路径、
+#   问一次系统 supervisor、再读盘上那份 unit 才答得出 `binPath`。这一整条路在包内环境下断了,
+#   APP9 一条都看不出来 —— 而用户会在点开 `.app` 的第一秒撞上它。
+#
+# **只读 + 不碰真环境**(施工红线):`service status` 不写任何文件、不装任何东西;`A2_HOME` 指一次性目录,
+#   真 `~/.a2` 一个字节不动(跑完顺带核对该目录仍是空的)。它确实会以只读方式问一次
+#   `launchctl print gui/<uid>/com.a2.kernel`(装没装),那是查询、不改任何状态。
+#   门禁**永远不在这里跑 install/uninstall** —— 那两条会真的动 launchd,只归产品运行期用户那一次点击。
+#
+# 判据四条:退出码 0 · 机读面是一条可解析的包封且 `ok=true` · `result.binPath` 在
+#   (15 票新增的必填字段,面板据它判"托管的是不是我这份内核")· 一次性 A2_HOME 无残留。
+SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/a2-app-smoke-XXXXXX")"
+SMOKE_OUT="$(A2_HOME="$SMOKE_HOME" "$EMBED_BIN" service status --json 2>/dev/null)"
+SMOKE_RC=$?
+SMOKE_OK="$(printf '%s' "$SMOKE_OUT" | plutil -extract ok raw -o - -- - 2>/dev/null)"
+SMOKE_BINPATH="$(printf '%s' "$SMOKE_OUT" | plutil -extract result.binPath raw -o - -- - 2>/dev/null)"
+SMOKE_BINPATH_RC=$?
+SMOKE_LEFTOVER="$(ls -A "$SMOKE_HOME" 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$SMOKE_HOME"
+if [ "$SMOKE_RC" -eq 0 ] && [ "$SMOKE_OK" = "true" ] \
+   && [ "$SMOKE_BINPATH_RC" -eq 0 ] && [ -n "$SMOKE_BINPATH" ] && [ "$SMOKE_LEFTOVER" = "0" ]; then
+  v_ok "APP11 内嵌 bin 跑得动面板要调的那条只读命令(service status --json → ok=true,binPath=$SMOKE_BINPATH,一次性 A2_HOME 无残留)"
+else
+  v_bad "APP11 内嵌 bin 的 service status --json 不可用:rc=$SMOKE_RC ok='$SMOKE_OK' binPath 取值 rc=$SMOKE_BINPATH_RC 值='$SMOKE_BINPATH' 残留 $SMOKE_LEFTOVER 项"
+  echo "      stdout:"; printf '%s\n' "$SMOKE_OUT" | head -5 | sed 's/^/        /'
 fi
 
 # ---- 收口 ----------------------------------------------------------------------

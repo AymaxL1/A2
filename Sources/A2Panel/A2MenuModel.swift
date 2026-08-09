@@ -101,6 +101,10 @@ public struct A2MenuItemModel: Sendable, Equatable {
         case separator
         /// 可点的能力调用项。
         case action
+        /// 可点的**引导项**(16 票 / ADR 0012)。与 `.action` 的分野是**出口不同**:
+        ///   `.action` 经 UDS 调能力,`.bootstrap` 经内嵌内核 bin 起子进程发白名单命令。
+        ///   两者绝不混用一个字段 —— 混了就再也说不清"这一项到底会走哪条路"。
+        case bootstrap
         /// 带子菜单的父项(本身不发起调用)。
         case group
         /// 「关于 A2 Panel」。
@@ -120,6 +124,11 @@ public struct A2MenuItemModel: Sendable, Equatable {
     /// **薄壳铁律**:所有可点项的动作都由这个 id + `params` 决定,渲染器 A 一律经
     ///   `A2KernelClient.callCapability(_:input:)` 这**同一个出口**发起 —— 菜单项里没有任何业务逻辑。
     public let capabilityID: String?
+    /// 本项要发起的**引导动作**(16 票)。`nil` = 本项不是引导项。
+    ///
+    /// 与 `capabilityID` **互斥**:一项要么是能力调用、要么是引导命令,不可能两者都是
+    /// (有一条纯逻辑断言钉着这件事)。渲染器据此决定把点击交给哪个出口。
+    public let bootstrapAction: A2BootstrapMenuAction?
     /// 调用该能力时要带的入参(已能从当前状态确定的那部分)。
     public let params: [String: A2JSON]
     /// 还须当场向用户索取的入参(见 `A2MenuPrompt`)。
@@ -136,6 +145,7 @@ public struct A2MenuItemModel: Sendable, Equatable {
                 enabled: Bool = true,
                 checked: Bool = false,
                 capabilityID: String? = nil,
+                bootstrapAction: A2BootstrapMenuAction? = nil,
                 params: [String: A2JSON] = [:],
                 prompts: [A2MenuPrompt] = [],
                 userAction: A2MenuUserAction? = nil,
@@ -146,11 +156,20 @@ public struct A2MenuItemModel: Sendable, Equatable {
         self.enabled = enabled
         self.checked = checked
         self.capabilityID = capabilityID
+        self.bootstrapAction = bootstrapAction
         self.params = params
         self.prompts = prompts
         self.userAction = userAction
         self.children = children
         self.disabledReason = disabledReason
+    }
+
+    /// 换一份子项(其余字段逐字不动)。构造器收口时整理子菜单里的分隔线要用。
+    public func withChildren(_ children: [A2MenuItemModel]) -> A2MenuItemModel {
+        A2MenuItemModel(kind: kind, title: title, enabled: enabled, checked: checked,
+                        capabilityID: capabilityID, bootstrapAction: bootstrapAction,
+                        params: params, prompts: prompts, userAction: userAction,
+                        children: children, disabledReason: disabledReason)
     }
 
     // ---- 便捷构造(让 Builder 读起来像菜单本身)----
@@ -224,6 +243,8 @@ public struct A2MenuModel: Sendable, Equatable {
                         line += " prompts[\(item.prompts.map { $0.name }.sorted().joined(separator: ","))]"
                     }
                 }
+                // 引导项的角标用**另一个箭头**(`⇒`):一眼可见它走的不是能力出口,而是内嵌 bin。
+                if let bootstrap = item.bootstrapAction { line += "  ⇒ \(bootstrap.badge)" }
                 if let action = item.userAction { line += "  @\(action.rawValue)" }
                 if let reason = item.disabledReason { line += "  (\(reason))" }
                 lines.append(line)

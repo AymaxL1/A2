@@ -124,9 +124,21 @@ JSON 解析器）。这条约定有断言钉着（`kernel/test/release-manifest.
   服务照跑；**反过来说，删掉 `.app` 不会卸掉服务**（怎么卸见 §4）。
 - **升级仍然显式**：换了新版 `.app` 之后，面板发现版本不一致才提示「升级内核」，**点了才升**；没有静默更新。
 
-**落地状态（如实）**：14 票交付的是**包**——`.app` 里真的嵌着当前这版内核，门禁 ⑤ 步每次都在验
-（恰两个可执行、内嵌 bin 自报版本 = 本次构建的内核版本、arm64 单架构）。上面第 2、3 步的说明框与菜单项
-由 16 票落地，`--copy-to-home` 与线上版本上报由 15 票落地；三票齐了这条路径才真的点得动。
+**落地状态（如实）**：三票齐了，这条路径**代码上已经点得动**。
+
+- 14 票交付**包**：`.app` 里真的嵌着当前这版内核；
+- 15 票交付**内核侧机制**：`service install --copy-to-home`、`service status` 的 `binPath`；
+- 16 票交付**面板侧引导**：首启说明框（触发判据是纯函数，四输入全组合有断言）、
+  菜单的「安装并启动内核 / 启动内核 / 升级内核 vX→vY」与「高级 → 停止并卸载内核服务」（带确认），
+  执行器只发 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 那四条白名单命令、只读机读 JSON。
+
+门禁 ⑤ 步每次都在验：恰两个可执行、内嵌 bin 自报版本 = 本次构建的内核版本、arm64 单架构，
+外加 **APP11**——内嵌 bin 以一次性 `A2_HOME` 实跑一次 `service status --json`（**只读**），
+证明"面板将要调的第一条命令"在包内真的可用。
+
+**门禁验不到的那一段，如实说**：门禁**从不**真的装服务（`install` / `uninstall` 会动 launchd，
+那只归产品运行期用户那一次点击）。所以「点下去真的装上了、菜单真的跟着变、
+`.app` 挪走之后服务照跑」这一串，仍要人在真机上走一遍——已列入 §8 的人工项。
 
 ### 2.1 curl 一条命令（有发布渠道时）
 
@@ -280,11 +292,11 @@ a2 service install   # 幂等，会把 unit 收敛到新位置
 | 4 | 首次 TCC / 通知授权（**对 `com.a2.panel`**） | 真人双击 `.app` 点弹窗 | [签名 runbook](signing-and-authorization.md) §5；路线图 5 条之第 3 条 |
 | 5 | 在干净机器上装一次**真 mihomo** 跑旗舰链 | 一台没跑着用户自己 mihomo 的机器（本机那份是施工红线，绝不触碰） | `kernel/test/swift-parity-map.md` 10 票 G 组；路线图 Phase 1 判据 3 的「缺口」 |
 | 6 | 发布前冒烟 checklist（装 / 升级 / 回滚 / 卸载各走一遍） | 上面 1、2 就位之后 | 路线图 Phase 3 |
-| 7 | **换证书那天**手工跑一次 `AA_CODESIGN_IDENTITY="NONEXISTENT" bash Scripts/build-app.sh`，确认它 exit≠0 且说明了原因 | 旧门禁的 APP11（签名身份 seam 必须 fail-closed）随旧引擎退场，**新门禁没有等价断言** | [签名 runbook](signing-and-authorization.md) §4 |
+| 7 | **换证书那天**手工跑一次 `AA_CODESIGN_IDENTITY="NONEXISTENT" bash Scripts/build-app.sh`，确认它 exit≠0 且说明了原因 | 旧门禁里那条「签名身份 seam 必须 fail-closed」的断言随旧引擎退场，**新门禁没有等价断言**（⚠️ 别与新门禁的 APP11 混淆——同号不同事：新的那条验的是内嵌 bin 跑不跑得动 `service status`） | [签名 runbook](signing-and-authorization.md) §4 |
 | 8 | 裁定 **`a2` bin 自身的签名 / 公证形态** | 它走单文件下载、不吃 `.app` 的签名链；Gatekeeper 会不会拦一个下载来的裸可执行，要等渠道定了才谈得上 | 本文 §0 表；签名 runbook §0 |
 | 9 | **Homebrew Formula**（V1 明确**不做**，列此以免被当成漏项） | 先要 #1；再要 tap 仓库与"每次发版更新 formula" 的流程 | 本文 §7 |
 | 10 | **带 quarantine 的 `.app` 双击首启实测**：App Translocation 到底发不发生、包内路径稳不稳、内嵌 bin 还能不能跑 | 一次**真下载**（浏览器打 quarantine 标记）+ 真人双击。本地构建的包不带 quarantine（13 票实测），造不出这个条件 | [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) Context；签名 runbook §6.2 |
-| 11 | **小白路径真机走一遍**：下载 → 打开 → 点「安装并启动」→ 内核起来 → 菜单能用 | 16 票的引导 UI 落地（14 票只交付了包）；一台干净机器 | 本文 §2.0；[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) |
+| 11 | **小白路径真机走一遍**：下载 → 打开 → 点「安装并启动」→ 内核起来 → 菜单能用 | **代码已就位**（16 票）；只差一台干净机器 + 真人点那几下。门禁**从不**真装服务（install/uninstall 会动 launchd），所以这一段永远只能由人验 | 本文 §2.0；[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) |
 
 **另外两条不属分发、但同批顺延的**（列此免得验收时以为漏了）：真 Codex 经 `a2 … --json` + `prefix_rule`
 跑一遍旗舰操作、换源 dangerous 的真机点验（人真的点那个按钮）——两条都在路线图 Phase 1 的 5 条表里。

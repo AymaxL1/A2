@@ -40,13 +40,13 @@ struct A2PanelSnapshotTests {
             .appendingPathComponent("Snapshots/a2-panel")
     }()
 
-    @Test("10 快照:四种主要状态逐张与 golden 一致(像素 + 模型文本)",
+    @Test("10 快照:每种主要状态逐张与 golden 一致(像素 + 模型文本;16 票起含六条引导分支)",
           arguments: A2PanelFixtures.fixtures.map(\.name))
     func snapshotMatchesGolden(_ name: String) throws {
         let fixture = try #require(A2PanelFixtures.fixtures.first { $0.name == name })
         A2MenuSnapshotRenderer.prepareGraphicsStack()
 
-        let model = A2MenuModelBuilder.build(state: fixture.state)
+        let model = A2MenuModelBuilder.build(state: fixture.state, bootstrap: fixture.bootstrap)
         let png = try A2MenuSnapshotRenderer.renderPNG(model)
         let text = model.textSnapshot
 

@@ -1,0 +1,11 @@
+[header disabled] A2 Panel · 代理
+[separator]
+[info disabled] 内核:未连接(内核未安装)— 代理不受影响,仅本面板失联
+[bootstrap enabled] 安装并启动内核  ⇒ a2 service install --copy-to-home
+[separator]
+[group enabled] 高级
+  [bootstrap disabled] 停止并卸载内核服务…  ⇒ a2 service uninstall  (服务尚未安装,没有可卸的东西)
+  [info disabled] (只拆服务;~/.a2 的数据与拷贝的内核 bin 都留下)
+[separator]
+[about enabled] 关于 A2 Panel
+[quit enabled] 退出面板(代理继续运行)

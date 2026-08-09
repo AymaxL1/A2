@@ -19,7 +19,7 @@ struct A2MenuModelConformanceTests {
     // 覆盖面用**四种固定装置的并集**判:有些用户操作只在特定状态下才有项
     // (如「激活订阅」只在有订阅时出现)。并集才是「菜单能做的全部事」。
     private static let models = A2PanelFixtures.fixtures.map {
-        A2MenuModelBuilder.build(state: $0.state)
+        A2MenuModelBuilder.build(state: $0.state, bootstrap: $0.bootstrap)
     }
     private static let allItems = models.flatMap { $0.flattened }
     private static let capabilityIDs = Set(A2PanelFixtures.capabilities.map(\.id))
@@ -172,10 +172,10 @@ struct A2MenuModelConformanceTests {
         #expect(!items(m).contains { $0.title.hasPrefix("确认器:") })
     }
 
-    @Test("10 四态两两不同(排除「模型恒定」的假绿)")
-    func fourStatesDiffer() {
+    @Test("10 装置两两不同(排除「模型恒定」的假绿;16 票起十种)")
+    func fixtureStatesDiffer() {
         let snapshots = A2PanelFixtures.fixtures.map {
-            A2MenuModelBuilder.build(state: $0.state).textSnapshot
+            A2MenuModelBuilder.build(state: $0.state, bootstrap: $0.bootstrap).textSnapshot
         }
         #expect(Set(snapshots).count == snapshots.count,
                 "同一构造器喂不同状态应当产出不同模型")

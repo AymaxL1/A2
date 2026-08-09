@@ -1,0 +1,29 @@
+[header disabled] A2 Panel · 代理
+[separator]
+[info disabled] 内核:已连接 v0.1.0
+[info disabled] 确认器:在场(dangerous 会弹到这里)
+[separator]
+[info disabled] mihomo:未运行  → proxy.status  @basicStatus
+[separator]
+[action disabled] 开启系统代理  → proxy.system.enable  @systemProxyToggle  (mihomo 未运行,接管后会指向死端口)
+[action enabled checked] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
+[separator]
+[action disabled] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch  (mihomo 未运行)
+[action disabled] 模式:全局  → proxy.mode.set {mode=global}  @modeSwitch  (mihomo 未运行)
+[action disabled] 模式:直连  → proxy.mode.set {mode=direct}  @modeSwitch  (mihomo 未运行)
+[separator]
+[info disabled] 代理组:mihomo 未运行,不可用
+[action disabled] 选择节点  → proxy.node.select  @nodeSelect  (无可用代理组)
+[action disabled] 延迟测速  → proxy.latency.test  @latencyTest  (无可用代理组)
+[separator]
+[info disabled] 订阅:无  → proxy.subscription.list  @subscriptionManage
+[group disabled] 更新订阅  (尚无订阅)
+[group disabled] 删除订阅…  (尚无订阅)
+[action enabled] 添加 / 替换订阅源…  → proxy.subscription.add prompts[name,source]  @subscriptionManage
+[separator]
+[group enabled] 高级
+  [bootstrap enabled] 停止并卸载内核服务…  ⇒ a2 service uninstall
+  [info disabled] (只拆服务;~/.a2 的数据与拷贝的内核 bin 都留下)
+[separator]
+[about enabled] 关于 A2 Panel
+[quit enabled] 退出面板(代理继续运行)

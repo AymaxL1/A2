@@ -219,10 +219,13 @@ public enum A2MenuSnapshotRenderer {
                 }
 
                 let titleX = indent + CGFloat(Layout.checkColumn)
-                // 右侧能力 id 角标:让**不读 Swift 的人**也能一眼核对「这一项到底调哪个能力」。
-                let capBadge = item.capabilityID.map { id -> String in
-                    item.kind == .action ? id : "\(id)(只读)"
-                }
+                // 右侧角标:让**不读 Swift 的人**也能一眼核对「这一项到底会干什么」。
+                //   能力项给能力 id;**引导项给它会跑的那条命令**(16 票 —— 白名单是硬的,
+                //   图上直接看得见"点这一项会执行 a2 service install --copy-to-home")。
+                let capBadge: String? = item.bootstrapAction.map(\.badge)
+                    ?? item.capabilityID.map { id -> String in
+                        item.kind == .action ? id : "\(id)(只读)"
+                    }
                 let capWidth: CGFloat = capBadge == nil ? 0 : 190
                 let titleWidth = bounds.width - titleX - CGFloat(Layout.rightPadding) - capWidth
                 draw(item.title, at: NSRect(x: titleX, y: y + 3, width: max(titleWidth, 40), height: 16),

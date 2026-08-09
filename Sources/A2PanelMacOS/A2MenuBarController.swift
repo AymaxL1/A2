@@ -12,6 +12,15 @@
 //   那不是业务逻辑,是呈现 —— 要问哪些参数由内核的 descriptor 决定(见 `A2MenuModelBuilder`)。
 //
 // ============================================================================
+// 16 票:第二个出口(引导项),以及为什么它**不是**第二套逻辑
+// ============================================================================
+// `.bootstrap` 项走的是内嵌内核 bin(ADR 0012 的四条白名单),不经 UDS。本控制器对它做的事与
+// 能力项**同构**:读模型里那个字段 → 交给唯一的出口(`onBootstrap`)→ 完事。
+//   * 「要不要先弹确认」照样是**数据说了算**(`action.confirmation` 非空就弹),
+//     与 prompts 那条同一种姿势 —— 控制器里没有"哪个动作危险"的判断;
+//   * 确认框的按钮默认落在**取消**上,与 dangerous 确认器同一条规矩(沉默不是同意)。
+//
+// ============================================================================
 // 状态变化怎么进菜单
 // ============================================================================
 // 会话在后台线程收推送 → 投影出新的 `A2PanelState` → 投递到主线程 → 本控制器重建 `NSMenu`。
@@ -27,16 +36,19 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
 
     private let statusItem: NSStatusItem
     private let onInvoke: (String, [String: A2JSON]) -> Void
+    private let onBootstrap: (A2BootstrapMenuAction) -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void
 
     private var model: A2MenuModel
 
     public init(onInvoke: @escaping (String, [String: A2JSON]) -> Void,
+                onBootstrap: @escaping (A2BootstrapMenuAction) -> Void,
                 onAbout: @escaping () -> Void,
                 onQuit: @escaping () -> Void) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.onInvoke = onInvoke
+        self.onBootstrap = onBootstrap
         self.onAbout = onAbout
         self.onQuit = onQuit
         self.model = A2MenuModel(items: [])
@@ -95,6 +107,16 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
             if let reason = model.disabledReason, !model.enabled { item.toolTip = reason }
             return item
 
+        case .bootstrap:
+            let item = NSMenuItem(title: model.title, action: #selector(bootstrapTapped(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.isEnabled = model.enabled
+            item.representedObject = model
+            // 工具提示如实写出它会跑什么(角标在真菜单里没有位置,只能落到 tooltip)。
+            item.toolTip = (!model.enabled ? model.disabledReason : model.bootstrapAction?.badge)
+            return item
+
         case .about:
             let item = NSMenuItem(title: model.title, action: #selector(aboutTapped), keyEquivalent: "")
             item.target = self
@@ -116,6 +138,26 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
             input[prompt.name] = .string(value)
         }
         onInvoke(capability, input)
+    }
+
+    @objc private func bootstrapTapped(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? A2MenuItemModel,
+              let action = model.bootstrapAction else { return }
+        // 「要不要先确认」由**动作自己的数据**说了算(见文件头)。用户不点确认 = 什么都不发。
+        if let confirmation = action.confirmation, !askConfirmation(confirmation) { return }
+        onBootstrap(action)
+    }
+
+    /// 引导动作的确认框。**默认按钮是取消**(第二个按钮拿回车),与 dangerous 确认器同一条规矩。
+    private func askConfirmation(_ confirmation: A2BootstrapConfirmation) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = confirmation.title
+        alert.informativeText = confirmation.body
+        alert.addButton(withTitle: confirmation.confirmTitle)
+        let cancel = alert.addButton(withTitle: confirmation.cancelTitle)
+        cancel.keyEquivalent = "\r"
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// 向用户要一个入参。**只收字符串**:类型由内核的 descriptor 声明,壳不替它转

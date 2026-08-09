@@ -107,7 +107,7 @@ workspace-write 沙箱下 `aa` 连宿主 UDS 是否放行。本 spike 只有结�
 | # | 原形态 | ⑤后的新形态 |
 |---|---|---|
 | 1 | 装 Xcode + 签发 Apple Development 证书 | 不变（前置条件），但签的对象是 **`A2 Panel.app`**（bundle id `com.a2.panel`）；内核 bin `a2` 走单文件下载分发，不吃 .app 签名链 |
-| 2 | 用真证书重签 `.app` + 重跑门禁 | 对 `A2 Panel.app` 出包 + 跑 TS 门禁。**自动部分 10 票已完成**：`Scripts/build-app.sh` 一条命令出包 + ad-hoc 签名 + 8 条结构/签名核验，已进门禁；剩下的是**换真身份**这一步（`AA_CODESIGN_IDENTITY` 一个 env） |
+| 2 | 用真证书重签 `.app` + 重跑门禁 | 对 `A2 Panel.app` 出包 + 跑 TS 门禁。**自动部分 10 票已完成**：`Scripts/build-app.sh` 一条命令出包 + ad-hoc 签名 + 结构/签名核验，已进门禁；核验条数随包的形态长过两次——10 票 8 条、14 票「面板自足」加到 10 条（内嵌 bin 的版本与架构）、16 票加到 **11 条**（APP11：内嵌 bin 实跑面板要调的那条只读 `service status --json`）；剩下的是**换真身份**这一步（`AA_CODESIGN_IDENTITY` 一个 env） |
 | 3 | 首次 TCC / 通知授权点头 | 归**确认器**：`a2-panel` 以确认器角色呈现 Touch ID / 通知，授权仪式在它身上做一次。**对着 `com.a2.panel` 做**（旧 id `com.aa.host` 从未授过权，10 票换 id 的代价此刻恰好是零） |
 | 4 | 真 Codex 经 `aa docs agents-md` + `prefix_rule` 完成旗舰操作 | 对 **`a2 … --json`** 重跑同一场景（指引物已由 13 票重写为 [docs/agents/a2-cli.md](agents/a2-cli.md)，那条打印指引的命令随 `aa` 退场） |
 | 5 | 换源 dangerous 真机点验（真弹窗批准/拒绝两分支） | 对**确认器**重跑：带外确认的批准/拒绝两分支。**协议链已自动化**（旗舰 e2e 幕 2/3 跑的是壳的真代码路径），人工项只剩「**人真的点了那个按钮**」这一步 |
