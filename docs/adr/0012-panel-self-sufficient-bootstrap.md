@@ -1,0 +1,41 @@
+---
+status: accepted
+date: 2026-08-09
+---
+
+# 面板自足引导：`.app` 内嵌内核 bin，显式点击装内核
+
+2026-08-09 用户裁定：`A2 Panel.app` 从「纯壳」变成**自带内核的完整分发单元**——包里嵌一份内核 bin，mac 用户下载、打开、点一次「安装并启动」就能用上，不必先开终端。这不改 [ADR 0008](0008-kernel-bin-ui-optional.md) 的任何一条立场（CLI 仍是唯一必需交互面、壳仍是可选的对等客户端、系统状态仍只由显式动作改变），改的是**「显式」可以从哪里发起**。
+
+## Context
+
+- **实际卡住的地方**：[ADR 0008](0008-kernel-bin-ui-optional.md) 第 6 条定了「常驻 = 显式安装 + 系统托管」，10 票的壳照此实现为纯壳（包里只有 `Contents/MacOS/a2-panel`）。于是一个只想点图标的 mac 用户的真实路径是：开终端 → `curl … | sh` 或手动下单文件 → `a2 service install` → 再回来双击 `.app`。**「可选客户端」在实践中前置了一段命令行**，而 mac 上想要 dangerous 确认弹窗的恰恰是最不想开终端的那批人。
+- **multica 的桌面端形态（参照要点）**：把 Go 二进制**打进 `.app`**、**GUI 只当发起者**（不自己实现业务逻辑）、**GUI 不把 CLI 装进 PATH**、**bin 版本随 app 走**（换 app 就换 bin，不做两条独立升级线）。这四条与本项目的薄壳铁律同向，本次原样采纳。
+- **a2 与 multica 的分野**：multica 的 daemon 是 GUI **fork 出来的子进程、无看门狗**。a2 **不学这一条**——常驻仍归 launchd 用户域托管（`RunAtLoad` + `KeepAlive.Crashed`），开机自启与崩溃自愈归系统 supervisor，应用层不造看门狗（[ADR 0008](0008-kernel-bin-ui-optional.md) 第 6 条不动）。壳退出仍只是客户端断连。
+- **macOS 的两条环境事实**：①**App Translocation**——带 `com.apple.quarantine` 的 app 从非标准位置首次启动时，系统会把它挂到一个随机只读位置再运行，包内绝对路径因此**不稳定**（【推断/高质量二手】，见 `docs/research/kernel-daemon-topology.md` §3，**该研究文档未入库**；本仓库未实测 translocation 本身）；②本地构建的 `.app` 不带 quarantine、但浏览器下载的 zip 会带，而 ad-hoc 签名的包过不了 Gatekeeper（**13 票本机实测**，见 [签名 runbook](../runbooks/signing-and-authorization.md) §6.1）。
+- **决策原文**：`.scratch/a2-kernel/issues/14-panel-embed-kernel.md`（打包与门禁）、`15-service-copy-to-home.md`（内核侧机制）、`16-panel-bootstrap-ui.md`（UI）——**本机决策记录，未入库**；本 ADR 正文自足。
+
+## Decision
+
+1. **`.app` 自足**：`Contents/Resources/a2` 内嵌**本次构建的**内核 bin（`Scripts/build-app.sh`）。签名**先内后外**（先签内嵌 bin、再签 bundle，同一 identity，**不用 `--deep`**）；包结构红线因此从「恰 1 个 Mach-O」修订为「**恰 2 个，且就是壳与内嵌内核那两条路径**」，另加两条断言：内嵌 bin 实跑 `version` = 内核版本单一来源、`lipo` 判 arm64 单架构。于是 `A2-Panel-<版本>-macos.zip` 成为**小白的完整包**。
+2. **显式点击边界**：壳**仍不隐式拉起任何东西**。启动时不自动装、连不上不自动起、退出不自动停。改变系统状态的只有**用户的一次显式点击**：首启（且内核未装）弹一次说明框——说清装什么（launchd 用户服务 `com.a2.kernel`、创建 `~/.a2`）、怎么卸，两个按钮「安装并启动」/「稍后」；选了「稍后」就不再纠缠，菜单项常驻可随时再装。[ADR 0008](0008-kernel-bin-ui-optional.md) 第 6 条「永不隐式拉起」的**精神不变**：多的是一条**显式发起路径**，不是一条自动路径。
+3. **执行器白名单**：面板经内嵌 bin 执行的命令**只有四条**——`service install`（带 `--copy-to-home`）、`service uninstall`、`service status`、`version`，全部走机读 JSON 输出。白名单是硬的：壳里没有第二条通往内核 bin 的路，也没有「随便执行一条 a2 命令」的口子。壳仍**不含业务逻辑**（[ADR 0008](0008-kernel-bin-ui-optional.md) 第 5 条结构红线不破）：它只发起命令、解析机读结果、呈现。
+4. **unit 指向 `$A2_HOME/bin/a2` 的拷贝，不指进 `.app`**。`a2 service install --copy-to-home` 把自身原子拷到 `$A2_HOME/bin/a2` 并让 unit 指向拷贝（机制归 15 票，面板不碰文件系统）。三条理由：
+   - **免疫 translocation**：包内路径在带 quarantine 的首启下不稳定，写进 unit 的绝对路径会指向一个下次就不存在的位置；
+   - **挪包 / 删包不断服**：用户把 `.app` 从 Downloads 拖进 `/Applications`、改名、或干脆删掉，已经在跑的服务不该跟着死；
+   - **两条升级线解耦**：换 app 与换内核是两件可以分开发生的事（见第 5 条）。
+5. **升级永远显式**：面板启动时问一次内嵌 bin 的版本、与线上内核版本比对（不轮询）；不一致才在菜单出「升级内核 vX→vY」，**点了才升**。不后台自查、不静默替换——与 `a2 about` 的 `upgrade` 字段、安装脚本的收尾提示同一条口径（[ADR 0006](0006-local-first-no-cloud.md) 暂缓清单）。
+6. **卸载对等**：能装就能卸。「停止并卸载内核服务」走同一条白名单（`service uninstall`，带确认弹窗），**只拆 unit**；`$A2_HOME/bin/a2` 那份拷贝与 `~/.a2` 里的数据留给显式清理——与 `install.sh --uninstall` 的「先看后删」是同一种姿势（数据同侧的东西不由一次点击带走）。**删掉 `.app` 不会卸掉已装的服务**，这正是第 4 条拷贝的直接后果，必须在 runbook 里说明。
+7. **面板不提供「装 CLI 到 PATH」**：没有这个按钮，不写 shell 配置，不建 symlink。包里那份 bin 是**面板的执行器**，不是给终端用的。要 CLI 的人走既有渠道（单文件下载 / `install.sh`），那条渠道**一字不动**。
+8. **签名与 quarantine 的如实口径**：ad-hoc 是 Phase 1 的终态；真开发者证书 + 公证仍是人工项，届时内嵌 bin **随链先签**（同一个 `AA_CODESIGN_IDENTITY`，顺序不变）。内嵌 bin 进的是 bundle 的**资源封印**——本票实测：改它一个字节，`codesign --verify --strict` 即报 `a sealed resource is missing or invalid`。
+
+## Consequences
+
+- **包大了一个数量级**：`.app` 从 1.6MiB 到 **63MiB**，zip **约 24.5MiB**（内核 bin 内置完整 Bun 运行时，见 [ADR 0010](0010-ts-kernel-bun-runtime.md)）。这是「不必开终端」的直接价格，收下。
+- **一个发布包里出现两处内核**（单文件那份与 `.app` 里那份）→ 发布元数据加 `embeddedKernelVersion` 字段，并有 **fail-closed 的三处对账**：schema 拒绝「面板包不记内嵌版本」与「两版内核」，组装脚本再解一遍最终 zip 实跑一次核对（`Scripts/release-assemble.sh` 自检）。
+- **出包要两条工具链**：壳要 `swift`，内嵌内核要 `bun`。以前 `.app` 里没有内核，出包不关 bun 的事。
+- **两条分发渠道彻底独立**：只拿 `.app` 的人不需要 PATH 上有 `a2`；只拿 CLI 的人不需要 `.app`。两条都要的人机器上会有两份 bin（PATH 一份、`$A2_HOME/bin` 一份），各自显式升级——这是有意的解耦，代价是 runbook 必须写清「谁管谁」。
+- **对 [ADR 0008](0008-kernel-bin-ui-optional.md) 的处置**：第 5 条（壳 = 可选的对等客户端、无业务逻辑）与第 6 条（显式安装 + 系统托管、永不隐式拉起）**都不改写**，第 6 条挂一条修订记指向本 ADR——变的是「显式」的发起面多了一个，不是那条边界松了。
+- **不采 multica 的无看门狗 fork**：GUI 不做进程监督，崩溃自愈仍归 launchd。代价是「装服务」这件事比 fork 一个子进程重（要写 plist、要 `launchctl`），换来的是壳崩了/退了内核照跑。
+- **实施分工**：本 ADR 由 14 票（打包与门禁）、15 票（`--copy-to-home`、线上内核版本、`service --json`）、16 票（引导 UI 与菜单模型）三票落地；14 票交付时 UI 尚未长出来，分发 runbook 的小白路径按本 ADR 定的口径写在前面，16 票收尾。
+- **仍是人工项**：真证书签名 + 公证、首次 TCC / 通知授权、带 quarantine 的双击首启实测（translocation 是否真的发生）——全部顺延，见 [分发 runbook](../runbooks/distribution.md) §8 的完整并集。

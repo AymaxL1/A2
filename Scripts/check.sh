@@ -22,8 +22,9 @@
 #                              进程外 + 协议白名单红线断言 → 卸载 → 留痕;**幕⑥(12 票)**:
 #                              带 npm 依赖的目录插件装载期 install+bundle → 删源目录仍可调(离线证明)
 #                              → native addon 结构化拒绝。全程不出网、不写用户的 bun 包缓存。
-#   ⑤ `.app` 出包           —— `Scripts/build-app.sh`:以 **a2-panel** 身份组 bundle + ad-hoc 签名,
-#                              并核验包结构与签名(证书 / TCC / 公证是人工项,顺延不阻塞)。
+#   ⑤ `.app` 出包           —— `Scripts/build-app.sh`:以 **a2-panel** 身份组 bundle + **内嵌内核 bin**
+#                              + 先内后外 ad-hoc 签名,并核验包结构、签名、内嵌 bin 的版本与架构
+#                              (14 票「面板自足」,ADR 0012;证书 / TCC / 公证是人工项,顺延不阻塞)。
 #
 #   另加两条**便宜且能挡真事**的静态关:`bun x tsc --noEmit`(TS 类型漂移)与
 #   `swift build` 零 warning(Swift 侧)。它们此前分别在 nightlog 与旧 `check/build.sh` 里,
@@ -179,9 +180,15 @@ run_step "② swift test(契约金标 Swift 半边 + 客户端协议 + 壳纯逻
 # 时钟回拨都能骗过它)。补一条漏一条,不如认下这十几秒 —— 重建是幂等的、产物不入库、没有副作用,
 # 而"假绿"的代价是整条 e2e 白跑。
 # 只编译、不复跑产物那一遍测试:那是 `kernel/scripts/build.sh` 的活(再花 80 秒),门禁不为它买单。
+#
+# 14 票起这一步还多一个消费者:**⑤ 的 `.app` 里嵌着这份内核 bin**。它的新鲜度判据不另立一套 ——
+# 就是这里的恒重建,产物路径经 `AA_KERNEL_BIN` 传给 `build-app.sh`(与 `AA_SWIFT` 同一种 seam:
+# 上游已经做好的事,下游直接用,不重复做)。
 DIST_BIN="$ROOT/kernel/dist/a2"
-run_step "②b 重建 kernel/dist/a2(恒重建 —— e2e 只许验当前这版内核)" "$BUILD/kernel-build.log" \
+run_step "②b 重建 kernel/dist/a2(恒重建 —— e2e 与 .app 只许验/嵌当前这版内核)" "$BUILD/kernel-build.log" \
   env -C "$ROOT/kernel" "$BUN_BIN" build ./src/cli/main.ts --compile --outfile "$DIST_BIN"
+export AA_KERNEL_BIN="$DIST_BIN"   # ⑤ 直接嵌这份(刚重建的),不重复编译一次
+export AA_BUN="$BUN_BIN"           # ⑤ 要问内核版本的单一来源(源码入口),bun 也别重复探
 
 # ---- ③ 旗舰 e2e ------------------------------------------------------------------------
 run_step "③ 旗舰 e2e(真 a2 bin + 假 mihomo + 壳的真代码路径)" "$BUILD/flagship-e2e.log" \
@@ -191,9 +198,9 @@ run_step "③ 旗舰 e2e(真 a2 bin + 假 mihomo + 壳的真代码路径)" "$BUI
 run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dangerous 两分支 → 进程外红线 → 依赖流)" \
   "$BUILD/plugin-e2e.log" bash "$ROOT/Scripts/a2-plugin-e2e.sh"
 
-# ---- ⑤ `.app` 出包(a2-panel 身份 + ad-hoc 签名)----------------------------------------
-run_step "⑤ .app 出包(a2-panel · ad-hoc 签名 · 包结构核验)" "$BUILD/build-app.log" \
-  bash "$ROOT/Scripts/build-app.sh" --output "$BUILD/app"
+# ---- ⑤ `.app` 出包(a2-panel 身份 + 内嵌内核 + 先内后外 ad-hoc 签名)---------------------
+run_step "⑤ .app 出包(a2-panel · 内嵌内核 bin · 先内后外 ad-hoc 签名 · APP1–APP10 核验)" \
+  "$BUILD/build-app.log" bash "$ROOT/Scripts/build-app.sh" --output "$BUILD/app"
 
 # ---- 收口 ------------------------------------------------------------------------------
 # 各步自己的断言条数(供人读;判据是**步的成败**,不是这些数字 —— 数字漂了不该让门禁变色)。
@@ -211,7 +218,7 @@ echo "   ① bun test        : ${BUN_COUNT:-?} 条"
 echo "   ② swift test      : ${SWIFT_COUNT:-?} 条"
 echo "   ③ 旗舰 e2e        : ${FLAGSHIP_COUNT:-?} 条"
 echo "   ④ 插件 e2e        : ${PLUGIN_COUNT:-?} 条"
-echo "   ⑤ .app 出包       : 结构 + ad-hoc 签名核验"
+echo "   ⑤ .app 出包       : 结构 + 内嵌内核 + ad-hoc 签名核验(APP1–APP10)"
 echo "----------------------------------------"
 echo " 结果: 步 PASS=$STEPS_OK  FAIL=$STEPS_FAIL"
 if [ "$STEPS_FAIL" -eq 0 ]; then

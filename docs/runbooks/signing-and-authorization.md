@@ -21,12 +21,16 @@
 
 | 分发物 | 签名形态 | 说明 |
 |---|---|---|
-| **`A2 Panel.app`**（菜单栏壳，可选客户端） | `Scripts/build-app.sh` 出包 + **ad-hoc** | bundle id `com.a2.panel`；包里**只有一个 Mach-O**：`Contents/MacOS/a2-panel`（脚本的 APP8 是结构红线断言：多一个可执行就是红） |
-| **`a2`**（内核 bin） | **不吃 .app 签名链** | 它是单文件下载分发的（[分发 runbook](distribution.md)）。arm64 上 `ld` 会给每个可执行自动加一层 linker-signed 的 ad-hoc 签名，那不是我们签的 |
+| **`A2 Panel.app`**（菜单栏壳 **+ 内嵌内核**） | `Scripts/build-app.sh` 出包 + **ad-hoc**，**先内后外** | bundle id `com.a2.panel`；包里**恰好两个 Mach-O**：`Contents/MacOS/a2-panel`（壳）与 `Contents/Resources/a2`（内嵌内核 bin，面板引导安装时的执行器——14 票，[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md)）。脚本的 APP8 是结构红线断言：**可执行清单对不上就是红**（多一个、少一个、挪了位置都算） |
+| **`a2`**（内核 bin，**单文件渠道那一份**） | **不吃 .app 签名链** | 它是单文件下载分发的（[分发 runbook](distribution.md)）。arm64 上 `ld` 会给每个可执行自动加一层 linker-signed 的 ad-hoc 签名，那不是我们签的。**包里那一份是另一回事**：它随 bundle 一起被我们签，见 §3.4 |
 | mihomo | **不分发** | ADR 0007 修订版：不随任何分发物打包，「内核重签入构建链」整条废除 |
 
-新拓扑里**没有**这些东西了（旧版本文写过，一并作废）：包内第二个可执行 `aa`、`Bundle.module` 资源
-bundle 落点、逐个 `--identifier` 的先内后外签名编排、`aa install-cli` 把 CLI 链进 PATH。
+新拓扑里**没有**这些东西了（旧版本文写过，一并作废）：包内的 CLI `aa`（a2 系不往包里塞 CLI，
+面板也不提供「装 CLI 到 PATH」——[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 第 7 条）、
+`Bundle.module` 资源 bundle 落点、逐个 `--identifier` 的签名编排、`aa install-cli`。
+
+**「先内后外」这条回来了**（14 票）：当年它是为随包 GPL 二进制立的，随那件事一起废除；现在为内嵌内核而回来，
+理由与当年同构——包里有第二段代码，它必须在壳之前签，否则壳的资源封印盖的是一份还没签的东西。
 
 ## 0.1 ad-hoc 是 Phase 1 的**终态**，不是临时凑合
 
@@ -109,6 +113,28 @@ SHA-256 与 `.app` 的 CDHash：
    **实践含义**：ad-hoc 下不要指望「回滚代码就能拿回授权」。授权按 cdhash 认，而 cdhash 跟着
    「有没有真的重新链接过」走，不是跟着「源码是不是同一份」走。
 
+### 2.1 ⚠️ 14 票起：**每次出包 cdhash 都会变**（内嵌内核把上面的结论盖掉了）
+
+`.app` 里嵌了内核 bin 之后，上面「什么都不改的重复构建是确定性的」那条**对整个包不再成立**。
+本票现场三组实测（2026-08-09）：
+
+| 实验 | 结果 |
+|---|---|
+| 同一份源码连编两次内核 bin（`bun build --compile`） | **字节不同**（`fbccf5a9…` vs `abf2cf56…`）——bun 的单文件产物**不是确定性构建** |
+| 拿**同一份**内核 bin 出两次包 | CDHash **相同**（`095aaaaacfc718e9…`）——出包这一步本身是确定性的 |
+| 换成**另一次编译出来的**同源内核 bin 出包 | CDHash **不同**（`b14bda7de905fca3…`），壳的源码一个字没动 |
+
+机理：bundle 的资源封印（`_CodeSignature/CodeResources`）盖着 `Contents/Resources/a2` 的哈希，
+而封印的哈希又进主可执行的 CodeDirectory——**内嵌 bin 换一个字节，`.app` 的 CDHash 就换一个**。
+门禁 ②b 每次都恒重建内核 bin，所以**每一次跑门禁出的包，cdhash 都是新的**。
+
+**实践含义两条**：
+
+1. ad-hoc 下，TCC / 通知授权现在**每次重新出包就作废**（不只是"改了壳的代码才作废"）。
+   这让 §0.1 那条例外（被授权弹窗打断到影响效率就上开发证书）从"大概不会发生"变成"很可能发生"。
+2. 想复现同一个 cdhash，必须**复用同一份内核 bin**（`AA_KERNEL_BIN=<那份> bash Scripts/build-app.sh`），
+   重编一次是拿不回来的——与 §2 结论 3 是同一类事实。
+
 ---
 
 ## 3. 从 ad-hoc 切到真开发证书：改什么
@@ -139,12 +165,38 @@ security find-identity -v -p codesigning
 ### 3.3 切换后必须重跑的核验
 
 ```bash
-bash Scripts/check.sh   # ⑤ 步就是 build-app.sh:出包 + 签名 + APP1–APP8 核验
+bash Scripts/check.sh   # ⑤ 步就是 build-app.sh:出包 + 先内后外签名 + APP1–APP10 核验
 codesign -dvvv ".build/check/app/A2 Panel.app" | grep -E 'Authority|TeamIdentifier'
+codesign -dvvv ".build/check/app/A2 Panel.app/Contents/Resources/a2" | grep -E 'Authority|TeamIdentifier'
 ```
 
 上了真证书后，`APP7`（签名标识符）那条才真的在比证书链；ad-hoc 下它只能证明
 「签了、且标识符是 `com.a2.panel`」，**不证明**「签名可被 Gatekeeper 接受」。
+第二条命令是 14 票新增的：**内嵌内核 bin 也该有 `Authority=` 行**——它是包里的第二段代码，
+换真身份那天不该只有壳被真签了（见 §3.4）。
+
+### 3.4 内嵌内核 bin **随链先签**（14 票）
+
+`Scripts/build-app.sh` 的签名段现在是两条 `codesign`，**顺序是硬的**：
+
+```bash
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP/Contents/Resources/a2"   # ① 先签内嵌的内核 bin
+codesign --force --sign "$CODESIGN_IDENTITY" "$APP"                         # ② 再签壳(bundle)
+```
+
+三条口径：
+
+- **同一个身份**：两条都读 `AA_CODESIGN_IDENTITY`（缺省 `-` = ad-hoc）。换真证书**仍然只改这一个 env**，
+  §3.1 那句话不变——不是"改一处变成改两处"。
+- **不用 `--deep`**：Apple 已弃用它，而且它会把"哪一层没签上"糊成一句话。两条显式命令各自 fail-closed
+  （任一条非零退出即 `exit 1`，见 §4）。
+- **顺序反了会怎样**：先签壳、再往包里塞或改文件，资源封印当场对不上。这条**本机实测**过：
+  出包之后改内嵌 bin 一个字节，`codesign --verify --strict` 立刻报
+  `a sealed resource is missing or invalid` + `file modified: …/Contents/Resources/a2`，还原后又通过。
+  **门禁的 APP6 因此顺带在验「包里那份内核没被人动过」**。
+
+公证那天记得：`--options runtime` 对**两条**都要加（内嵌 bin 也是要被执行的代码）。这一条属【未验证】——
+本机没有真证书，硬化运行时只在 ad-hoc 下预演过（§3.2 第 2 点）。
 
 ---
 
@@ -189,7 +241,8 @@ codesign -dvvv ".build/check/app/A2 Panel.app" | grep -E 'Authority|TeamIdentifi
 |---|---|---|
 | 改**代码**后重新构建 | **授权作废**，要重点（cdhash 变了，见 §2） | 不受影响 |
 | 源码回滚后重新构建 | **同样作废**（§2 结论 3） | 不受影响 |
-| 只改注释 / 什么都不改 | 不失效（§2 结论 1、2：可执行没被重写） | 不受影响 |
+| 只改注释 / 什么都不改，**且复用同一份内核 bin** | 不失效（§2 结论 1、2：可执行没被重写；§2.1 第二组实验） | 不受影响 |
+| **重新出一次包**（门禁每次都恒重建内核 bin） | **授权作废**——内嵌 bin 的字节变了，资源封印跟着变，cdhash 也跟着变（§2.1） | 不受影响 |
 | 改 `BUNDLE_ID` | **作废**，且是「换了个新应用」 | **同样作废** |
 
 **【未验证】** TCC 数据库里存的是否**逐字**就是 §1 那条 Designated Requirement：读
@@ -231,8 +284,10 @@ Gatekeeper（缺的是公证票，不是证书），都能通过 `codesign --ver
 
 1. 装官方独立 Swift 工具链到 `~/Library/Developer/Toolchains/`（判据是 `swift package dump-package` rc=0；
    `Scripts/check.sh` 会自动探测）。**不需要 Xcode.app**。
-2. 装 bun（`curl -fsSL https://bun.sh/install | bash`）——内核是 TS，没有它跑不了门禁的 ①③④ 步。
-3. `bash Scripts/check.sh` → 期望 `步 FAIL=0`、rc=0。这一步会连带把 `.app` 构建 + ad-hoc 签名 + 8 条核验跑一遍。
+2. 装 bun（`curl -fsSL https://bun.sh/install | bash`）——内核是 TS，没有它跑不了门禁的 ①③④ 步；
+   14 票起 **`.app` 出包也要它**（包里嵌的那份内核 bin 是它编的）。
+3. `bash Scripts/check.sh` → 期望 `步 FAIL=0`、rc=0。这一步会连带把 `.app` 构建 + 内嵌内核 + 先内后外
+   ad-hoc 签名 + 10 条核验跑一遍。
 4. `bash Scripts/build-app.sh --output .build/app` → 双击 `.build/app/A2 Panel.app`，按 §5 走一遍授权仪式。
 5. 只有当 §0.1 那条例外成立时，才按 §3 上开发证书。上了之后重跑第 3 步。
 

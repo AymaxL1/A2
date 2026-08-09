@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 // 发布元数据的生成入口:扫一个已经组装好的发布包目录,写出 `a2-release.json`。
 //
-//   bun run kernel/scripts/render-release-manifest.ts <发布包目录> <版本> [渠道根地址]
+//   bun run kernel/scripts/render-release-manifest.ts <发布包目录> <版本> [渠道根地址] [面板内嵌内核版本]
+//
+// 第四个参数只在包里有 `A2-Panel-*.zip` 时用得上(14 票「面板自足」):那个 `.app` 里嵌着一份内核 bin,
+// 版本由组装脚本**实跑包里那份 bin** 得来。少给它,schema 当场拒 —— 见 `manifest.ts` 结构约束③。
 //
 // **有意不做成 `a2` 的子命令**:发布工具不属产品面 —— 用户机器上的那个 bin 不该带着"怎么组装发布包"
 // 这种只有维护者用得上的东西(而且它会把 `a2 --help` 撑大)。逻辑全在 `src/release/manifest.ts`,
@@ -14,9 +17,11 @@ import {
   renderReleaseManifest,
 } from "../src/release/manifest.ts";
 
-const [dir, version, channelBase] = process.argv.slice(2);
+const [dir, version, channelBase, panelKernelVersion] = process.argv.slice(2);
 if (dir === undefined || version === undefined) {
-  console.error("用法:bun run kernel/scripts/render-release-manifest.ts <发布包目录> <版本> [渠道根地址]");
+  console.error(
+    "用法:bun run kernel/scripts/render-release-manifest.ts <发布包目录> <版本> [渠道根地址] [面板内嵌内核版本]",
+  );
   process.exit(1);
 }
 
@@ -24,6 +29,9 @@ const manifest = await buildReleaseManifest({
   dir,
   version,
   ...(channelBase === undefined || channelBase.length === 0 ? {} : { channelBase }),
+  ...(panelKernelVersion === undefined || panelKernelVersion.length === 0
+    ? {}
+    : { panelEmbeddedKernelVersion: panelKernelVersion }),
 });
 const file = path.join(dir, RELEASE_METADATA_FILE);
 await Bun.write(file, renderReleaseManifest(manifest));

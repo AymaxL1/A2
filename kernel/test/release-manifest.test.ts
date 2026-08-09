@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { UPGRADE_POLICY } from "../src/runtime/about.ts";
 import {
@@ -28,6 +28,9 @@ import {
 const REPO = path.resolve(import.meta.dir, "../..");
 const INSTALLER = path.join(REPO, "Scripts/install.sh");
 const ASSEMBLE = path.join(REPO, "Scripts/release-assemble.sh");
+const BUILD_APP = path.join(REPO, "Scripts/build-app.sh");
+const CHECK = path.join(REPO, "Scripts/check.sh");
+const KERNEL_BUILD = path.join(REPO, "kernel/scripts/build.sh");
 const DIST_BIN = path.join(REPO, "kernel/dist/a2");
 
 let box: string;
@@ -180,6 +183,79 @@ test("schema 层:资产名与平台对不上、摘要不是 64 位十六进制�
   ).toBe(false);
 });
 
+// MARK: - ①b 面板包 ↔ 内嵌内核版本(14 票「面板自足」,ADR 0012)
+
+test("**一个发布包里只许有一版内核**:面板包必须记内嵌内核版本,且与本次发布的内核同版", () => {
+  const base = {
+    schema: "a2-release/1",
+    product: "a2",
+    version: "0.1.0",
+    generatedAt: "2026-08-09T00:00:00.000Z",
+    channel: { base: "https://example.test/a2", status: "configured", note: "n" },
+    mihomo: {
+      lockedVersion: "v1.19.28",
+      license: "GPL-3.0",
+      source: "s",
+      releases: "r",
+      licenseUrl: "l",
+      bundled: false,
+    },
+    artifacts: [
+      { name: "a2-darwin-arm64", kind: "kernel-bin", platform: "darwin-arm64", sha256: "a".repeat(64), bytes: 1 },
+      { name: "NOTICE-external-programs.txt", kind: "notice", sha256: "b".repeat(64), bytes: 1 },
+      { name: "LICENSE-mihomo-GPL-3.0.txt", kind: "license", sha256: "c".repeat(64), bytes: 1 },
+    ],
+  };
+  const panel = (over: object) => ({
+    name: "A2-Panel-0.1.0-macos.zip",
+    kind: "panel-app",
+    platform: "darwin",
+    embeddedKernelVersion: "0.1.0",
+    sha256: "d".repeat(64),
+    bytes: 1,
+    ...over,
+  });
+  const parse = (artifact: object) =>
+    ReleaseManifestSchema.safeParse({ ...base, artifacts: [...base.artifacts, artifact] });
+
+  expect(parse(panel({})).success).toBe(true);
+  // 没记 —— 那就没人知道"点安装并启动会装上哪一版"。
+  expect(parse(panel({ embeddedKernelVersion: undefined })).success).toBe(false);
+  // 记了但对不上 —— 同一个包里两版内核,装到哪一版取决于用户点了哪里。
+  const mismatch = parse(panel({ embeddedKernelVersion: "0.0.9" }));
+  expect(mismatch.success).toBe(false);
+  expect(JSON.stringify(mismatch.error?.issues)).toContain("两版内核");
+  // 别的工件不该带这个字段(带了说明有人把它当通用字段用)。
+  expect(
+    ReleaseManifestSchema.safeParse({
+      ...base,
+      artifacts: [
+        { ...base.artifacts[0]!, embeddedKernelVersion: "0.1.0" },
+        ...base.artifacts.slice(1),
+      ],
+    }).success,
+  ).toBe(false);
+});
+
+test("面板包在场时,版本要由调用方**实跑得来**地传进来 —— 不传就生成不出元数据", async () => {
+  await writePackage(box, { "A2-Panel-0.1.0-macos.zip": "假 zip" });
+
+  await expect(buildReleaseManifest({ dir: box, version: "0.1.0" })).rejects.toThrow();
+
+  const manifest = await buildReleaseManifest({
+    dir: box,
+    version: "0.1.0",
+    panelEmbeddedKernelVersion: "0.1.0",
+  });
+  const panel = manifest.artifacts.find((artifact) => artifact.kind === "panel-app")!;
+  expect(panel.embeddedKernelVersion).toBe("0.1.0");
+  // 渲染出来仍是一行一个工件(安装脚本那条 grep 的前提没被新字段破坏)。
+  const line = renderReleaseManifest(manifest)
+    .split("\n")
+    .find((text) => text.includes('"kind":"panel-app"'))!;
+  expect(JSON.parse(line.trim().replace(/,$/, "")).embeddedKernelVersion).toBe("0.1.0");
+});
+
 test("classifyArtifact:平台 bin / 声明 / 许可证 / 安装脚本 / .app 压缩包各归其位,别的认不出", () => {
   expect(classifyArtifact("a2-linux-arm64")).toEqual({ kind: "kernel-bin", platform: "linux-arm64" });
   expect(classifyArtifact("NOTICE-external-programs.txt")).toEqual({ kind: "notice" });
@@ -227,9 +303,40 @@ test("渠道占位符两处一致:改渠道时 TS 与 install.sh 必须同时改
   expect(RELEASE_CHANNEL_PLACEHOLDER).toContain(".invalid");
 });
 
-test("元数据文件名两处一致(脚本按它取元数据)", () => {
-  const script = readFileSync(INSTALLER, "utf8");
-  expect(/METADATA_FILE="([^"]+)"/.exec(script)![1]).toBe(RELEASE_METADATA_FILE);
+test("元数据文件名三处一致(装的人按它取,组装的人按它对账)", () => {
+  expect(/METADATA_FILE="([^"]+)"/.exec(readFileSync(INSTALLER, "utf8"))![1]).toBe(RELEASE_METADATA_FILE);
+  // 14 票起组装脚本也要读它一次(面板内嵌内核版本的对账),于是这个名字有了第三处落点。
+  expect(/METADATA_FILE="([^"]+)"/.exec(readFileSync(ASSEMBLE, "utf8"))![1]).toBe(RELEASE_METADATA_FILE);
+});
+
+// 14 票:内核 bin 的编译命令散在四个脚本里(内核构建、门禁 ②b、`.app` 出包、发布组装)。
+// 它们各有各的产物路径与 target,但**入口只有一个**。入口漂了的后果很具体:某一条链路编的是
+// 另一份源码,而四条链路都自称"编的是内核"。所以这里只对账入口本身。
+test("内核编译入口四处一致:凡 `--compile` 编内核的地方,编的都是同一个入口", () => {
+  const scripts = [KERNEL_BUILD, CHECK, BUILD_APP, ASSEMBLE];
+  const entries: string[] = [];
+  for (const script of scripts) {
+    const found = [...readFileSync(script, "utf8").matchAll(/\bbuild\s+(\.\/\S+\.ts)\s+--compile\b/g)].map(
+      (match) => match[1]!,
+    );
+    expect(found.length).toBe(1); // 每个脚本恰好编一次;多出来一条就该问问那是在编什么
+    entries.push(found[0]!);
+  }
+  expect(new Set(entries).size).toBe(1);
+  expect(entries[0]).toBe("./src/cli/main.ts");
+});
+
+// 14 票:`.app` 里那份内嵌内核的**文件名**是三方约定 —— 出包脚本往那儿拷、组装脚本去那儿问版本、
+// 面板(16 票)按 `Bundle.main.resourceURL/<它>` 去找。这里对账前两处(第三处在 Swift 侧)。
+test("内嵌内核 bin 的落点两处一致:出包往哪儿拷,组装就去哪儿问版本", () => {
+  const buildApp = readFileSync(BUILD_APP, "utf8");
+  const assemble = readFileSync(ASSEMBLE, "utf8");
+  const embedded = /KERNEL_EXE_NAME="([^"]+)"/.exec(buildApp)![1]!;
+  const probed = /PANEL_KERNEL_NAME="([^"]+)"/.exec(assemble)![1]!;
+
+  expect(embedded).toBe(probed);
+  expect(buildApp).toContain('"$APP/Contents/Resources/$KERNEL_EXE_NAME"');
+  expect(assemble).toContain('*/Contents/Resources/$PANEL_KERNEL_NAME');
 });
 
 /** 从一个 sh 脚本里抠出 `uname` 的映射表:`Darwin) os_key="darwin"` / `arm64|aarch64) arch="arm64"`。 */
@@ -337,6 +444,95 @@ esac
     manifest.artifacts.find((artifact) => artifact.kind === "kernel-bin")!.sha256,
   );
 });
+
+/** 摆一个**假 .app**:结构与真包同形(壳 + `Contents/Resources/a2`),内嵌 bin 是个会自报版本的 sh 桩。 */
+async function writeFakeApp(dir: string, kernelVersion: string): Promise<string> {
+  const app = path.join(dir, "A2 Panel.app");
+  await mkdir(path.join(app, "Contents/MacOS"), { recursive: true });
+  await mkdir(path.join(app, "Contents/Resources"), { recursive: true });
+  await writeFile(path.join(app, "Contents/MacOS/a2-panel"), "#!/bin/sh\nexit 0\n");
+  await writeFile(
+    path.join(app, "Contents/Resources/a2"),
+    `#!/bin/sh\n[ "$1" = "version" ] && echo "${kernelVersion}" && exit 0\nexit 1\n`,
+  );
+  await Bun.spawn({ cmd: ["chmod", "755", path.join(app, "Contents/Resources/a2")] }).exited;
+  return app;
+}
+
+/** 会答 `version` / `about` / `about --json` 的假内核 bin(足够跑完组装脚本的全部自检)。 */
+async function writeStubKernel(file: string, version: string): Promise<string> {
+  await writeFile(
+    file,
+    `#!/bin/sh
+case "$1$2" in
+  version) echo "${version}" ;;
+  "about--json") echo '{"bundled":false,"bundledTexts":[{"present":true},{"present":true}]}' ;;
+  about) echo "假 a2 的声明正文(由 bin 产出,不是抄的)" ;;
+  *) exit 1 ;;
+esac
+`,
+  );
+  await Bun.spawn({ cmd: ["chmod", "755", file] }).exited;
+  return file;
+}
+
+// 14 票:panel zip 现在是**自带内核的完整包**,于是"包里有几版内核"成了一件发得出去的事故。
+// 这两条把它按在组装期:版本进元数据(**实跑 zip 里那个 bin** 得来),对不上就当场停。
+test("组装脚本(面板包):内嵌内核版本进元数据,且过得了三处对账的自检", async () => {
+  const stub = await writeStubKernel(path.join(box, "stub-a2"), "0.1.0");
+  const app = await writeFakeApp(box, "0.1.0");
+  const out = path.join(box, "release-panel");
+
+  const result = await runAssemble([
+    "--output", out,
+    "--targets", "darwin-arm64",
+    "--bin", `darwin-arm64=${stub}`,
+    "--app", app,
+  ]);
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("三处对账");
+  const manifest = ReleaseManifestSchema.parse(
+    JSON.parse(readFileSync(path.join(out, RELEASE_METADATA_FILE), "utf8")),
+  );
+  const panel = manifest.artifacts.find((artifact) => artifact.kind === "panel-app")!;
+  expect(panel.name).toBe("A2-Panel-0.1.0-macos.zip");
+  expect(panel.embeddedKernelVersion).toBe("0.1.0");
+}, 60_000);
+
+test("组装脚本(面板包):zip 里嵌的是**另一版**内核 —— 组装当场停,发不出去", async () => {
+  const stub = await writeStubKernel(path.join(box, "stub-a2"), "0.1.0");
+  const app = await writeFakeApp(box, "0.0.9"); // 拿了一个旧 .app 来随附
+  const out = path.join(box, "release-mismatch");
+
+  const result = await runAssemble([
+    "--output", out,
+    "--targets", "darwin-arm64",
+    "--bin", `darwin-arm64=${stub}`,
+    "--app", app,
+  ]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(`${result.stdout}${result.stderr}`).toContain("两版内核");
+  expect(existsSync(path.join(out, RELEASE_METADATA_FILE))).toBe(false);
+}, 60_000);
+
+test("组装脚本(面板包):.app 里根本没有内嵌内核(14 票之前的旧包)—— 也当场停", async () => {
+  const stub = await writeStubKernel(path.join(box, "stub-a2"), "0.1.0");
+  const app = await writeFakeApp(box, "0.1.0");
+  await rm(path.join(app, "Contents/Resources/a2"));
+  const out = path.join(box, "release-nokernel");
+
+  const result = await runAssemble([
+    "--output", out,
+    "--targets", "darwin-arm64",
+    "--bin", `darwin-arm64=${stub}`,
+    "--app", app,
+  ]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(`${result.stdout}${result.stderr}`).toContain("问不出内嵌内核的版本");
+}, 60_000);
 
 // 真产物那一遍:`kernel/dist/a2` 是门禁 ②b 步恒重建的,本机跑过一次门禁就有。
 // 没有它时如实跳过(而不是假装验过) —— 这条验的是**自检真的会跑**:

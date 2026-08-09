@@ -12,11 +12,14 @@
 #   NOTICE-external-programs.txt    外部程序声明 —— **`a2 about` 的输出原样落盘**(同一份字节)
 #   LICENSE-mihomo-GPL-3.0.txt      GPL-3.0 全文(docs/legal/ 那一份)
 #   install.sh                      curl 安装脚本(Scripts/install.sh 原样)
-#   A2-Panel-<版本>-macos.zip       可选随附的菜单栏壳(要 --app 才有)
-#   a2-release.json                 发布元数据:版本、各工件 SHA-256、**mihomo 锁定版**
+#   A2-Panel-<版本>-macos.zip       菜单栏壳 **+ 内嵌的内核 bin**(要 --app 才有):
+#                                   14 票起它是**小白的完整包** —— 下载、打开、点「安装并启动」,
+#                                   不必先开终端敲 `a2 service install`(ADR 0012)。约 24MiB。
+#   a2-release.json                 发布元数据:版本、各工件 SHA-256、**mihomo 锁定版**、
+#                                   **面板包内嵌的内核版本**
 #
 # ============================================================================
-# 三条纪律
+# 四条纪律
 # ============================================================================
 #   ① **平台表只有一份**(`kernel/src/release/manifest.ts`),本脚本经 release-targets.ts 读它 ——
 #      资产名在两处手写就会与元数据对不上,而安装脚本正是按元数据的名字去下载。
@@ -24,6 +27,9 @@
 #   ③ **自检**:组装完用**包里那个 bin** 跑一次 `a2 about --json`,确认它看得见随包的两份文本
 #      (`present: true`)。少拷一份声明的发布包,在这里就该停下,而不是发出去之后才发现。
 #      (`--skip-self-check` 只给"用假 bin 验脚本结构"的测试用。)
+#   ④ **一个发布包里只许有一版内核**(14 票):`.app` 里嵌着内核 bin,于是内核在包里有两处落点。
+#      版本不是抄来的 —— 解开 zip、拿包里那份 bin 跑一次 `version`;自检再解一次、再跑一次,
+#      与元数据字段、与单文件那份的版本**三处对账**。两版内核的发布包会让用户装到哪一版全看他点了哪里。
 #
 # 交叉编译:`--target=bun-linux-x64` 首次会下载对应的目标运行时(要联网,可能几分钟);
 #   之后走 bun 的缓存。本机跑不了 Linux 产物 —— 只验"能产出 + ELF 文件头对"(13 票如实记账)。
@@ -31,6 +37,9 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT="$ROOT/.build/release"
+# 元数据文件名:与 `manifest.ts::RELEASE_METADATA_FILE`、`install.sh::METADATA_FILE` 是同一个
+#   (三处一致有断言:`kernel/test/release-manifest.test.ts` ▸ 元数据文件名三处一致)。
+METADATA_FILE="a2-release.json"
 TARGETS=""
 APP_SOURCE=""
 CHANNEL_BASE=""
@@ -151,7 +160,33 @@ else
 fi
 [ -n "$VERSION" ] || die "问不出版本号"
 
-# ---- ④ 可选随附:A2 Panel.app -----------------------------------------------------
+# ---- ④ 可选随附:A2 Panel.app(**自带内核的完整包**)-------------------------------
+# 内嵌内核 bin 在包里的名字与 `Scripts/build-app.sh::KERNEL_EXE_NAME` 是同一个(有对账断言:
+#   `kernel/test/release-manifest.test.ts` ▸ 内嵌内核 bin 的落点两处一致)。
+PANEL_KERNEL_NAME="a2"
+PANEL_KERNEL_VERSION=""
+
+# 解开一个面板 zip,把里面那份内嵌内核 bin 跑起来问版本。**每次调用都重解一遍**(自检要的就是
+#   "对着最终那个 zip 再问一次"),用完即删。`A2_HOME` 指到一次性目录 —— 组装机的真实 `~/.a2` 不许被碰。
+panel_kernel_version_of() {  # $1=zip → stdout 版本(取不到则非零返回)
+  local zip="$1" work home bin version
+  work="$(mktemp -d "${TMPDIR:-/tmp}/a2-panel-probe-XXXXXX")" || return 1
+  if command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$zip" "$work" >/dev/null 2>&1 || { rm -rf "$work"; return 1; }
+  elif command -v unzip >/dev/null 2>&1; then
+    unzip -q "$zip" -d "$work" >/dev/null 2>&1 || { rm -rf "$work"; return 1; }
+  else
+    rm -rf "$work"; return 1
+  fi
+  bin="$(find "$work" -type f -path "*/Contents/Resources/$PANEL_KERNEL_NAME" | head -n 1)"
+  [ -n "$bin" ] && [ -x "$bin" ] || { rm -rf "$work"; return 1; }
+  home="$(mktemp -d "${TMPDIR:-/tmp}/a2-panel-home-XXXXXX")" || { rm -rf "$work"; return 1; }
+  version="$(A2_HOME="$home" "$bin" version 2>/dev/null | tr -d '\r\n')"
+  rm -rf "$work" "$home"
+  [ -n "$version" ] || return 1
+  printf '%s' "$version"
+}
+
 if [ -n "$APP_SOURCE" ]; then
   APP_ZIP="$OUTPUT/A2-Panel-$VERSION-macos.zip"
   case "$APP_SOURCE" in
@@ -163,12 +198,19 @@ if [ -n "$APP_SOURCE" ]; then
       # ditto -c -k --keepParent:保住 bundle 的符号链接与扩展属性,签名不会被压坏。
       ditto -c -k --keepParent "$APP_SOURCE" "$APP_ZIP" || die "压 .app 失败" ;;
   esac
-  echo "-- 随附壳:$(basename "$APP_ZIP")"
+  PANEL_KERNEL_VERSION="$(panel_kernel_version_of "$APP_ZIP")" || die \
+    "面板包里问不出内嵌内核的版本($(basename "$APP_ZIP"))。
+  它必须含 Contents/Resources/$PANEL_KERNEL_NAME 且能在本机跑起来 —— 14 票起 .app 是自带内核的完整包
+  (ADR 0012);拿一个 14 票之前的旧 .app 来随附,就会停在这里。
+  重出一个:bash Scripts/build-app.sh --output .build/app"
+  echo "-- 随附壳:$(basename "$APP_ZIP")(内嵌内核 $PANEL_KERNEL_VERSION)"
 fi
 
-# ---- ⑤ 发布元数据(摘要 + mihomo 锁定版)------------------------------------------
-"$BUN_BIN" run "$ROOT/kernel/scripts/render-release-manifest.ts" "$OUTPUT" "$VERSION" "$CHANNEL_BASE" \
-  || die "生成发布元数据失败(常见原因:发布包里混进了 classifyArtifact 不认识的文件)"
+# ---- ⑤ 发布元数据(摘要 + mihomo 锁定版 + 面板内嵌内核版本)------------------------
+"$BUN_BIN" run "$ROOT/kernel/scripts/render-release-manifest.ts" \
+    "$OUTPUT" "$VERSION" "$CHANNEL_BASE" "$PANEL_KERNEL_VERSION" \
+  || die "生成发布元数据失败(常见原因:发布包里混进了 classifyArtifact 不认识的文件;
+  或面板包内嵌的内核与本次发布的内核不同版 —— schema 结构约束③ 会当场拒)"
 
 # ---- ⑥ 自检:包里那个 bin 看得见随包的两份文本吗 ------------------------------------
 if [ "$SELF_CHECK" = "1" ]; then
@@ -197,6 +239,21 @@ if [ "$SELF_CHECK" = "1" ]; then
     && die "自检:随包 NOTICE 里出现「不在此处」—— 它在自述随包文本缺失,而它们就在同目录"
   grep -q "$OUTPUT" "$NOTICE" \
     && die "自检:随包 NOTICE 里烙进了组装机的绝对路径($OUTPUT)—— 那条路径对用户毫无意义"
+
+  # **一个发布包里只许有一版内核**(14 票)。三处对账,而且三处都是**现场问出来的**,不是互相抄:
+  #   ① 单文件那份(= 版本单一来源:上面 ③ 步问的就是包里那个 a2 自己);
+  #   ② 元数据里的 `embeddedKernelVersion` 字段(从写好的 JSON 里抠出来);
+  #   ③ **重新解一遍最终那个 zip**、把里面那个 bin 再跑一次 —— 与 ⑤ 步传给渲染器的那个值互相独立,
+  #      于是"传错了值"与"zip 与元数据脱节"这两种事各自都拦得住。
+  if [ -n "$APP_SOURCE" ]; then
+    META_PANEL_VERSION="$(grep '"kind":"panel-app"' "$OUTPUT/$METADATA_FILE" \
+      | sed -n 's/.*"embeddedKernelVersion":"\([^"]*\)".*/\1/p' | head -n 1)"
+    ZIP_PANEL_VERSION="$(panel_kernel_version_of "$APP_ZIP")" \
+      || die "自检:最终那个面板 zip 里问不出内嵌内核版本"
+    [ "$ZIP_PANEL_VERSION" = "$VERSION" ] && [ "$META_PANEL_VERSION" = "$VERSION" ] || die \
+      "自检:一个发布包里出现了两版内核 —— zip 里内嵌 '$ZIP_PANEL_VERSION',元数据记 '$META_PANEL_VERSION',单文件那份是 '$VERSION'"
+    echo "-- 自检通过:面板包内嵌内核 = 元数据字段 = 单文件那份 = $VERSION(三处对账)"
+  fi
   echo "-- 自检通过:两份静态文本就位、NOTICE 与 about 输出逐字节相同、无组装机路径"
 fi
 

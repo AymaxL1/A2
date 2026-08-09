@@ -16,12 +16,16 @@
 // 只会让壳那边多一条"永远不会解的报文"的记账。它自己的漂移由本文件的 zod schema + `bun test` 守着。
 //
 // ============================================================================
-// 两条 fail-closed 的结构约束(写在 schema 里,不是写在注释里)
+// 三条 fail-closed 的结构约束(写在 schema 里,不是写在注释里)
 // ============================================================================
 //   ① **发布包必须带声明文本**:`notice` 与 `license` 各恰好一份。GPL 义务不能靠"组装时记得拷"——
 //      忘了拷,元数据就生成不出来,发布流程当场停(ADR 0007 修订版:随包静态文本是必有落点之一)。
 //   ② **不认识的文件不许混进发布包**:`classifyArtifact` 认不出的文件名一律报错。
 //      发布物是要被 curl 下来执行的东西,"顺手多带了个文件"不该是静默通过的事。
+//   ③ **面板包必须记下它内嵌的内核版本,且与本次发布的内核同版**(14 票「面板自足」,ADR 0012)。
+//      `A2 Panel.app` 里现在嵌着一份内核 bin,于是一个发布包里有了两处内核:单文件那份与包里那份。
+//      两处不同版是**发得出去、装完才发现**的一类事故(用户点「安装并启动」装上的是 app 里那一版),
+//      所以把它做成元数据生成期就拒绝的结构错误 —— 组装脚本另有一条实跑对账(见 release-assemble.sh ⑥)。
 
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -93,6 +97,13 @@ export const ReleaseArtifactSchema = z.object({
   kind: z.enum(ARTIFACT_KINDS),
   /** 只有 `kernel-bin` / `panel-app` 有平台。 */
   platform: z.string().min(1).optional(),
+  /**
+   * **只有 `panel-app` 有**:那个 `.app` 里内嵌的内核 bin 自报的版本(14 票「面板自足」)。
+   *
+   * 不是从版本号推出来的一个副本 —— 组装脚本是**解开 zip、拿包里那个 bin 跑一次 `version`** 拿到的,
+   * 所以它回答的是"用户点『安装并启动』将会装上哪一版内核"。superRefine 里钉着它必须 = `version`。
+   */
+  embeddedKernelVersion: z.string().min(1).optional(),
   /** 小写十六进制 SHA-256(安装脚本逐字比对这一串)。 */
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   bytes: z.number().int().nonnegative(),
@@ -147,6 +158,30 @@ export const ReleaseManifestSchema = z
       });
     }
     for (const artifact of manifest.artifacts) {
+      // 面板包 ↔ 内嵌内核版本(14 票):必须有、必须与本次发布的内核同版;别的工件不许带这个字段
+      // (带了说明有人把它当通用字段用,而它只对"包里还嵌着一个 bin"的那种工件有意义)。
+      if (artifact.kind === "panel-app") {
+        if (artifact.embeddedKernelVersion === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              `面板包 ${artifact.name} 没记内嵌内核的版本。` +
+              "它内嵌着一份内核 bin(用户点「安装并启动」装上的就是那一份),版本必须进元数据。",
+          });
+        } else if (artifact.embeddedKernelVersion !== manifest.version) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              `面板包内嵌的内核是 ${artifact.embeddedKernelVersion},本次发布的内核是 ${manifest.version}` +
+              " —— 同一个发布包里出现了两版内核(单文件那份与 .app 里那份),发出去就是装谁看运气。",
+          });
+        }
+      } else if (artifact.embeddedKernelVersion !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: `只有面板包才谈得上「内嵌内核版本」,${artifact.name}(${artifact.kind})不该带这个字段。`,
+        });
+      }
       if (artifact.kind === "kernel-bin") {
         const platform = artifact.platform as KernelPlatform | undefined;
         if (platform === undefined || !(platform in KERNEL_TARGETS)) {
@@ -203,6 +238,13 @@ export interface BuildManifestOptions {
   generatedAt?: string;
   /** 渠道根地址;缺省是占位符(渠道未定)。 */
   channelBase?: string;
+  /**
+   * 面板包里那份内嵌内核 bin 自报的版本(**包里有 `panel-app` 工件时必给**)。
+   *
+   * 由调用方实跑得来(`release-assemble.sh` 解 zip 跑 `version`),这里不去猜也不去代填:
+   * 少给这一项,元数据就生成不出来 —— 那正是我们要的 fail-closed。
+   */
+  panelEmbeddedKernelVersion?: string;
 }
 
 /** 扫描发布包目录,算摘要,拼出(并**校验**)一份元数据。 */
@@ -228,6 +270,9 @@ export async function buildReleaseManifest(
       name,
       kind: classified.kind,
       ...(classified.platform === undefined ? {} : { platform: classified.platform }),
+      ...(classified.kind === "panel-app" && options.panelEmbeddedKernelVersion !== undefined
+        ? { embeddedKernelVersion: options.panelEmbeddedKernelVersion }
+        : {}),
       sha256: await sha256Of(file),
       bytes: statSync(file).size,
     });
