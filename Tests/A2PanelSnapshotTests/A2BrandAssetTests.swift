@@ -95,7 +95,8 @@ struct A2BrandAssetTests {
     // 字形:A 与上标 2 的比例关系(全部量自 v3 小样,写在生成脚本的 `Design` 里)
     // ========================================================================
 
-    @Test("19 A² 的比例照 v3 小样:A 高占方 0.470、2 高占 A 高 0.315、2 顶与 A 顶齐平、记号居中",
+    // 标题必须是**编译期字面量**(swift-testing 的 `@Test` 不收拼接串),所以这一行长。
+    @Test("19 A² 的比例照 v3 小样:A 高占方 0.470、2 高占 A 高 0.315、2 顶与 A 顶齐平、2 内嵌 0.180×A 宽、记号居中",
           arguments: ["a2-icon-master-terracotta-1024.png", "a2-icon-master-black-1024.png"])
     func markProportions(_ name: String) throws {
         let bitmap = try Bitmap(Self.brandDirectory.appendingPathComponent(name))
@@ -112,6 +113,11 @@ struct A2BrandAssetTests {
                 "上标 2 高 / A 高 应为 0.315;实测 \(Double(two.height) / Double(a.height))")
         #expect(abs(two.minY - a.minY) <= 2, "2 的顶与 A 的顶齐平(小样实测差 1px/109px)")
         #expect(two.minX > a.minX && two.maxX > a.maxX, "2 在 A 的右上角,且右边缘越过 A")
+        // **内嵌量**:2 的左边缘要卡进 A 右斜边上方的缺口里 —— 差之毫厘,记号就散成"A 和一个 2"。
+        //   小样实测 22px / A 宽 122px = 0.180。
+        let overlap = Double(a.maxX - two.minX + 1) / Double(a.width)
+        #expect(abs(overlap - 0.180) <= 0.02,
+                "2 的左边缘内嵌进 A 右边缘应为 0.180 × A 宽(小样实测 22/122);实测 \(overlap)")
         // 记号(两块的并集)在圆角方里上下左右居中。
         let markMinX = min(a.minX, two.minX), markMaxX = max(a.maxX, two.maxX)
         let markMinY = min(a.minY, two.minY), markMaxY = max(a.maxY, two.maxY)
@@ -123,7 +129,10 @@ struct A2BrandAssetTests {
     // iconset 与 .icns
     // ========================================================================
 
-    @Test("19 iconset 十档齐、每档像素尺寸对、且每档都按同一网格**原生重画**(不是缩图)")
+    /// ⚠️ 本条**只证**十档齐、每档像素尺寸对、每档的圆角方都落在同一网格上。
+    ///    「每档是原生重画而不是从 1024 缩下来的」**不在这条的射程内** —— 缩图也能落在同一网格上。
+    ///    那条由逐字节层钉:`swift Scripts/gen-app-icon.swift --verify`(生成路径本身就是每档重画的)。
+    @Test("19 iconset 十档齐、每档像素尺寸对、每档圆角方落在同一 Big Sur 网格上")
     func iconsetHasAllTenSizes() throws {
         let expected: [(String, Int)] = [
             ("icon_16x16.png", 16), ("icon_16x16@2x.png", 32),

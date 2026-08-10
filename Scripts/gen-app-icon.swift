@@ -32,7 +32,8 @@
 //   打开面板各不相同,画死了到处对不上)。
 // * 圆角半径 **184**(= 824 × 0.2233,HIG 模板比例 ≈0.2237 取整)。**macOS 的圆角必须画进素材里** ——
 //   系统不代裁(那是 iOS 的规矩)。顺带记一笔:v3 小样自己的圆角实测 ≈ 边长的 0.208(231 方、R≈48),
-//   比 HIG 略圆一点;这里**以 HIG 为准**,因为这是要进 Dock/Finder 与别的 macOS 图标并排的东西。
+//   **比 HIG 略方**(半径占比小 = 角更方);这里**以 HIG 为准**(要进 Dock/Finder 与别的 macOS 图标
+//   并排站),于是**成品比小样略圆**一点点。
 // * 字形比例**全部量自 v3 小样右下角那两个圆角方**(黑底版与橙底版,两版量出来一致到 1%):
 //     - A 的 cap 高 / 方边 = 0.472(橙)/ 0.465(黑) → 取 **0.470**;
 //     - 上标 2 的高 / A 的 cap 高 = 0.321 / 0.308 → 取 **0.315**;
@@ -379,11 +380,17 @@ while let arg = args.first {
     }
 }
 
-if verifyMode {
+/// 重跑到临时目录,与入库产物逐字节比对。**返回值即判据**(true = 全同)。
+///
+/// ⚠️ 清理必须在**返回之前**做。这里第一版写的是 `defer { removeItem }` 加两条各自 `exit()` 的出路 ——
+///    `exit()` 是**进程退出**,不是 Swift 的作用域退出,defer 根本不跑:每跑一次 `--verify` 就在
+///    `$TMPDIR` 下漏一个约 300KB 的目录(15 个产物)。于是把主体收进本函数,`exit` 一律留在函数外。
+func verifyAgainstRepository() -> Bool {
+    let fm = FileManager.default
     let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("a2-icon-verify-\(ProcessInfo.processInfo.processIdentifier)")
-    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: tmp) }
+    try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: tmp) }   // 本函数只 return,不 exit —— 这条 defer 是真会跑的
 
     let produced = generate(into: tmp)
     var differing: [String] = []
@@ -406,12 +413,14 @@ if verifyMode {
     }
     if differing.isEmpty {
         print("OK: \(produced.count) 个产物与入库逐字节相同(判据见文件头「可复现判据」一节)")
-        exit(0)
+        return true
     }
     print("FAILED: \(differing.count)/\(produced.count) 个产物与入库不同 —— "
           + "要么设计常量改了没重跑脚本,要么字体/系统换了。前者重跑本脚本并**看图**,后者见文件头。")
-    exit(1)
+    return false
 }
+
+if verifyMode { exit(verifyAgainstRepository() ? 0 : 1) }
 
 let produced = generate(into: outputDir)
 print("==== gen-app-icon:\(outputDir.path) ====")
