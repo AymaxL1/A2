@@ -26,6 +26,15 @@
 // 会话在后台线程收推送 → 投影出新的 `A2PanelState` → 投递到主线程 → 本控制器重建 `NSMenu`。
 // **不做增量更新 NSMenu**:菜单项少的时候整份重建最不容易错(不会出现「改了标题忘了改勾选」),
 // 而重建的输入就是那份纯数据模型 —— 与渲染器 B 吃的是同一份,这正是快照有意义的前提。
+//
+// ============================================================================
+// 19 票:状态栏那一格从"文字"变成"图标 + 状态字"
+// ============================================================================
+// 图标只取一次(init 时),取不到就一直回落文字 —— 一个 `.app` 跑起来之后资源不会中途长出来。
+// 「画什么」这件事本身不在这里判:`A2MenuBarPresentation.resolve` 是纯函数,四种组合各有断言
+// (见 `A2MenuBarIconTests`)。本控制器只负责把结果抹到 `statusItem.button` 上。
+// **菜单内容一个字没动** —— 状态栏标题不进 `A2MenuModel`,所以 `Snapshots/a2-panel/` 的 golden
+// 在本票零漂移(已核实)。
 
 import AppKit
 import A2Contract
@@ -43,19 +52,23 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
     private let onQuit: () -> Void
 
     private var model: A2MenuModel
+    /// 菜单栏 template 图标;`.app` 之外(`swift build` / `swift test`)取不到 → nil → 回落文字。
+    private let icon: NSImage?
 
     public init(onInvoke: @escaping (String, [String: A2JSON]) -> Void,
                 onBootstrap: @escaping (A2BootstrapMenuAction, Bool) -> Void,
                 onAbout: @escaping () -> Void,
-                onQuit: @escaping () -> Void) {
+                onQuit: @escaping () -> Void,
+                icon: NSImage? = A2MenuBarIcon.load()) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.onInvoke = onInvoke
         self.onBootstrap = onBootstrap
         self.onAbout = onAbout
         self.onQuit = onQuit
         self.model = A2MenuModel(items: [])
+        self.icon = icon
         super.init()
-        statusItem.button?.title = "A2"
+        apply(A2MenuBarPresentation.resolve(hasIcon: icon != nil, proxyTakenOver: false))
         let menu = NSMenu()
         menu.autoenablesItems = false   // 让模型的 `enabled` 说了算,不让 AppKit 自己猜
         menu.delegate = self
@@ -68,10 +81,18 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
         guard let menu = statusItem.menu else { return }
         menu.removeAllItems()
         for item in model.items { menu.addItem(makeItem(item)) }
-        // 状态栏标题跟着「有没有在接管系统代理」走:菜单不点开也看得出个大概。
-        statusItem.button?.title = model.flattened.contains {
+        // 状态栏那一格跟着「有没有在接管系统代理」走:菜单不点开也看得出个大概。
+        let takenOver = model.flattened.contains {
             $0.capabilityID == "proxy.system.enable" && $0.checked
-        } ? "A2 ●" : "A2"
+        }
+        apply(A2MenuBarPresentation.resolve(hasIcon: icon != nil, proxyTakenOver: takenOver))
+    }
+
+    /// 把呈现决策抹到按钮上。**这里没有任何判断** —— 判断全在 `A2MenuBarPresentation.resolve`。
+    private func apply(_ presentation: A2MenuBarPresentation) {
+        statusItem.button?.image = presentation.usesIcon ? icon : nil
+        statusItem.button?.title = presentation.title
+        statusItem.button?.imagePosition = presentation.imagePosition
     }
 
     private func makeItem(_ model: A2MenuItemModel) -> NSMenuItem {

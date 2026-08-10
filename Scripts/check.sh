@@ -215,7 +215,7 @@ run_step "④ 插件 e2e(现场写插件 → 零闸 add → 全链调用 → dan
   "$BUILD/plugin-e2e.log" bash "$ROOT/Scripts/a2-plugin-e2e.sh"
 
 # ---- ⑤ `.app` 出包(a2-panel 身份 + 内嵌内核 + 先内后外 ad-hoc 签名)---------------------
-run_step "⑤ .app 出包(a2-panel · 内嵌内核 bin · 先内后外 ad-hoc 签名 · APP1–APP11 核验)" \
+run_step "⑤ .app 出包(a2-panel · 内嵌内核 bin · 先内后外 ad-hoc 签名 · APP1–APP13 核验)" \
   "$BUILD/build-app.log" bash "$ROOT/Scripts/build-app.sh" --output "$BUILD/app"
 
 # ---- 收口 ------------------------------------------------------------------------------
@@ -234,7 +234,7 @@ echo "   ① bun test        : ${BUN_COUNT:-?} 条"
 echo "   ② swift test      : ${SWIFT_COUNT:-?} 条"
 echo "   ③ 旗舰 e2e        : ${FLAGSHIP_COUNT:-?} 条"
 echo "   ④ 插件 e2e        : ${PLUGIN_COUNT:-?} 条"
-echo "   ⑤ .app 出包       : 结构 + 内嵌内核 + ad-hoc 签名核验(APP1–APP11)"
+echo "   ⑤ .app 出包       : 结构 + 内嵌内核 + ad-hoc 签名核验(APP1–APP13)"
 echo "----------------------------------------"
 echo " 结果: 步 PASS=$STEPS_OK  FAIL=$STEPS_FAIL"
 if [ "$STEPS_FAIL" -eq 0 ]; then

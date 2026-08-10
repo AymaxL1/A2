@@ -35,7 +35,13 @@
 #
 # **16 票再加一条 APP11**:内嵌 bin 以一次性 `A2_HOME` 实跑 `service status --json` ——
 #   即「面板引导链第一步要调的那条命令」在包内真的可用(只读;门禁永不跑 install/uninstall)。
-#   于是本脚本的核验清单是 **APP1–APP11**。
+#
+# **19 票再加两条(图标)**:`AppIcon.icns` 与菜单栏 template 两张进 `Contents/Resources/`,
+#   Info.plist 写 `CFBundleIconFile`。APP12 验 icns(在、`iconutil` 往返解得开、十档齐、
+#   最大那档真是 1024),APP13 验 template 两张(在、18/36 px —— 壳运行时按
+#   `A2MenuBarIcon.resourceName` 取它们;取不到就回落文字标题,那条路有测试)。
+#   这三个文件都是**资源、不是可执行**(644 无执行位),所以 **APP8 的可执行清单一个字不变**。
+#   于是本脚本的核验清单是 **APP1–APP13**。
 #
 # **签名顺序变成先内后外**:先签 `Contents/Resources/a2`,再签 bundle(同一 identity)。
 # 12/15 票那套编排当年为随包 GPL 二进制而立、随它一起废除,现在为内嵌内核而回来,理由与当年同构。
@@ -67,6 +73,13 @@ EXE_NAME="a2-panel"          # CFBundleExecutable,与 Package.swift 的 product 
 # 内嵌内核 bin 在包里的名字(14 票)。面板按 `Bundle.main.resourceURL/a2` 找它 —— 改这个名字
 #   就要连壳那侧一起改,所以它在这里、只有这一处。
 KERNEL_EXE_NAME="a2"
+# 图标资源(19 票)。产物由 `Scripts/gen-app-icon.swift` 生成并入库,本脚本只负责拷进包里。
+#   * `ICON_FILE` 同时是 `CFBundleIconFile` 的值(去掉 `.icns` 后缀)—— macOS 按它去 Resources 找图标;
+#   * `MENUBAR_ICON_NAME` **与 `A2MenuBarIcon.resourceName` 是同一个名字**(壳按它取图),
+#     与 `KERNEL_EXE_NAME` 同一条纪律:改名字要改两处,所以两边各自只有这一处。
+BRAND_DIR_NAME="assets/branding"
+ICON_FILE="AppIcon"
+MENUBAR_ICON_NAME="a2-menubar-template"
 # CFBundleShortVersionString 与 CFBundleVersion 共用这一个值。
 # ⚠️ 它与**内核版本**(`kernel/package.json` → `runtime/version.ts`)是**两个独立的数**,眼下恰好都是
 #   0.1.0。14 票起包里嵌着内核,于是「壳版本是否随内核走」成了一个要答的问题 —— **发版前待裁**:
@@ -229,6 +242,22 @@ cp "$KERNEL_SRC" "$APP/Contents/Resources/$KERNEL_EXE_NAME" \
 chmod 755 "$APP/Contents/Resources/$KERNEL_EXE_NAME" \
   || { echo "FAIL: 给内嵌内核 bin 加执行位失败"; exit 1; }
 
+# 图标资源(19 票)。**不在这里生成**:产物是入库的(`Scripts/gen-app-icon.swift` 生成,
+#   `swift Scripts/gen-app-icon.swift --verify` 逐字节复核),出包只拷。理由与内核 bin 相反 ——
+#   内核 bin 是每次必须重建的(源码在变),图标是**人裁过的设计产物**,重建它等于让出包偷偷改设计。
+# 缺文件当场 FAIL:一个没有图标的包发出去,用户在 Finder 里看到的是一张白纸。
+BRAND_DIR="$ROOT/$BRAND_DIR_NAME"
+for asset in "$ICON_FILE.icns" "$MENUBAR_ICON_NAME.png" "$MENUBAR_ICON_NAME@2x.png"; do
+  [ -f "$BRAND_DIR/$asset" ] || {
+    echo "FAIL: 缺图标资源 $BRAND_DIR_NAME/$asset —— 跑 \`swift Scripts/gen-app-icon.swift\` 生成并入库"
+    exit 1; }
+  cp "$BRAND_DIR/$asset" "$APP/Contents/Resources/$asset" \
+    || { echo "FAIL: 拷贝图标资源失败($asset)"; exit 1; }
+  # 显式去执行位:图标是**资源**,不是可执行 —— APP8 的清单里不该出现它们。
+  chmod 644 "$APP/Contents/Resources/$asset" \
+    || { echo "FAIL: 给图标资源设权限失败($asset)"; exit 1; }
+done
+
 cat > "$APP/Contents/Info.plist" <<PLIST || { echo "FAIL: 写 Info.plist 失败"; exit 1; }
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -244,6 +273,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST || { echo "FAIL: 写 Info.plist 失败"
 	<string>$EXE_NAME</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- CFBundleIconFile:macOS 按这个名字去 Contents/Resources/ 找同名 .icns(19 票)。
+	     ⚠️ 这段注释在一个**未加引号的 heredoc** 里 —— 别在这里写反引号,那会被 shell 当命令替换跑掉。
+	     LSUIElement 的壳**没有 Dock 图标**,所以这张图主要出现在 Finder / 「打开」面板 /
+	     「强制退出」列表里 —— 实看归人工项(见 assets/branding/README.md)。 -->
+	<key>CFBundleIconFile</key>
+	<string>$ICON_FILE</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
@@ -389,6 +424,56 @@ if SMOKE_HOME="$(throwaway_home)"; then
   fi
 else
   v_bad "APP11 造不出一次性 A2_HOME(mktemp 失败,TMPDIR='${TMPDIR:-/tmp}')—— 拒绝拿真 ~/.a2 去跑内嵌 bin"
+fi
+
+# **图标真的进了包,而且真的是一份能用的 icns**(19 票)。
+#   「文件在不在」一条挡不住多少事:拷了个空文件、拷了张 PNG 改名叫 .icns、iconset 少几档打出来的
+#   残缺 icns —— 这些在 Finder 里的表现是"图标忽然变白纸"或"某个尺寸糊",而不是任何报错。
+#   所以判据是**把它拆回去**:`iconutil -c iconset` 往返解开,数十档、并用 `sips` 问最大那档的真实像素。
+#   (`iconutil` 把 16/32 两档存成 ARGB,拆回来是重新编码的 PNG —— 所以这里比的是**档数与像素**,
+#    不是字节;字节那一层由 `gen-app-icon.swift --verify` 与 `A2BrandAssetTests` 各管一头。)
+ICNS_IN_APP="$APP/Contents/Resources/$ICON_FILE.icns"
+ICON_PLIST_VALUE="$(plist_get CFBundleIconFile)"
+if [ ! -f "$ICNS_IN_APP" ]; then
+  v_bad "APP12 包里没有 Contents/Resources/$ICON_FILE.icns"
+elif [ "$ICON_PLIST_VALUE" != "$ICON_FILE" ]; then
+  v_bad "APP12 Info.plist 的 CFBundleIconFile 是 '$ICON_PLIST_VALUE',应为 '$ICON_FILE'"
+elif ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/a2-app-icon-XXXXXX")"; then
+  ICON_OUT="$(iconutil -c iconset "$ICNS_IN_APP" -o "$ICON_TMP/AppIcon.iconset" 2>&1)"
+  ICON_RC=$?
+  ICON_COUNT="$(ls -1 "$ICON_TMP/AppIcon.iconset"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+  ICON_BIGGEST="$(sips -g pixelWidth "$ICON_TMP/AppIcon.iconset/icon_512x512@2x.png" 2>/dev/null \
+    | awk '/pixelWidth/{print $2}')"
+  rm -rf "$ICON_TMP"
+  if [ "$ICON_RC" -eq 0 ] && [ "$ICON_COUNT" = "10" ] && [ "$ICON_BIGGEST" = "1024" ]; then
+    v_ok "APP12 图标就位:CFBundleIconFile=$ICON_FILE,icns 往返解得开(十档齐,最大档 1024×1024)"
+  else
+    v_bad "APP12 包内 icns 不可用:iconutil rc=$ICON_RC,拆出 $ICON_COUNT 档(应 10),最大档 ${ICON_BIGGEST:-?}px(应 1024)"
+    [ -n "$ICON_OUT" ] && echo "      iconutil:$ICON_OUT"
+  fi
+else
+  v_bad "APP12 造不出临时目录(mktemp 失败,TMPDIR='${TMPDIR:-/tmp}')—— 没法拆 icns 核验"
+fi
+
+# **菜单栏 template 两档也得在包里**(19 票):壳启动时按 `A2MenuBarIcon.resourceName` 去
+#   `Contents/Resources/` 取这两张;取不到它**不会崩**,而是悄悄回落成文字标题「A2」——
+#   于是"漏拷了图标"这件事在运行期是**看不见的**(菜单栏上还是有东西),只能在这里挡。
+MENUBAR_OK=1
+MENUBAR_DETAIL=""
+for entry in "$MENUBAR_ICON_NAME.png:18" "$MENUBAR_ICON_NAME@2x.png:36"; do
+  file="${entry%:*}"; want="${entry##*:}"
+  path="$APP/Contents/Resources/$file"
+  if [ ! -f "$path" ]; then
+    MENUBAR_OK=0; MENUBAR_DETAIL="$MENUBAR_DETAIL $file(缺)"; continue
+  fi
+  got="$(sips -g pixelWidth -g pixelHeight "$path" 2>/dev/null \
+    | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w"x"h}')"
+  [ "$got" = "${want}x${want}" ] || { MENUBAR_OK=0; MENUBAR_DETAIL="$MENUBAR_DETAIL $file($got,应 ${want}x${want})"; }
+done
+if [ "$MENUBAR_OK" = "1" ]; then
+  v_ok "APP13 菜单栏 template 两档就位(Resources/$MENUBAR_ICON_NAME.png 18px + @2x 36px)"
+else
+  v_bad "APP13 菜单栏 template 不对:$MENUBAR_DETAIL —— 壳会静默回落成文字标题,用户看不出来"
 fi
 
 # ---- 收口 ----------------------------------------------------------------------
