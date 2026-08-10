@@ -252,7 +252,8 @@ public struct A2BootstrapFailure: Sendable, Equatable, Error {
         case "service_purge_home_mismatch":
             return "盘上那份服务是为另一个 A2_HOME 装的,清理被拒"
         case "service_purge_unsafe_home":
-            return "这个 A2_HOME 不能整棵删(是根 / 家目录 / 一根符号链接)"
+            // 18 票起最常见的那一档是「不是缺省 ~/.a2」;符号链接与那几档地板并列其后。
+            return "这个 A2_HOME 不能整棵删(不是缺省 ~/.a2,或它是一根符号链接)"
         default:
             return nil
         }

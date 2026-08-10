@@ -98,7 +98,7 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
 |---|---|
 | `service status` 的 `binPath` | unit **实际指向**的那个可执行（读盘上那份 unit 的事实值）。unit 还不存在时给的是本次 `install` 会写进去的那个。「托管的是不是我这份内核」只有它答得了 |
 | `service install --copy-to-home` | 把**当前这个 a2 单文件自己**原子拷进 `$A2_HOME/bin/a2`，并让 unit 指向那份拷贝。幂等（判据是内容）；拷贝换了而服务正跑着时会显式重启，如实报 `kernel_restarted`。mac 菜单栏壳「A2 Panel」走的就是这条（见 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md)） |
-| `service uninstall --purge` | 拆完 `com.a2.kernel` 之后**继续往下清**：拆 a2 自管的 `com.a2.mihomo`（不在则跳过、不报 action）→ 删掉整个 `$A2_HOME`。机读面多一个 `result.purge`：`removedUnits`（移除的 label）+ `removedPaths`（删掉的绝对路径），这是「先看后删」的对账面 |
+| `service uninstall --purge` | 拆完 `com.a2.kernel` 之后**继续往下清**：拆 a2 自管的 `com.a2.mihomo`（不在则跳过、不报 action）→ 删掉整个 `$A2_HOME`。**只对缺省 `~/.a2` 生效**（见下）。机读面多一个 `result.purge`：`removedUnits`（移除的 label）+ `removedPaths`（删掉的绝对路径），这是「先看后删」的对账面 |
 
 `--copy-to-home` 只对 `install` 有意义，`--purge` 只对 `uninstall` 有意义；用在别的子命令上是用法错
 （不会被默默忽略）。源码态跑 `--copy-to-home` 会得到 `service_self_copy_unsupported`（退出码 6）——
@@ -109,7 +109,7 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
 不带 `--purge` 的 `uninstall` **只拆 unit**——`$A2_HOME/bin/a2` 那份拷贝与 `~/.a2` 里的数据要清理请显式删
 （就是 `--purge`，或者你自己 `rm -rf`）。
 
-`--purge` 的两条边界，转告用户时**别漏**：
+`--purge` 的边界，转告用户时**别漏**：
 
 - **范围恒是 `com.a2.*` 与 `$A2_HOME`**。用户自己装的 mihomo（`io.metacubex.mihomo` 等）无论装在哪、
   数据放在哪都不在清理范围内——`removedUnits` 的取值形状在 JSON Schema 里就限定成 `^com\.a2\.`。
@@ -117,11 +117,15 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
   `daemon_already_running` 同档——命令没错，只是这会儿不该发）。`guidance` 里给的是 `a2 proxy off`
   与面板那条路。**别替用户"顺手还原一下再重试"**：还原是显式命令，那一步该由人自己决定。
   还原之后同一条命令就成立了。
-- 另有两道**删除前的门**，都在动手之前拒绝、零删除：
-  `service_purge_unsafe_home`（退出码 6）——`$A2_HOME` 是 `/`、是家目录本身、是家目录的祖先，
-  或者是一根**符号链接**（删链不删树 = 假账）；`guidance.context.reason` 给机读的原因，
-  symlink 那两档另给 `linkTarget`。`service_purge_home_mismatch`（退出码 1）——盘上那份
-  `com.a2.kernel` unit 记着的是**另一个** `A2_HOME`：label 每用户一个而 `A2_HOME` 每次调用一个，
+- **`--purge` 只对缺省 `~/.a2` 生效**（用户裁定）：任何自定义 `A2_HOME`（`/Applications`、
+  `~/Documents`、你自己的测试沙盒……）一律 `service_purge_unsafe_home`（退出码 6，
+  `guidance.context.reason = non_default_home`），**零删除**。要清自定义 home 得人自己 `rm -rf`
+  ——指引里给出了那条路径。**别绕过它**（比如临时把 `A2_HOME` 改成缺省值再跑）：那会去删真正的 `~/.a2`。
+- 另有两道**删除前的门**，同样在动手之前拒绝、零删除：
+  `service_purge_unsafe_home` 的其余取值（缺省 `~/.a2` 本身是一根**符号链接** → 删链不删树 = 假账，
+  `context.linkTarget` 给出真实目标；另有 `/`、家目录、家目录祖先几档，在"只认缺省 home"之后已不可达，
+  作为纵深保留）。`service_purge_home_mismatch`（退出码 1）——盘上那份 `com.a2.kernel` unit
+  记着的是**另一个** `A2_HOME`：label 每用户一个而 `A2_HOME` 每次调用一个，
   站错地方就会拆掉别的 home 的数据面。指引会告诉你该去哪个 `A2_HOME` 下执行。
 
 ## 别处的权威

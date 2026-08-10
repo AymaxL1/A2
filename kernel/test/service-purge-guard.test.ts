@@ -15,7 +15,12 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { unsafeHomeOnDisk, unsafeHomeShape } from "../src/service/purge-guard.ts";
+import {
+  defaultHome,
+  nonDefaultHome,
+  unsafeHomeOnDisk,
+  unsafeHomeShape,
+} from "../src/service/purge-guard.ts";
 import {
   renderLaunchdPlist,
   renderSystemdUnit,
@@ -37,7 +42,41 @@ afterEach(async () => {
   }
 });
 
+// MARK: - 白名单(18 票):purge 只对缺省 ~/.a2 生效
+
+test("白名单:缺省 home 放行 —— 而且等价写法都算数(比的是归一化绝对路径,不是字符串)", () => {
+  const user = "/Users/alice";
+  expect(nonDefaultHome("/Users/alice/.a2", user)).toBeUndefined();
+  // 显式写出来的 `A2_HOME=$HOME/.a2` 与缺省是同一个地方,不该因为写法不同就被拒。
+  expect(nonDefaultHome("/Users/alice/.a2/", user)).toBeUndefined();
+  expect(nonDefaultHome("/Users/alice/./.a2", user)).toBeUndefined();
+  expect(nonDefaultHome("/Users/alice/x/../.a2", user)).toBeUndefined();
+});
+
+test("白名单:任何自定义 home 都被拒 —— 包括「看起来很像」的那些", () => {
+  const user = "/Users/alice";
+  for (const home of [
+    "/Applications",              // 17 票地板挡不住的那一整类:普通目录
+    "/Users/alice/Documents",
+    "/Users/alice/.a2-backup",    // 只差一个后缀
+    "/Users/alice/.a2/sub",       // 缺省 home 的**下级**也不是缺省 home
+    "/Users/bob/.a2",             // 别人的
+    "/tmp/a2t-xxxx",              // 测试沙盒:它本来就该自己收拾
+  ]) {
+    expect(nonDefaultHome(home, user)?.reason).toBe("non_default_home");
+  }
+});
+
+test("白名单:缺省值来自 os.homedir() + 那个唯一的常量(不另拼一份)", () => {
+  expect(defaultHome("/Users/alice")).toBe("/Users/alice/.a2");
+  expect(defaultHome()).toBe(path.join(homedir(), ".a2"));
+  expect(nonDefaultHome(defaultHome())).toBeUndefined();
+});
+
 // MARK: - 地板:哪些 $A2_HOME 永远不许被整棵删掉
+//
+// ⚠️ 18 票之后这一组在**生产路径上已不可达**(上面那道白名单先挡住了),它们是纵深的第二道。
+//    用例照旧直接喂判据本身 —— 判据还在,断言就该还在;哪天白名单被放宽,这一层立刻重新生效。
 
 test("地板:文件系统根被拒(`A2_HOME=/` —— 模板展开丢了一段就是这个形状)", () => {
   const refusal = unsafeHomeShape("/", "/Users/alice");

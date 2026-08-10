@@ -171,6 +171,12 @@
       "why": "服务面拒绝之四(17 票):系统代理仍处接管态时 --purge 被拒(退出码 1,「这会儿不该发」),**拒绝时零删除**,指引给出还原的两条路(CLI / 面板)"
     },
     {
+      "file": "response-service-purge-non-default-home.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之五(18 票,用户裁定):--purge 只对缺省 ~/.a2 生效,自定义 A2_HOME 一律拒(退出码 6,`context.reason=non_default_home`),指引给出自助清理那条路 —— 数据的处置权在人手里"
+    },
+    {
       "file": "mihomo-status-absent.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",

@@ -48,7 +48,9 @@ let sandbox: Sandbox | undefined;
 
 async function makeSandbox(kind: SupervisorKind): Promise<Sandbox> {
   const root = await mkdtemp("/tmp/a2svc-");
-  const home = path.join(root, "a2home");
+  // **必须是 `<假 HOME>/.a2`**(18 票):`--purge` 只对缺省 home 生效,而本沙盒把 `HOME` 指到 root ——
+  // 于是这个临时目录**就是**这个被测进程眼里的缺省 home。写成别的名字,整批 purge 用例验的就是拒绝路径了。
+  const home = path.join(root, ".a2");
   // XDG_CONFIG_HOME 有意指到一个**不等于** `$HOME/.config` 的地方:这样"systemd 单元按 XDG 落位"
   // 才是一条能证伪的断言,而不是两条路径碰巧相等。
   const xdgConfigHome = path.join(root, "xdg");
@@ -1085,6 +1087,81 @@ test("系统代理仍处接管态:purge 结构化拒绝 + 退出码 1,**一个�
 });
 
 /**
+ * 18 票(用户裁定):**`--purge` 只对缺省 `~/.a2` 生效**。
+ *
+ * 17 票的护栏是**地板**(挡 `/`、家目录、`/Users` 那几种"绝不可能"的形状),挡不住
+ * `A2_HOME=/Applications`、`=~/Documents` 这类**普通目录** —— 而模板展开出错最常见的落点正是它们。
+ * 这一刀把那一整类从根上封死。判据本身(含各种等价写法)在单元缝上验:`service-purge-guard.test.ts`。
+ */
+test("自定义 A2_HOME:--purge 结构化拒绝 + 退出码 6,零删除,并给出自助清理那条路", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  // 这个 home 既不是根、也不是家目录、更不是符号链接 —— 17 票那道地板对它完全无感。
+  const custom = path.join(box.root, "work", "a2-sandbox");
+  await mkdir(path.join(custom, "plugins"), { recursive: true });
+  await writeFile(path.join(custom, "settings.json"), '{"mixedPort":7897}\n');
+  await runCli(["service", "install", "--json"], { home: custom, env: box.env });
+  const callsBefore = (await supervisorCalls(box)).length;
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: custom,
+    env: box.env,
+  });
+
+  // 「这条请求在这个 $A2_HOME 上永远不成立」—— 与平台/形态那两条同族(6),不是"等会儿再来"(1)。
+  expect(result.exitCode).toBe(6);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.code).toBe("service_purge_unsafe_home");
+  expect(body.error.guidance.context.reason).toBe("non_default_home");
+  expect(body.error.guidance.context.home).toBe(custom);
+  expect(body.error.guidance.context.defaultHome).toBe(path.join(box.root, ".a2"));
+  // 指引指明当前 home、并给出自助清理的那条真命令(数据的处置权在人手里)。
+  const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
+  expect(commands).toContain(`rm -rf ${custom}`);
+  expect(commands).toContain("a2 service uninstall");
+
+  // 零删除:数据、unit、服务全在,连一条改状态的 supervisor 命令都没发。
+  expect(await readFile(path.join(custom, "settings.json"), "utf8")).toBe('{"mixedPort":7897}\n');
+  expect(existsSync(path.join(custom, "plugins"))).toBe(true);
+  expect(existsSync(box.unitPath)).toBe(true);
+  expect((await supervisorCalls(box)).slice(callsBefore)).toEqual([]);
+
+  // 金标是这条拒绝的手写镜像:静态文本逐字相等、步骤同序、context **键集**相等
+  // (值不比 —— 金标里是 /Users/alice/work/a2-sandbox,这里是本次沙盒的真路径)。
+  const golden = await Bun.file(
+    path.resolve(import.meta.dir, "../contract/golden/response-service-purge-non-default-home.json"),
+  ).json();
+  expect(body.error.code).toBe(golden.error.code);
+  expect(body.error.message).toBe(golden.error.message);
+  expect(body.error.guidance.summary).toBe(golden.error.guidance.summary);
+  expect(body.error.guidance.steps.map((step: { description: string }) => step.description)).toEqual(
+    golden.error.guidance.steps.map((step: { description: string }) => step.description),
+  );
+  expect(Object.keys(body.error.guidance.context).sort()).toEqual(
+    Object.keys(golden.error.guidance.context).sort(),
+  );
+});
+
+test("缺省 home 照常放行,等价写法(尾随斜杠 / `.` 段)也放行 —— 比的是路径不是字符串", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await service(box, ["install"]);
+  await writeFile(path.join(box.home, "settings.json"), "{}\n");
+
+  // `<root>/./.a2/` —— 归一化之后与缺省 home 是同一个地方。
+  const equivalent = `${path.join(box.root, ".", ".a2")}/`;
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: equivalent,
+    env: box.env,
+  });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(body.result.actions).toContain("home_purged");
+  expect(body.result.purge.removedPaths).toEqual([box.home]);
+  expect(existsSync(box.home)).toBe(false);
+});
+
+/**
  * 17 票 CR 尾款:`$A2_HOME` 是符号链接时的**假账**。
  *
  * `rm(home, { recursive: true, force: true })` 对符号链接只删链不删树,而 a2 的一切都是穿链写的 ——
@@ -1097,9 +1174,10 @@ test("symlink 的 $A2_HOME:结构化拒绝 + 退出码 6,链还在、链目标�
   const real = path.join(box.root, "real-home");
   await mkdir(real, { recursive: true });
   await writeFile(path.join(real, "settings.json"), '{"mixedPort":7897}\n');
-  const linked = path.join(box.root, "linked-home");
+  // **缺省 home 自己**就是那根链(用户就是这么用的:把 ~/.a2 指到别的卷)——
+  // 18 票之后这才是可达形态:随便找个路径当链是走不到这一档的,⓪0 会先把它挡掉。
+  const linked = box.home;
   await symlink(real, linked);
-  // 服务装在**链**这个路径上(用户就是这么用的:把 ~/.a2 指到别的卷)。
   const env = { ...box.env, ...selfBinEnv(box) };
   await writeSelfBin(box, "v1");
   await runCli(["service", "install", "--copy-to-home", "--json"], { home: linked, env });
@@ -1130,7 +1208,7 @@ test("symlink 的 $A2_HOME:结构化拒绝 + 退出码 6,链还在、链目标�
 
 test("dangling symlink 的 $A2_HOME 同样拒绝(链在、目标没了 —— 删它证明不了任何事)", async () => {
   const box = (sandbox = await makeSandbox("launchd"));
-  const linked = path.join(box.root, "linked-home");
+  const linked = box.home;   // 缺省 home 本身是一根悬空的链
   await symlink(path.join(box.root, "查无此目录"), linked);
 
   const result = await runCli(["service", "uninstall", "--purge", "--json"], {
@@ -1154,15 +1232,17 @@ test("dangling symlink 的 $A2_HOME 同样拒绝(链在、目标没了 —— �
  */
 test("home 错位:盘上 unit 记的是别的 A2_HOME → 拒绝 + 退出码 1,两个 home 都一个字节没少", async () => {
   const box = (sandbox = await makeSandbox("launchd"));
-  await service(box, ["install"]);              // unit 里记的是 box.home
+  // 服务装在一个**自定义** home 上(装是不挑 home 的),然后拿**缺省** home 来 purge ——
+  // 18 票之后这才是"站错 home"的可达形态:反过来(拿自定义 home 来 purge)会先被 ⓪0 挡住。
   const other = path.join(box.root, "另一个-home");
-  await mkdir(other, { recursive: true });
+  await mkdir(box.home, { recursive: true });
+  await runCli(["service", "install", "--json"], { home: other, env: box.env });
   await writeFile(path.join(other, "无关文件.json"), "{}\n");
   await writeFile(path.join(box.home, "settings.json"), '{"mixedPort":7897}\n');
   const callsBefore = (await supervisorCalls(box)).length;
 
   const result = await runCli(["service", "uninstall", "--purge", "--json"], {
-    home: other,
+    home: box.home,
     env: box.env,
   });
 
@@ -1170,10 +1250,10 @@ test("home 错位:盘上 unit 记的是别的 A2_HOME → 拒绝 + 退出码 1,�
   expect(result.exitCode).toBe(1);
   const body = parseJsonStdout(result);
   expect(body.error.code).toBe("service_purge_home_mismatch");
-  expect(body.error.detail).toContain(box.home);
-  expect(body.error.guidance.context.installedHome).toBe(box.home);
+  expect(body.error.detail).toContain(other);
+  expect(body.error.guidance.context.installedHome).toBe(other);
   const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain(`A2_HOME=${box.home} a2 service uninstall --purge --json`);
+  expect(commands).toContain(`A2_HOME=${other} a2 service uninstall --purge --json`);
 
   // 零删除:两个 home、unit、服务进程全在,连一条改状态的 supervisor 命令都没发。
   expect(existsSync(path.join(other, "无关文件.json"))).toBe(true);

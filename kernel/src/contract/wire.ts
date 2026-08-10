@@ -170,14 +170,19 @@ export const ErrorCode = {
    */
   servicePurgeBlocked: "service_purge_blocked",
   /**
-   * `--purge` 的目标 `$A2_HOME` 本身不是一个可以整棵删掉的东西(17 票 CR 尾款):
-   * 文件系统根、用户家目录本身、家目录的祖先(`/Users`)、相对路径,或者**它是一根符号链接**
-   * (删链不删树:数据全在链目标里,而报文会说"删干净了" —— 那是假账)。
+   * `--purge` 的目标 `$A2_HOME` 上,这条请求根本不成立(17 票 CR 尾款立,18 票扩到白名单):
+   *   * `non_default_home` —— **不是缺省的 `~/.a2`**(18 票用户裁定:purge 只对缺省 home 生效)。
+   *     生产路径上唯一会出现的那一档;
+   *   * `filesystem_root` / `home_directory` / `home_ancestor` / `not_absolute` —— 17 票那道地板,
+   *     18 票之后被上面那条挡在前面,作为**纵深**保留;
+   *   * `symlink` / `dangling_symlink` —— 缺省 home 本身是一根符号链接(删链不删树:数据全在链目标里,
+   *     而报文会说"删干净了" —— 那是假账)。这一档在 18 票之后**照样可达**。
    *
    * 归 6(与 `service_unsupported_platform` / `service_self_copy_unsupported` 同档):
-   * 那两条说"这条请求在这台机器 / 这个 bin 上不成立",这一条说"在这个 `$A2_HOME` 上不成立"。
-   * `A2_HOME` 是公开覆写项,而 agent 的模板展开出错正是这种形状 —— 所以它是一道**必须存在**的地板,
-   * 不是防呆。`guidance.context.reason` 给出机读的拒绝原因。
+   * 那两条说"这条请求在这台机器 / 这个 bin 上不成立",这一条说"在这个 `$A2_HOME` 上不成立" ——
+   * 等到什么时候都不成立(要成立就得换掉 `A2_HOME`,那已经是另一条请求了),所以不归 1。
+   * **`guidance.context.reason` 是这一族的机读分支依据**:六种拒绝共用一个码、各带自己的 reason,
+   * 比为同一句话造六个码更好用。
    */
   servicePurgeUnsafeHome: "service_purge_unsafe_home",
   /**

@@ -28,7 +28,13 @@ import { mihomoLayout } from "../mihomo/paths.ts";
 import { readSnapshot, snapshotPath } from "../proxy/system-proxy.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts";
-import { unsafeHomeOnDisk, unsafeHomeShape, type PurgeRefusal } from "./purge-guard.ts";
+import {
+  defaultHome,
+  nonDefaultHome,
+  unsafeHomeOnDisk,
+  unsafeHomeShape,
+  type PurgeRefusal,
+} from "./purge-guard.ts";
 import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
 import {
   createSupervisor,
@@ -150,7 +156,8 @@ export interface ServiceUninstallOptions {
  * 卸载。不带 `--purge` 时口径与 15 票一字不变:**只拆内核那一个 unit**。
  *
  * 带 `--purge` 时的**顺序即安全性**,一步都不能挪:
- *   ⓪ **四道拒绝判据全部前置**,任一不过就当场拒绝、**一个字节都不删**:
+ *   ⓪ **五道拒绝判据全部前置**,任一不过就当场拒绝、**一个字节都不删**:
+ *      ⓪0 **只对缺省 `~/.a2` 放行**(18 票用户裁定;自定义 `A2_HOME` 一律拒,见 `nonDefaultHomeError`);
  *      ⓪a 目标形状(`purge-guard.ts` 的纯判据:不许是 `/`、家目录本身、家目录的祖先、相对路径);
  *      ⓪b 目标是不是符号链接(删链不删树 = 假账,如实拒绝并告诉他真实目标在哪);
  *      ⓪c **盘上那两份 unit 服务的 home 与本次的 `$A2_HOME` 一致**(见 `unitRecordedHome`);
@@ -186,6 +193,11 @@ export async function serviceUninstall(
 ): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
     if (options.purge) {
+      // ⓪0 **白名单**(18 票,用户裁定):purge 只对缺省 `~/.a2` 生效。最一刀切、最便宜,故最先跑;
+      //    它一成立,下面 ⓪a 的根 / 家目录 / 祖先几档就再也走不到了(如实记在 `purge-guard.ts` 头注,
+      //    判据与用例都保留 —— 纵深不因为"上面挡住了"就该拆掉)。
+      const custom = nonDefaultHome(paths.home);
+      if (custom) return opFailure(nonDefaultHomeError(paths, custom));
       const refusal = unsafeHomeShape(paths.home) ?? (await unsafeHomeOnDisk(paths.home));
       // ⓪a/⓪b 目标本身不成立 —— 这条请求在这个 $A2_HOME 上根本不该被执行。
       if (refusal) return opFailure(unsafeHomeError(paths, refusal));
@@ -527,6 +539,42 @@ function notAnsweringError(plan: ServicePlan): WireError {
         { description: "再查一次运行态", command: "a2 status --json" },
       ],
       context: { socketPath: plan.paths.socketPath, unitPath: plan.unitPath, home: plan.paths.home },
+    },
+  };
+}
+
+/**
+ * ⓪0:这次的 `$A2_HOME` 不是缺省的 `~/.a2`(18 票,用户裁定)。
+ *
+ * **复用 `service_purge_unsafe_home`(6)而不另立新码**,理由:这一码的语义本来就是
+ * 「这条请求在**这个 `$A2_HOME`** 上根本不成立」—— 而"自定义 home 上 purge 永远不成立"
+ * 正是这句话的一个取值,不是另一件事。真正区分它们的是 `guidance.context.reason`
+ * (`non_default_home` / `filesystem_root` / `symlink` …),那本来就是这一族的机读分支依据;
+ * 为同一句话再造一个码,只会让 agent 多写一个 case 而拿不到任何新信息。
+ *
+ * 归 6 不归 1 也是同一条道理:1 那一档是"等状态变了同一条命令就成立",而这条**等到什么时候都不成立**
+ * —— 除非你换掉 `A2_HOME`,而那已经是另一条请求了。
+ *
+ * 指引给三条**都能走通**的路:只拆服务(不挑 home)、去缺省 home 清、以及自己清这个自定义 home
+ * (那条 `rm -rf` 写明"这条会真的删" —— 数据的处置权本来就该在人手里)。
+ */
+function nonDefaultHomeError(paths: KernelPaths, refusal: PurgeRefusal): WireError {
+  const expected = defaultHome();
+  return {
+    code: ErrorCode.servicePurgeUnsafeHome,
+    message: "--purge 只清理缺省的 ~/.a2,而这次的 A2_HOME 是自定义的 —— 已拒绝,什么都没删。",
+    detail:
+      `${refusal.detail}自定义 home 多半另有用途(测试沙盒、多份配置、指向共享目录),` +
+      "内核不替你判断哪一份是「该整棵删掉的那一份」—— 那个决定连同它的后果都该在你手里。",
+    guidance: {
+      summary: "要清这个自定义 home 请自己动手(路径见下);服务本身可以照常拆,那一条不挑 home。",
+      steps: [
+        { description: "只拆服务(不动任何数据,这条对任何 A2_HOME 都成立)", command: "a2 service uninstall" },
+        { description: "确认这次用的是哪个 home", command: "a2 service status --json" },
+        { description: "要清的是缺省 home 的话,不带 A2_HOME 重来", command: "a2 service uninstall --purge" },
+        { description: "确认无误后自行清理这个自定义 home(这条会真的删)", command: `rm -rf ${paths.home}` },
+      ],
+      context: { home: paths.home, defaultHome: expected, reason: refusal.reason },
     },
   };
 }

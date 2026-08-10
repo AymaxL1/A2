@@ -1,4 +1,4 @@
-// `--purge` 那把 `rm -rf` 的护圈(17 票 CR 尾款)。
+// `--purge` 那把 `rm -rf` 的护圈(17 票 CR 尾款立;18 票用户裁定加上最外面那道白名单)。
 //
 // ============================================================================
 // 为什么这不是"防呆",是必需品
@@ -8,11 +8,18 @@
 // 就不是假想:模板展开丢了一段、环境变量没设成空串而是设成了 `/`、脚本里 `A2_HOME=$HOME/.a2` 少写一半 ——
 // 每一种都会让"删掉 a2 自己的数据目录"变成"把用户可写的东西全清了"。
 //
-// 判据分两层,**顺序有意**:
+// 判据分三层,**顺序有意**(最便宜、最一刀切的先跑):
+//   ⓪ `nonDefaultHome`(18 票,用户裁定)—— **只对缺省 `~/.a2` 放行**,任何自定义 `A2_HOME` 一律拒。
+//      这是白名单,上面那两种"绝不可能"的形状是它的下位概念;
 //   ① `unsafeHomeShape` —— **纯函数**,只看路径字符串。测试因此可以把 `/`、`$HOME`、`/Users`
 //      这些病态值原样喂进来验判据本身,而**绝不需要真的造一个 `A2_HOME=/` 去跑一次删除**;
 //   ② `unsafeHomeOnDisk` —— 看盘上那个 home 的**形状**(是不是符号链接)。这一条非碰文件系统不可,
 //      但它只 lstat/readlink,不写一个字节。
+//
+// **如实说明可达性**(18 票之后):⓪ 恒等于 `~/.a2` 才放行,于是 ① 的 `filesystem_root` /
+// `home_directory` / `home_ancestor` / `not_absolute` 四档在**生产路径上已不可达** ——
+// 它们从"唯一的门"降级为"纵深的第二道"。**保留不删**:判据的价值不只在被触发,
+// 也在"⓪ 哪天被放宽或被绕过时,下面还有一层"。它们的单元用例照旧跑,直接喂判据本身。
 //
 // 两层都返回「拒绝原因」而不是布尔值:调用方要把原因翻成人话与指引(拒绝即指引),
 // 而机读面要拿它当分支依据 —— 一个 true/false 两头都不够用。
@@ -20,9 +27,12 @@
 import { lstat, readlink, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { HOME_DIR_NAME } from "../runtime/paths.ts";
 
 /**
  * 拒绝原因(机读词表)。进 `guidance.context.reason`,agent 据此分支。
+ *   * `non_default_home` —— 不是缺省的 `~/.a2`(18 票:purge 只对缺省 home 生效)。
+ *     **生产路径上唯一会出现的那一档** —— 下面几档在它之后已不可达,见文件头的可达性说明。
  *   * `not_absolute` —— 相对路径。正常路径上不可能(`resolvePaths` 会展开),留着是因为**删除的
  *     不变量不该依赖上游有没有替我做过某件事** —— 那种依赖迟早会被一次重构悄悄拿掉。
  *   * `filesystem_root` —— 就是 `/`(或 Windows 的盘符根)。
@@ -33,6 +43,7 @@ import path from "node:path";
  *   * `dangling_symlink` —— 同上,而且链目标已经不在了。
  */
 export type PurgeRefusalReason =
+  | "non_default_home"
   | "not_absolute"
   | "filesystem_root"
   | "home_directory"
@@ -46,6 +57,38 @@ export interface PurgeRefusal {
   detail: string;
   /** 符号链接那两档才有:链指向哪儿(用户得知道去哪儿收拾)。 */
   linkTarget?: string;
+}
+
+/** 缺省 home(`~/.a2`)。`HOME_DIR_NAME` 取自 `runtime/paths.ts` —— 与 `resolvePaths` 同一个常量,不另拼一个。 */
+export function defaultHome(userHome: string = homedir()): string {
+  return path.join(userHome, HOME_DIR_NAME);
+}
+
+/**
+ * 第⓪层(18 票,用户裁定):**`--purge` 只对缺省的 `~/.a2` 生效**,任何自定义 `A2_HOME` 一律拒绝。
+ *
+ * 17 票留下的口子:护栏是**地板**不是白名单 —— 它挡得住 `/`、家目录、`/Users` 这些"绝不可能是
+ * a2 数据目录"的形状,却挡不住 `A2_HOME=/Applications`、`=~/Documents` 这类**普通目录**。
+ * 而模板展开出错最常见的落点恰恰是普通目录。这一条把那一整类从根上封死:
+ * 自定义 home 多半另有用途(测试沙盒、多份配置、指向共享目录),**内核不替人判断哪一份该整棵删掉**。
+ *
+ * 比的是**归一化后的绝对路径**,不是原始字符串:`A2_HOME=$HOME/.a2`、`=~/./.a2`、结尾多个斜杠
+ * 都是同一个地方,写法不同不该改变结论。
+ *
+ * 代价说清:自定义 home 从此**没有一键清理**,只能自己 `rm -rf`(报文里给出那条路径)。
+ * 这是有意的取舍 —— 一键清理的便利,换不来"内核在一个它不该认识的目录上做 `rm -rf`"这个风险。
+ */
+export function nonDefaultHome(
+  home: string,
+  userHome: string = homedir(),
+): PurgeRefusal | undefined {
+  const target = normalize(home);
+  const expected = normalize(defaultHome(userHome));
+  if (target === expected) return undefined;
+  return {
+    reason: "non_default_home",
+    detail: `这次的 $A2_HOME 是 ${home},而 --purge 只清理缺省的 ${expected}。`,
+  };
 }
 
 /**

@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "id": "018f7a20-9c31-7d42-b6a8-5e1f3c8d7052",
+  "ok": false,
+  "error": {
+    "code": "service_purge_unsafe_home",
+    "message": "--purge 只清理缺省的 ~/.a2,而这次的 A2_HOME 是自定义的 —— 已拒绝,什么都没删。",
+    "detail": "这次的 $A2_HOME 是 /Users/alice/work/a2-sandbox,而 --purge 只清理缺省的 /Users/alice/.a2。自定义 home 多半另有用途(测试沙盒、多份配置、指向共享目录),内核不替你判断哪一份是「该整棵删掉的那一份」—— 那个决定连同它的后果都该在你手里。",
+    "guidance": {
+      "summary": "要清这个自定义 home 请自己动手(路径见下);服务本身可以照常拆,那一条不挑 home。",
+      "steps": [
+        {
+          "description": "只拆服务(不动任何数据,这条对任何 A2_HOME 都成立)",
+          "command": "a2 service uninstall"
+        },
+        {
+          "description": "确认这次用的是哪个 home",
+          "command": "a2 service status --json"
+        },
+        {
+          "description": "要清的是缺省 home 的话,不带 A2_HOME 重来",
+          "command": "a2 service uninstall --purge"
+        },
+        {
+          "description": "确认无误后自行清理这个自定义 home(这条会真的删)",
+          "command": "rm -rf /Users/alice/work/a2-sandbox"
+        }
+      ],
+      "context": {
+        "home": "/Users/alice/work/a2-sandbox",
+        "defaultHome": "/Users/alice/.a2",
+        "reason": "non_default_home"
+      }
+    }
+  }
+}
