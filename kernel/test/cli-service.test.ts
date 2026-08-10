@@ -1147,8 +1147,9 @@ test("缺省 home 照常放行,等价写法(尾随斜杠 / `.` 段)也放行 —
   await service(box, ["install"]);
   await writeFile(path.join(box.home, "settings.json"), "{}\n");
 
-  // `<root>/./.a2/` —— 归一化之后与缺省 home 是同一个地方。
-  const equivalent = `${path.join(box.root, ".", ".a2")}/`;
+  // `<root>/./.a2/` —— **绕开 `path.join`**(它会把 `.` 段折叠掉,那样就没在验归一化了):
+  //   手拼一个真带 `.` 段与尾随斜杠的写法,归一化之后与缺省 home 是同一个地方。
+  const equivalent = `${box.root}/./.a2/`;
   const result = await runCli(["service", "uninstall", "--purge", "--json"], {
     home: equivalent,
     env: box.env,
@@ -1225,10 +1226,12 @@ test("dangling symlink 的 $A2_HOME 同样拒绝(链在、目标没了 —— �
 });
 
 /**
- * 17 票 CR 尾款:**label 是每用户一个,而 home 是每次调用一个**。
+ * 17 票 CR 尾款立、18 票之后只剩一半的那个坑:**label 是每用户一个,而 home 是每次调用一个**。
  *
- * 在 `A2_HOME=/tmp/x` 下 purge,拆掉的却是为真 home 装的那两个 unit,而接管快照判据看的是
- * `/tmp/x` 那份 —— 真 home 的还原依据根本不会被看见。这道门必须真的关上。
+ * 可达形态只有一种:**在缺省 home 上 purge,而盘上那两份 unit 是在别的 home 下装的**
+ * (`A2_HOME=/tmp/x a2 service install` 装的是同一对 label)。这时接管快照判据看的是缺省 home 那份,
+ * `/tmp/x` 的还原依据根本不会被看见 —— 放行就会拆掉正服务着它的数据面。这道门必须真的关上。
+ * (对称的另一半 —— 在自定义 home 下 purge —— 18 票之后被 ⓪0 挡死了,走不到这里。)
  */
 test("home 错位:盘上 unit 记的是别的 A2_HOME → 拒绝 + 退出码 1,两个 home 都一个字节没少", async () => {
   const box = (sandbox = await makeSandbox("launchd"));
@@ -1253,7 +1256,13 @@ test("home 错位:盘上 unit 记的是别的 A2_HOME → 拒绝 + 退出码 1,�
   expect(body.error.detail).toContain(other);
   expect(body.error.guidance.context.installedHome).toBe(other);
   const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain(`A2_HOME=${other} a2 service uninstall --purge --json`);
+  // **指引里的每一条都得真能走通**(18 票 CR 尾款):`A2_HOME=<那个自定义 home> … --purge`
+  //   会被 ⓪0 当场再拒一次,那不是指引是死路。三条自助口径:先拆服务 → 自己清那个 home →
+  //   缺省 home 的 purge 原样重跑。
+  expect(commands).toContain("a2 service uninstall");
+  expect(commands).toContain(`rm -rf ${other}`);
+  expect(commands).toContain("a2 service uninstall --purge");
+  expect(commands.some((command?: string) => command?.startsWith("A2_HOME="))).toBe(false);
 
   // 零删除:两个 home、unit、服务进程全在,连一条改状态的 supervisor 命令都没发。
   expect(existsSync(path.join(other, "无关文件.json"))).toBe(true);

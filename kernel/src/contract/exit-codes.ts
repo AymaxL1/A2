@@ -102,9 +102,11 @@ export function exitCodeForErrorCode(code: string): number {
     // 同理(15 票):`--copy-to-home` 在源码态的 bin 上根本不成立 —— 没有可分发的"自身"可拷。
     // 那条说的是这台机器,这条说的是这个 bin,同一档。
     case ErrorCode.serviceSelfCopyUnsupported:
-    // 同理(17 票 CR 尾款):`--purge` 在这个 `$A2_HOME` 上根本不成立 —— 它是 `/`、是家目录本身、
-    // 是家目录的祖先,或者是一根符号链接(删链不删树)。上一条说的是这个 bin,这条说的是这个 home。
-    // 与 1 的分界:1 那一档等状态变了同一条命令就成立,而这些形状**等到什么时候都不该被删**。
+    // 同理(17 票 CR 尾款立,18 票扩):`--purge` 在这个 `$A2_HOME` 上根本不成立 ——
+    // **`non_default_home`(18 票后生产路径上唯一可达的那一档:不是缺省 `~/.a2`)**,
+    // 或者它是 `/`、是家目录本身、是家目录的祖先(这三档已被上一条挡在前面,作纵深保留),
+    // 或者它是一根符号链接(删链不删树)。上一条说的是这个 bin,这条说的是这个 home。
+    // 与 1 的分界:1 那一档等状态变了同一条命令就成立,而这些形状**换不掉 `A2_HOME` 就永远不成立**。
     case ErrorCode.servicePurgeUnsafeHome:
     // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
     case ErrorCode.systemProxyUnsupported:

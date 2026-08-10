@@ -126,7 +126,9 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
   `context.linkTarget` 给出真实目标；另有 `/`、家目录、家目录祖先几档，在"只认缺省 home"之后已不可达，
   作为纵深保留）。`service_purge_home_mismatch`（退出码 1）——盘上那份 `com.a2.kernel` unit
   记着的是**另一个** `A2_HOME`：label 每用户一个而 `A2_HOME` 每次调用一个，
-  站错地方就会拆掉别的 home 的数据面。指引会告诉你该去哪个 `A2_HOME` 下执行。
+  放行就会拆掉那个 home 的数据面。**别指望"到那个 home 下重跑 `--purge`"**——那条路会被上一条
+  （只认缺省 `~/.a2`）当场再拒一次。指引给的是三条真能走通的：先 `a2 service uninstall` 拆服务、
+  要清那个 home 自己 `rm -rf <它>`、然后缺省 home 的 `--purge` 原样重跑（那时 unit 已不在，这道门自然让开）。
 
 ## 别处的权威
 

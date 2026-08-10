@@ -177,14 +177,16 @@ export interface ServiceUninstallOptions {
  * ============================================================================
  * `com.a2.kernel` / `com.a2.mihomo` 这两个 label 是常量(`unit.ts`,任何参数都改不了),
  * 于是**每个用户在同一时刻只可能有一套 a2 服务**;而 `$A2_HOME` 是每次调用现算的(环境变量可覆写)。
- * 两者交叉出一个真实的坑:在 `A2_HOME=/tmp/x` 下跑 purge,拆掉的却是**为真 home 装的**那两个 unit,
- * 而 ⓪d 的接管快照判据看的是 `/tmp/x/system-proxy.json` —— 真 home 那份接管记录根本不会被看见。
- * 于是"fail-closed 的门"在最需要它的那条路径上是虚掩的:一次 purge 会拆掉正承载着系统代理的
+ * 两者交叉出一个真实的坑,而 18 票之后它的形状是**反过来的那一半**:purge 只在缺省 `~/.a2` 上放行,
+ * 但那两个 unit 可能是**在别的 home 下装的**(`A2_HOME=/tmp/x a2 service install` 装的是同一对 label)。
+ * 于是"在缺省 home 上 purge"会去拆一对**服务着 `/tmp/x` 的数据面**的 unit,而 ⓪d 的接管快照判据
+ * 看的是缺省 home 那份 —— `/tmp/x/system-proxy.json` 根本不会被看见。放行 = 拆掉正承载着系统代理的
  * 用户级 `com.a2.mihomo`,当场断网。
+ * (18 票之前还有对称的另一半:在自定义 home 下 purge 去拆缺省 home 的 unit。那一半现在被 ⓪0 挡死了。)
  *
  * ⓪c 就是把这扇门真的关上:**盘上那两份 unit 各自带着它服务的那个 home 的指纹** ——
  * 内核那份记着安装时的 `A2_HOME`(`servicePlan` 写进去的),mihomo 那份是它跑的二进制路径
- * (`<home>/mihomo/bin/mihomo`)。任一与本次的 home 不一致就拒绝,并指引到那个 home 去执行。
+ * (`<home>/mihomo/bin/mihomo`)。任一与本次的 home 不一致就拒绝。
  * 两份都不在则跳过这一条 —— 没有 unit 就没有"被托管的数据面",当前 home 的快照判据照常管用。
  */
 export async function serviceUninstall(
@@ -650,13 +652,21 @@ function homeMismatchError(plan: ServicePlan, mismatch: HomeMismatch): WireError
         "(内核那份写在 A2_HOME 里,mihomo 那份写在它跑的二进制路径里)," +
         "所以这份要么不是本内核写的、要么被改坏了。删除不可逆,不猜。",
     guidance: {
+      // **不许指引「到那个 home 下重跑 --purge」**(18 票 CR 尾款抓到的死路):
+      //   mismatch 在 18 票之后唯一可达的形态是「当前=缺省 home、unit 记着某个自定义 home」,
+      //   而 `A2_HOME=<那个自定义 home> … --purge` 必然被 ⓪0 当场再拒一次(6)。
+      //   照那句话走的人会来回撞两堵墙。三条都真能走通的路才配叫指引。
       summary: known
-        ? "到那个 A2_HOME 下执行(或先在那边把服务与系统代理收拾干净),这条命令就成立了。"
+        ? "先把服务拆掉(那一条不挑 home);那个 home 的数据要不要清、怎么清由你自己决定。"
         : "先看一眼那份 unit 到底是什么,再决定手工处置还是重装一次收敛回来。",
       steps: known
         ? [
-            { description: "到那个 home 下清理(先看后删)", command: `A2_HOME=${known} a2 service uninstall --purge --json` },
-            { description: "只拆服务、不动数据的话,这条不挑 home", command: "a2 service uninstall" },
+            { description: "先拆服务(不动任何数据,这条对任何 A2_HOME 都成立)", command: "a2 service uninstall" },
+            {
+              description: `确认无误后自行清理那个 home(这条会真的删)`,
+              command: `rm -rf ${known}`,
+            },
+            { description: "缺省 home 的清理照常重跑(此时 unit 已不在,这道门自然让开)", command: "a2 service uninstall --purge" },
             { description: "确认当前这次调用用的是哪个 home", command: "a2 service status --json" },
           ]
         : [
