@@ -43,65 +43,9 @@ export class MihomoOperationError extends Error {
   }
 }
 
-/**
- * 收编记录 —— **收编档唯一会落盘的东西**,而且只落在 a2 自己的 home 里。
- *
- * 为什么非要有它:「被收编的实例死了要报警」这句话得有主语。没有记录的话,内核无从区分
- * 「我收编过的那个实例没了」与「这台机器上本来就没有跑着的 mihomo」—— 后者该顺势走复用/安装档,
- * 前者必须停下来报警 + 指路(票面第 2 条:内核不越权重拉)。
- */
-export interface MihomoAdoption {
-  controller: string;
-  configFile?: string;
-  adoptedAt: string;
-}
-
-function adoptionFile(layout: MihomoLayout): string {
-  return path.join(layout.dataDir, "adopted.json");
-}
-
-export async function readAdoption(layout: MihomoLayout): Promise<MihomoAdoption | undefined> {
-  const text = await Bun.file(adoptionFile(layout)).text().catch(() => undefined);
-  if (text === undefined) return undefined;
-  try {
-    const parsed = JSON.parse(text) as Partial<MihomoAdoption>;
-    return typeof parsed.controller === "string" && parsed.controller.length > 0
-      ? {
-          controller: parsed.controller,
-          ...(typeof parsed.configFile === "string" ? { configFile: parsed.configFile } : {}),
-          adoptedAt: typeof parsed.adoptedAt === "string" ? parsed.adoptedAt : "",
-        }
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 记下收编对象。已经记着同一个就什么都不做(幂等)。 */
-export async function recordAdoption(
-  layout: MihomoLayout,
-  adoption: Omit<MihomoAdoption, "adoptedAt">,
-): Promise<boolean> {
-  const current = await readAdoption(layout);
-  if (current?.controller === adoption.controller && current.configFile === adoption.configFile) {
-    return false;
-  }
-  await mkdir(layout.dataDir, { recursive: true, mode: DATA_DIR_MODE });
-  await chmod(layout.dataDir, DATA_DIR_MODE);
-  await writeFile(
-    adoptionFile(layout),
-    `${JSON.stringify({ ...adoption, adoptedAt: new Date().toISOString() }, null, 2)}\n`,
-    { mode: CONFIG_MODE },
-  );
-  return true;
-}
-
-/** 解除收编。返回是否**本次**真的删掉了记录。 */
-export async function releaseAdoption(layout: MihomoLayout): Promise<boolean> {
-  if ((await readAdoption(layout)) === undefined) return false;
-  await removeIfPresent(adoptionFile(layout));
-  return true;
-}
+// 收编记录(`adopted.json`)随收编档一并退场(2026-08-12 用户裁定「已有在跑的 mihomo 只读、不接管」)。
+// 现在内核**不往盘上写任何「我盯着别人哪个实例」的状态** —— 别人的实例只在 `a2 mihomo status` 里被读、
+// 被报告。旧版本留下的 `adopted.json` 没有任何代码会再读它,是一个惰性文件(`--purge` 会随 home 一并清掉)。
 
 /** 建 a2 自管的数据目录。已在则什么都不做(返回是否**本次**建的 —— 幂等的可观察面靠它)。 */
 export async function ensureDataDir(layout: MihomoLayout): Promise<boolean> {

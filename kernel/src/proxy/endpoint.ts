@@ -4,8 +4,12 @@
 // 否则同一台机器上会出现两个来源不同、随时会打架的答案。代价是每条代理命令都要过一遍检测
 // (一次 `mihomo -v` + 一次 supervisor 查询 + 一到两次回环 GET),换来的是"控制面永远只有一个真相"。
 //
-// 钥匙(secret)**每次现读**那份配置:自管档读 `<home>/mihomo/config.yaml`,收编档读别人那份 ——
-// 它随时可能被主人改,缓存一把过期的钥匙只会让某次写操作毫无征兆地变成 401。
+// 钥匙(secret)**每次现读**那份配置:自管的读 `<home>/mihomo/config.yaml`,别人的读它自己那份 ——
+// 它随时可能被主人改,缓存一把过期的钥匙只会让某次请求毫无征兆地变成 401。
+//
+// 收编档废除后(2026-08-12),别人的实例仍然会成为这里的 target ——「读它的状态」正是留下来的那件事。
+// 变的是写面:能对 external-controller 发写请求的那几条能力已整体停用(见 `capability/proxy.ts`
+// 的 `DISABLED_CAPABILITY_IDS`),所以本文件的两道闸目前只在停用能力的代码路径上还有调用点。
 
 import { CapabilityFailedError } from "../capability/registry.ts";
 import {
@@ -29,7 +33,7 @@ export interface ProxyTarget {
   /**
    * 此刻有没有一个可用于控制的实例。判据:控制面可达,**或**(自管档且 supervisor 报了 pid)。
    * 后半句保住了旧口径里那条独立事实 ——「进程活着但控制面还没就绪」不该被说成"没在跑"。
-   * 收编档没有后半句:别人的进程生死归原托管方,内核对它只有控制面这一个观察窗口(这是红线,不是遗漏)。
+   * 别人那份没有后半句:它的进程生死归原托管方,内核对它只有控制面这一个观察窗口(这是红线,不是遗漏)。
    */
   running: boolean;
   version?: string;
@@ -111,7 +115,7 @@ export function requireReachable(target: ProxyTarget): void {
     `mihomo 的控制端点 ${target.endpoint.controller} 连不上,这条命令没有对象。`,
     managed
       ? "a2 自管的那份 mihomo 此刻没有应答(可能没起来,也可能刚起还没就绪)。"
-      : "被收编的那个实例此刻没有应答 —— 它的生命周期归原托管方,内核不会替你重拉。",
+      : "别人托管的那个实例此刻没有应答 —— 它的生命周期归原托管方,内核不会替你重拉。",
     {
       code: ErrorCode.mihomoUnreachable,
       guidance: {
@@ -136,29 +140,29 @@ export function requireReachable(target: ProxyTarget): void {
 /**
  * 要求这份归 a2 管 —— **「换配置文件」类动作的唯一闸门**(配置面收敛、订阅激活/更新)。
  *
- * 为什么收编档要在这里被挡住:`PUT /configs {path}` 的语义是「把配置整个换成我这份」。
+ * 为什么别人那份要在这里被挡住:`PUT /configs {path}` 的语义是「把配置整个换成我这份」。
  * 对别人的实例做这件事,等于替人家把配置抢了 —— 与「进程生死归原托管方」是同一条边界的两侧。
- * 收编档能做的写面到 `PATCH /configs`(改 mode)与 `PUT /proxies/<组>`(选节点)为止:
- * 那两条改的是运行时开关,不换文件、不碰进程。
+ *
+ * 注:它的三个调用点(`proxy.config.set` / 订阅激活 / 订阅更新)当前都在停用名单里,
+ * 所以这道闸此刻是**纵深而非第一道防线**。恢复那几条能力时它原样生效,不需要重新想一遍。
  */
 export function requireManaged(target: ProxyTarget, what: string): void {
   if (target.endpoint.managed) return;
   throw new CapabilityFailedError(
     `${what}只对 a2 自管的 mihomo 有效,当前控制的是别人托管的实例。`,
     `当前端点 ${target.endpoint.controller} 属于 ${target.endpoint.owner};` +
-      "内核对被收编的实例只改运行时开关(模式、节点),绝不替它换配置文件。",
+      "内核绝不替别人的实例换配置文件。",
     {
       code: ErrorCode.mihomoNotManaged,
       guidance: {
         summary:
-          "要让 a2 管配置与订阅,得让它拥有一份自己的实例;别人那份的配置请由它的主人维护。",
+          "别人那份的配置请由它的主人(你自己、或你的 agent)直接改那份配置文件;内核只读它。",
         steps: [
           { description: "看清楚现在是哪一档、各自是什么", command: "a2 mihomo status --json" },
           {
-            description: "让 a2 装一份自管实例(与你那份并存,入站端口需自行避开冲突)",
+            description: "要让 a2 管配置,得让它拥有一份自己的实例(与你那份并存,入站端口需自行避开冲突)",
             command: "a2 mihomo install --isolated --json",
           },
-          { description: "对被收编的实例,这两条仍然可用", command: "a2 proxy mode --mode rule --json" },
         ],
         context: { controller: target.endpoint.controller, owner: target.endpoint.owner },
       },

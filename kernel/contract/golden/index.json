@@ -183,10 +183,10 @@
       "why": "现状三态之一(全无):档位=脚本安装,未就位时也要给出 unit/二进制/配置将落到哪儿"
     },
     {
-      "file": "mihomo-status-adopted.json",
+      "file": "mihomo-status-foreign-running.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "收编档:instance.owner=foreign(生命周期归原托管方),能力位三条都是探出来的,a2 自己那份仍未安装"
+      "why": "别人的实例在跑:如实报出 instance.owner=foreign 与它的能力位,但 provisioned=false、档位仍按「a2 自己要就位的话走哪条」算 —— 看得见 ≠ 已接管(收编档 2026-08-12 废除)"
     },
     {
       "file": "mihomo-status-reused.json",
@@ -201,10 +201,10 @@
       "why": "复用对象不达地板 → 回退隔离安装(fallback 说明原因);另含被跳过的非回环控制端点"
     },
     {
-      "file": "mihomo-change-adopted.json",
-      "schema": "MihomoChangeResult",
+      "file": "response-mihomo-foreign-running.json",
+      "schema": "ResponseEnvelope",
       "kind": "valid",
-      "why": "收编档 install 的 result:唯一动作是记下收编对象,不装二进制、不写 unit"
+      "why": "别人的实例在跑而 a2 未就位:install 结构化拒绝 + **零改动**,指引给出「只读着用」与「显式 --isolated 并存」两条路(退出码 5)"
     },
     {
       "file": "mihomo-change-install.json",
@@ -216,19 +216,13 @@
       "file": "response-mihomo-unreachable.json",
       "schema": "ResponseEnvelope",
       "kind": "valid",
-      "why": "被收编的实例死了:报警 + 指引里带**人类可执行的重启命令**,内核不越权重拉(退出码 5)"
+      "why": "别人托管的那个实例此刻不应答:代理域命令没有对象 → 报警 + 指路,内核不越权重拉(退出码 5)"
     },
     {
-      "file": "response-mihomo-below-floor.json",
-      "schema": "ResponseEnvelope",
-      "kind": "valid",
-      "why": "收编对象不达兼容地板:结构化降级报告 + 两条明路,内核不擅自升级别人的东西(退出码 5)"
-    },
-    {
-      "file": "invalid-mihomo-status-fourth-rung.json",
+      "file": "invalid-mihomo-status-retired-rung.json",
       "schema": "MihomoStatusResult",
       "kind": "invalid",
-      "why": "阶梯档位不在三档内 —— 档位是 agent 的分支依据,不许有第四档"
+      "why": "已废除的档位名 adopt_instance 必须被拒 —— 档位是 agent 的分支依据,退场的那一档不许再从任何地方冒出来"
     },
     {
       "file": "invalid-mihomo-change-unknown-action.json",

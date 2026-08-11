@@ -139,15 +139,17 @@ export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据�
   a2 [--json] mihomo uninstall             卸掉 a2 自管的那份(unit + 进程;二进制/配置/数据保留)
   a2 [--json] mihomo upgrade               显式升级 a2 自管的二进制到锁定版
 
-共存阶梯(检测并优先复用,复用到实例级):
-  adopt_instance        有跑着的实例且 external-controller 可达 → 经 API 接管配置与存活监督;
-                        **进程生死归原托管方** —— 内核绝不 stop/restart/kill 它,实例没了只报警 + 指引
-  reuse_binary          只有二进制 → 只读复用它(落点上放一个符号链接,真身一个字节都不碰),
+共存阶梯(检测并优先复用,复用**到二进制级为止**):
+  reuse_binary          盘上有二进制 → 只读复用它(落点上放一个符号链接,真身一个字节都不碰),
                         配置/数据目录与 com.a2.mihomo unit 全套自建
   managed_install       全无(或 --isolated)→ 按锁定版从官方渠道下载 + SHA-256 校验 + 落位,再挂 unit
 
-兼容地板:被收编/被复用的那份不达地板时,内核**不擅自升级别人的东西** —— 收编档结构化拒绝并给两条明路,
-复用档回退为隔离安装并在报文里说明原因(result.fallback)。
+已有实例在跑怎么办:**只读,不接管**(2026-08-12 用户裁定)。a2 mihomo status 照旧如实报出它的地址、
+版本与能力位;但 a2 未就位时 install 会结构化拒绝(mihomo_foreign_instance_running)且**零改动** ——
+机器上要不要并存两份 mihomo 是有代价的决定,交给人来做,逃生门是显式的 --isolated。
+
+兼容地板:要复用的那份二进制不达地板时,内核**不擅自升级别人的东西** ——
+回退为隔离安装并在报文里说明原因(result.fallback)。
 
 版本:锁定版由内核编译期常量固定;**任何路径都不静默换版本**,换版本只有 a2 mihomo upgrade 一条命令。
 
@@ -156,7 +158,7 @@ export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据�
 
 环境变量:
   A2_HOME                  覆写 ~/.a2(自管 mihomo 落在 <A2_HOME>/mihomo/)
-  A2_MIHOMO_CONTROLLER     直接指定要收编的 external-controller(host:port),跳过配置解析
+  A2_MIHOMO_CONTROLLER     直接指定别人那个 external-controller(host:port),跳过配置解析(只用于读)
   A2_MIHOMO_SECRET         配套上一条的 secret
   A2_MIHOMO_CONTROLLER_PORT 覆写 a2 自管实例的控制端口(默认 ${A2_MIHOMO_CONTROLLER_PORT},有意避开 mihomo 默认的 9090)
   A2_MIHOMO_RELEASE_BASE   覆写发布渠道根地址(镜像源)
@@ -177,27 +179,22 @@ export const PROXY_USAGE = `a2 proxy —— 代理控制面(域子命令 = 能�
   a2 [--json] proxy off                           **还原**系统代理到接管前(normal;「退出即还原」废除后唯一的还原入口)
   a2 [--json] proxy system                        系统代理实况:逐服务逐类型的当前设置 + 有没有接管快照(safe)
   a2 [--json] proxy mode get                      读当前模式(safe)
-  a2 [--json] proxy mode --mode rule|global|direct 切模式(normal)
   a2 [--json] proxy groups                        列分组与候选节点(safe)
-  a2 [--json] proxy node --group G --node N       按组选节点(normal)
-  a2 [--json] proxy ping --group G [--timeout ms] [--url URL]   按组测速(safe)
   a2 [--json] proxy config                        读自管配置的可调项(safe)
-  a2 [--json] proxy config set [--mixedPort N] [--allowLan true|false]
-                                [--logLevel …] [--mode …]        改可调项并重载(normal)
-  a2 [--json] proxy subscription list             列订阅与激活项(safe)
-  a2 [--json] proxy subscription add --name N --source S    新增/换源(**dangerous**,无确认器时默拒)
-  a2 [--json] proxy subscription update --id ID   重新拉取(normal;激活项会重载,失败自动回滚)
-  a2 [--json] proxy subscription activate --id ID 让它生效(normal)
-  a2 [--json] proxy subscription remove --id ID   删除(**dangerous**:不可逆)
   a2 [--json] proxy supervision                   读 daemon 的存活观测与最近事件(safe)
+
+**当前停用**(2026-08-12 用户裁定「restful 控制 mihomo 暂时关掉,读状态就够了」):
+  proxy mode --mode …(切模式)、proxy node(选节点)、proxy ping(测速)、
+  proxy config set(改可调项)、proxy subscription …(订阅五条)
+敲这些子命令会报「未知子命令」—— 因为它们的能力没有注册,别名也就不存在。要改 mihomo 的配置,
+直接改配置文件(你自己或让 agent 改);a2 这边只负责把它读出来给你看。
 
 同一件事的两种写法:
   a2 proxy on   ≡   a2 capabilities call proxy.system.enable
 两者走的是**同一个** registry.invoke —— 仲裁、参数校验、dangerous 默拒完全一致(有断言把守)。
 
-跟哪个 mihomo 说话:与 a2 mihomo status 报的 result.instance 是同一个答案(自管档 = a2 自己那份,
-收编档 = 你自己那个实例)。**收编档的写面到配置为止**:改模式、选节点可以;换配置文件类的动作
-(改可调项、激活/更新订阅)一律 mihomo_not_managed —— 别人的实例其配置归它的主人。
+跟哪个 mihomo 说话:与 a2 mihomo status 报的 result.instance 是同一个答案 —— a2 自管那份优先,
+它不在时就读你自己那个实例。对别人那份内核**只读**:既不接管它,也不替它改配置、改模式、选节点。
 
 系统代理:接管与还原都是**显式命令**,不挂任何客户端的生命周期。接管前的完整状态(逐网络服务 ×
 逐类型 × 逐字段)落在 <A2_HOME>/system-proxy.json;有它在,a2 proxy off 永远能精确还原

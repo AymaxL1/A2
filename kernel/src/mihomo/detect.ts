@@ -12,7 +12,6 @@ import type { MihomoBinaryKind } from "../contract/wire.ts";
 import type { Supervisor, SupervisorState } from "../service/supervisor.ts";
 import type { ServicePlan } from "../service/unit.ts";
 import { probeController, type ControllerProbe } from "./controller.ts";
-import { readAdoption, type MihomoAdoption } from "./install.ts";
 import {
   loopbackTarget,
   readControllerFromConfig,
@@ -63,8 +62,6 @@ export interface MihomoFacts {
   foreign?: ControllerFinding;
   /** 配置里写着、但**不是回环**因而没去探的端点(如实报告,不静默丢弃)。 */
   skipped?: { address: string; configFile?: string };
-  /** a2 记下的收编对象(有它才谈得上"我收编的那个实例死了")。 */
-  adoption?: MihomoAdoption;
 }
 
 export async function collectFacts(
@@ -73,11 +70,10 @@ export async function collectFacts(
   plan: ServicePlan,
   supervisor: Supervisor,
 ): Promise<MihomoFacts> {
-  const adoption = await readAdoption(layout);
   const [managed, foreignBinary, foreignConfig] = await Promise.all([
     collectManaged(layout, plan, supervisor),
     findForeignBinary(scan.binaryDirs, layout.binDir),
-    findForeignController(scan, adoption),
+    findForeignController(scan),
   ]);
 
   const base = {
@@ -85,7 +81,6 @@ export async function collectFacts(
     scan,
     managed,
     ...(foreignBinary ? { foreignBinary } : {}),
-    ...(adoption ? { adoption } : {}),
   };
   if (!foreignConfig) return base;
   if ("skipped" in foreignConfig) return { ...base, skipped: foreignConfig.skipped };
@@ -157,25 +152,13 @@ type ControllerCandidate =
   | { skipped: { address: string; configFile?: string } };
 
 /**
- * 收编记录优先(**已经收编的那个端点就是要盯的那个**,哪怕它此刻连不上),
- * 其次是显式指定,最后才按顺序读候选配置(第一份解析出地址的即用)。
+ * 显式指定优先,否则按顺序读候选配置(第一份解析出地址的即用)。
+ *
+ * 找到的东西**只用来报告**:收编档废除后,内核对别人的实例除了两条只读 GET 之外什么都不做。
  */
 async function findForeignController(
   scan: MihomoScanInputs,
-  adoption: MihomoAdoption | undefined,
 ): Promise<ControllerCandidate | undefined> {
-  if (adoption) {
-    const target = loopbackTarget(adoption.controller);
-    if (!target) return { skipped: { address: adoption.controller, ...(adoption.configFile ? { configFile: adoption.configFile } : {}) } };
-    // 收编记录只存地址,钥匙每次现读那份配置(它随时可能被主人改)。
-    const secret = adoption.configFile ? await readSecretOf(adoption.configFile) : undefined;
-    return {
-      target,
-      address: adoption.controller,
-      ...(secret ? { secret } : {}),
-      ...(adoption.configFile ? { configFile: adoption.configFile } : {}),
-    };
-  }
   if (scan.explicit) {
     const target = loopbackTarget(scan.explicit.controller);
     if (!target) return { skipped: { address: scan.explicit.controller } };

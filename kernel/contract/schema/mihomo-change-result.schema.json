@@ -17,7 +17,6 @@
         "rung": {
           "type": "string",
           "enum": [
-            "adopt_instance",
             "reuse_binary",
             "managed_install"
           ]
@@ -207,7 +206,6 @@
             "from": {
               "type": "string",
               "enum": [
-                "adopt_instance",
                 "reuse_binary",
                 "managed_install"
               ]
@@ -261,8 +259,6 @@
       "items": {
         "type": "string",
         "enum": [
-          "adoption_recorded",
-          "adoption_released",
           "data_dir_created",
           "config_written",
           "binary_downloaded",

@@ -112,15 +112,53 @@ public enum A2PanelFixtures {
                                parameters: [], cliAlias: ["arbitration", "status"]),
     ]
 
+    /// 内核**当前停用**的能力 id(2026-08-12 用户裁定:「restful 控制 mihomo 的功能暂时关闭掉,
+    /// 读一下 mihomo 状态就够了;mihomo 应该让用户自己用 agent 去配置」)。
+    ///
+    /// 这份名单必须与内核 `capability/proxy.ts` 的 `DISABLED_CAPABILITY_IDS` 一致 ——
+    /// 旗舰 e2e 的 `PANEL_MANIFEST` 拿真内核快照对 `liveCapabilities`,不一致当场红。
+    public static let disabledCapabilityIDs: Set<String> = [
+        "proxy.config.set", "proxy.mode.set", "proxy.node.select", "proxy.latency.test",
+        "proxy.subscription.list", "proxy.subscription.add", "proxy.subscription.update",
+        "proxy.subscription.activate", "proxy.subscription.remove",
+    ]
+
+    /// 内核**此刻真会注册**的那一份 —— 对账用。
+    ///
+    /// 为什么不直接把停用的九条从 `capabilities` 里删掉:上面那份是**渲染器的覆盖面**。
+    /// 模式项、节点子菜单、订阅三组的渲染逻辑一行没删(裁定说的是「暂时」),那些断言必须继续跑,
+    /// 否则能力恢复注册的那天,渲染面是一片没人验过的代码。两份清单各司其职:
+    /// `capabilities` 喂渲染器,`liveCapabilities` 喂对账。
+    public static let liveCapabilities: [A2CapabilityDescriptor] =
+        capabilities.filter { !disabledCapabilityIDs.contains($0.id) }
+
     /// **有意不进菜单**的 normal/dangerous 代理能力,逐条带理由。
     ///
     /// 这张表是「反向交叉核对」的唯一豁免口:真内核里每一条可发起的 `proxy.*` 能力,
     /// 要么在菜单里露出,要么在这里记一笔。**空理由不接受**。
-    public static let menuExemptCapabilities: [String: String] = [
-        "proxy.config.set":
-            "自管配置的可调项(mixedPort / allowLan / logLevel / 默认 mode)。不在 04 票 In 清单里,"
-            + "而且它改的是 mihomo 的配置文件而非「当下用哪条线路」—— 属安装/调优面,归 CLI(`a2 proxy config`)。"
-            + "菜单里给一个能改监听端口的入口,只会让用户在不知道后果的时候改坏一台正在用的机器。",
+    ///
+    /// (2026-08-12 起为空:唯一的常客 `proxy.config.set` 随写面一并停用 —— 它已经不在内核注册表里,
+    /// 再留一条豁免记录就成了「幽灵名」,探针第⑤条会判红。恢复它的注册时把下面这条理由搬回来:
+    /// 「自管配置的可调项不在 04 票 In 清单里,而且它改的是 mihomo 的配置文件而非『当下用哪条线路』——
+    /// 属安装/调优面,归 CLI;菜单里给一个能改监听端口的入口,只会让用户在不知道后果的时候改坏一台
+    /// 正在用的机器。」)
+    public static let menuExemptCapabilities: [String: String] = [:]
+
+    /// 04 票 In 清单六项各自**背后是哪条能力** —— 覆盖面断言据此区分两件事:
+    /// 「这一项没露出来是因为回归了」与「它背后的能力当前根本没注册,本就不该露出来」。
+    ///
+    /// 写在这里而不是散在断言里,是因为它是一条**产品承诺与实现的对账表**:哪天某项承诺被收回
+    /// 或恢复,改的是这一行,而不是某个 if。
+    public static let userActionCapabilities: [String: [String]] = [
+        "systemProxyToggle": ["proxy.system.enable", "proxy.system.disable"],
+        "modeSwitch": ["proxy.mode.set"],
+        "nodeSelect": ["proxy.node.select"],
+        "subscriptionManage": [
+            "proxy.subscription.list", "proxy.subscription.activate",
+            "proxy.subscription.update", "proxy.subscription.remove",
+        ],
+        "latencyTest": ["proxy.latency.test"],
+        "basicStatus": ["proxy.status"],
     ]
 
     // ============ 三种「主要菜单状态」 ============

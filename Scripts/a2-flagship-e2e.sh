@@ -95,6 +95,17 @@ PROBE_BIN="$("$SWIFT_BIN" build --scratch-path "$ROOT/.build/flagship" --show-bi
 
 # ---- ③ 沙盒(口径抄 kernel/test/support/proxy-sandbox.ts)-------------------------------
 BOX="$(mktemp -d /tmp/a2fs-XXXXXX)"
+
+# 真实 `~/.a2` 的**本轮基线**(红线自查 R-1 用)。
+#
+# 原判据是「`~/.a2` 不存在」—— 那条在开发机上成立,但用户**真的把 a2 装到自己机器上**之后
+# 就永远红了(2026-08-12 实测:真机验收装出的 ~/.a2 让门禁两条 e2e 齐红)。红线的本意从来不是
+# 「这台机器不许有 a2」,而是**「门禁不许碰用户那一份」**。所以改成基线比对:落一个时间戳标记,
+# 跑完用 `find -newer` 看真实 home 里有没有任何文件被本轮写过。它同时更严 —— 原判据对
+# 「home 本来就在、被门禁改了」是完全看不见的。
+REAL_A2_MARKER="$BOX/.real-a2-marker"
+: > "$REAL_A2_MARKER"
+
 A2HOME="$BOX/a2home"
 SUPPORT="$ROOT/kernel/test/support"
 FAKE_SUPERVISOR="$SUPPORT/fake-supervisor"
@@ -258,18 +269,28 @@ PROXY_ON_OUT="$(a2 proxy on --json 2>&1)"; assert_eq "$?" "0" "1-2 a2 proxy on �
 NET_STATE="$(cat "$BOX/netfake-state.json")"
 assert_contains "$NET_STATE" "\"port\": $MIXED_PORT" "1-3 系统代理已指向 mihomo 的混合入站端口(改的是假 networksetup)"
 
-MODE_OUT="$(a2 proxy mode --mode global --json 2>&1)"; assert_eq "$?" "0" "1-4 a2 proxy mode --mode global 成功"
-NODE_OUT="$(a2 proxy node --group PROXY --node A2 --json 2>&1)"; assert_eq "$?" "0" "1-5 a2 proxy node 选中 A2 成功"
+# 2026-08-12 用户裁定:**restful 控制 mihomo 的写面整体停用**(切模式 / 选节点 / 测速 / 改可调项 /
+# 订阅五条),只留读。它们的能力没有注册,于是**别名层就不存在** —— 这里正面验一次,
+# 免得"敲了没反应"被当成回归。恢复注册即恢复这些子命令(见 capability/proxy.ts 的 DISABLED_CAPABILITY_IDS)。
+for disabled_cmd in "mode --mode global" "node --group PROXY --node A2" "ping --group PROXY" \
+                    "config set --logLevel debug" "subscription list"; do
+  # shellcheck disable=SC2086
+  DIS_OUT="$(a2 proxy $disabled_cmd --json 2>&1)"; DIS_RC=$?
+  assert_eq "$DIS_RC" "1" "1-4 停用的写面子命令「proxy ${disabled_cmd}」不存在(用法错)"
+  assert_contains "$DIS_OUT" "usage" "1-5 拒因是用法错而不是业务失败(能力没注册 → 别名不存在)"
+done
 
-# 换源是 dangerous —— 这一步就是幕②的批准分支(旗舰链里它必须经确认器)。
-ADD_OUT="$(a2 proxy subscription add --name "机场 A" --source "file://$BOX/subs/airline-a.yaml" --json 2>&1)"
+# 读面照旧 —— 这就是「读一下 mihomo 状态就够了」那半句的活体证据。
+assert_eq "$(a2 proxy mode get --json >/dev/null 2>&1; echo $?)" "0" "1-6 读面还在:proxy mode get"
+assert_eq "$(a2 proxy groups --json >/dev/null 2>&1; echo $?)" "0" "1-7 读面还在:proxy groups"
+
+# dangerous 档的活体样本改用 demo.wipe(handler 不做任何实际动作,但**风险档与仲裁路径与真能力完全一样**)。
+# 原先骑在 `proxy.subscription.add` 上 —— 那条随订阅一并停用了;恢复订阅时把下面三处换回去即可。
+DANGEROUS_ID="demo.wipe"
+DANGEROUS_INPUT='{"target":"/dev/disk9"}'
+ADD_OUT="$(a2 capabilities call "$DANGEROUS_ID" --input "$DANGEROUS_INPUT" --json 2>&1)"
 ADD_RC=$?
-assert_eq "$ADD_RC" "0" "2-1 dangerous 换源经确认器批准后放行(退出码 0)"
-SUB_ID="$(printf '%s' "$ADD_OUT" | json_get result.output.id 2>/dev/null)"
-note "订阅 id = ${SUB_ID:-取不到}"
-
-ACT_OUT="$(a2 proxy subscription activate --id "$SUB_ID" --json 2>&1)"; assert_eq "$?" "0" "1-6 激活订阅成功(normal)"
-UPD_OUT="$(a2 proxy subscription update --id "$SUB_ID" --json 2>&1)"; assert_eq "$?" "0" "1-7 更新订阅成功(normal,零确认)"
+assert_eq "$ADD_RC" "0" "2-1 dangerous 经确认器批准后放行(退出码 0)"
 
 # 壳的菜单**跟着变**了没有:等投影落定。
 sleep 1.5
@@ -279,10 +300,8 @@ note "壳菜单末态:$MENU_LAST"
 # 模式/节点断言比的是**整条时间线**而不是末态:激活订阅会把 a2 自管配置整份重渲染,
 #   模式随之回到配置里的默认值(内核的真实行为,不是壳的缺陷)。要验的是「切模式那一刻
 #   菜单跟着变了」,所以判据是「这条时间线上出现过 mode=global」。
-assert_contains "$MENU_LOG" "mode=global" "1-8 切模式那一刻壳菜单勾选了 global(事件投影,零轮询)"
-assert_contains "$MENU_LOG" "PROXY:A2"    "1-8b 选节点那一刻壳菜单在 PROXY 组里勾选了 A2"
+# 写面停用后,菜单里能被这条链改变的只剩系统代理接管态 —— 那正是它现在唯一的"开关"。
 assert_contains "$MENU_LAST" "systemProxy=on" "1-9 壳菜单显示系统代理已接管"
-assert_contains "$MENU_LAST" "active=$SUB_ID" "1-10 壳菜单勾选了激活的那条订阅"
 MENU_COUNT="$(grep -c '^PANEL_MENU:' "$BOX/probe-approve.log")"
 if [ "$MENU_COUNT" -ge 3 ]; then
   ok "1-11 壳菜单在链条推进中多次更新($MENU_COUNT 次,状态变化真的被投影出来了)"
@@ -292,17 +311,16 @@ fi
 
 # 零打断:整条链里只有换源那一次确认(其余全是 safe/normal)。
 CONFIRM_COUNT="$(grep -c '^PANEL_CONFIRM:' "$BOX/probe-approve.log")"
-assert_eq "$CONFIRM_COUNT" "1" "1-12 零 GUI 打断:旗舰链里只有 dangerous 换源那一次弹到确认器"
+assert_eq "$CONFIRM_COUNT" "1" "1-12 零 GUI 打断:旗舰链里只有 dangerous 那一次弹到确认器"
 
 # 确认内容原样呈现(防「agent 替用户点确认」的社工话术)。
 CONFIRM_LINE="$(grep -m1 '^PANEL_CONFIRM:' "$BOX/probe-approve.log")"
-assert_contains "$CONFIRM_LINE" "capability=proxy.subscription.add" "2-2 确认请求带着能力坐标"
-assert_contains "$CONFIRM_LINE" "name: 机场 A" "2-3 确认器原样呈现入参 name"
-assert_contains "$CONFIRM_LINE" "source: file://$BOX/subs/airline-a.yaml" "2-4 确认器原样呈现入参 source"
+assert_contains "$CONFIRM_LINE" "capability=$DANGEROUS_ID" "2-2 确认请求带着能力坐标"
+assert_contains "$CONFIRM_LINE" "target: /dev/disk9" "2-3 确认器原样呈现入参 target"
 assert_contains "$(grep -m1 '^PANEL_DECIDED:' "$BOX/probe-approve.log")" "decision=approve" "2-5 决定经协议回传(批准)"
 
-SUBS_JSON="$(a2 proxy subscription list --json 2>&1)"
-assert_contains "$SUBS_JSON" "$SUB_ID" "2-6 批准之后订阅真的进了清单"
+# handler 的回执原样进 result —— 「批准了就真的执行了」不能只看退出码(那也可能是被静默跳过)。
+assert_contains "$ADD_OUT" "/dev/disk9" "2-6 批准之后 handler 真的被调到了(回执带着入参进了 result)"
 
 # 对账:壳与真内核的能力面(菜单覆盖面/可追溯性/反向核对全在探针里逐条判)。
 MANIFEST_LINE="$(grep -m1 '^PANEL_MANIFEST:' "$BOX/probe-approve.log")"
@@ -310,12 +328,14 @@ note "$MANIFEST_LINE"
 assert_contains "$MANIFEST_LINE" "ok=1" \
   "5-1 壳装置里的能力清单与**真内核快照**逐条一致(risk / cliAlias / 必填参数 / 取值域)"
 COVERAGE_LINE="$(grep -m1 '^PANEL_COVERAGE:' "$BOX/probe-approve.log")"
-assert_contains "$COVERAGE_LINE" "ok=1" "5-2 菜单覆盖 04 票 In 清单六项 + 每项落到真内核登记过的能力 + 反向核对无漏"
-assert_contains "$COVERAGE_LINE" "actions=6/6" "5-3 六项用户操作逐项有落到真实能力的菜单项"
+assert_contains "$COVERAGE_LINE" "ok=1" "5-2 菜单覆盖面 + 每项落到真内核登记过的能力 + 反向核对无漏(含「能力停用则不许还露着」)"
+# 分母跟着**当前真注册的能力**走:2026-08-12 写面九条停用后,六项承诺里只剩两项还有能力兜底
+# (系统代理开关 / 基础状态)。恢复注册时这个数会自己涨回去 —— 它是实况,不是硬编码的期望。
+assert_contains "$COVERAGE_LINE" "actions=2/2" "5-3 仍有能力兜底的用户操作逐项落到真实能力的菜单项"
 
 # ---- ⑥ 幕③:拒绝分支 --------------------------------------------------------------------
 echo
-echo "-- 幕 3:dangerous 换源 · 拒绝"
+echo "-- 幕 3:dangerous · 拒绝"
 kill "$PROBE_PID" 2>/dev/null; wait "$PROBE_PID" 2>/dev/null; PROBE_PID=""
 sleep 0.8
 
@@ -324,12 +344,11 @@ env "${BOX_ENV[@]}" "$PROBE_BIN" --socket "$SOCK" --role confirm-agent --decisio
 PROBE_PID=$!
 for _ in $(seq 1 200); do grep -q "PANEL_READY" "$BOX/probe-deny.log" 2>/dev/null && break; sleep 0.1; done
 
-DENY_OUT="$(a2 proxy subscription add --name "机场 B" --source "file://$BOX/subs/airline-b.yaml" --json 2>&1)"
+DENY_OUT="$(a2 capabilities call "$DANGEROUS_ID" --input '{"target":"/dev/disk8"}' --json 2>&1)"
 DENY_RC=$?
 assert_eq "$DENY_RC" "2" "3-1 确认器拒绝 → 退出码 2"
 assert_contains "$DENY_OUT" "confirmation_denied" "3-2 拒因是「有人看了,他不同意」(不是「没人能确认」)"
-SUBS_AFTER_DENY="$(a2 proxy subscription list --json 2>&1)"
-assert_not_contains "$SUBS_AFTER_DENY" "机场 B" "3-3 被拒之后清单里没有那条订阅(不留痕)"
+assert_not_contains "$DENY_OUT" '"ok": true' "3-3 被拒之后 handler 一次都没被调到(不留痕)"
 assert_contains "$(grep -m1 '^PANEL_DECIDED:' "$BOX/probe-deny.log")" "decision=deny" "3-4 决定经协议回传(拒绝)"
 
 # ---- ⑦ 幕④:壳缺席 ----------------------------------------------------------------------
@@ -343,7 +362,7 @@ ARB_JSON="$(a2 arbitration status --json 2>&1)"
 CONFIRMER_PRESENT="$(printf '%s' "$ARB_JSON" | json_get result.output.state.confirmerPresent 2>/dev/null)"
 assert_eq "$CONFIRMER_PRESENT" "false" "4-1 壳一断连,内核当场判定确认器不在场"
 
-UNAVAIL_OUT="$(a2 proxy subscription add --name "机场 C" --source "file://$BOX/subs/airline-b.yaml" --json 2>&1)"
+UNAVAIL_OUT="$(a2 capabilities call "$DANGEROUS_ID" --input '{"target":"/dev/disk7"}' --json 2>&1)"
 UNAVAIL_RC=$?
 assert_eq "$UNAVAIL_RC" "2" "4-2 无确认器 → dangerous 默拒(退出码 2)"
 assert_contains "$UNAVAIL_OUT" "confirmation_unavailable" "4-3 默拒码是第①层的 confirmation_unavailable"
@@ -392,7 +411,13 @@ fi
 # ---- ⑨ 红线自查 -------------------------------------------------------------------------
 echo
 echo "-- 红线自查"
-if [ -e "$HOME/.a2" ]; then bad "R-1 真实 ~/.a2 出现了"; else ok "R-1 真实 ~/.a2 仍不存在"; fi
+if [ ! -e "$HOME/.a2" ]; then
+  ok "R-1 真实 ~/.a2 仍不存在"
+elif [ -z "$(find "$HOME/.a2" -newer "$REAL_A2_MARKER" 2>/dev/null | head -1)" ]; then
+  ok "R-1 真实 ~/.a2 存在(用户自己装的),但本轮一个字节都没被碰"
+else
+  bad "R-1 真实 ~/.a2 在本轮被写过:$(find "$HOME/.a2" -newer "$REAL_A2_MARKER" 2>/dev/null | head -3 | tr '\n' ' ')"
+fi
 if grep -rq "33888" "$BOX/daemon.log" "$BOX/netfake-calls.log" "$BOX/supervisor-calls.log" 2>/dev/null; then
   bad "R-2 日志里出现了用户 mihomo 的端口"
 else

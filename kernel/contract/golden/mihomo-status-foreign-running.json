@@ -1,8 +1,24 @@
 {
-  "presence": "absent",
-  "rung": "borrow_neighbour",
+  "presence": "running_instance",
+  "rung": "reuse_binary",
   "provisioned": false,
   "lockedVersion": "v1.19.28",
+  "instance": {
+    "owner": "foreign",
+    "controller": "127.0.0.1:9090",
+    "secretConfigured": true,
+    "version": "v1.19.29",
+    "capabilities": [
+      "rest_api",
+      "meta_core",
+      "configs_read"
+    ],
+    "configFile": "/Users/alice/.config/mihomo/config.yaml"
+  },
+  "foreignBinary": {
+    "path": "/usr/local/bin/mihomo",
+    "version": "v1.19.29"
+  },
   "managed": {
     "label": "com.a2.mihomo",
     "supervisor": "launchd",
@@ -18,6 +34,7 @@
   "compatibility": {
     "floor": "1.19.0",
     "meets": true,
+    "version": "v1.19.29",
     "shortfalls": []
   },
   "home": "/Users/alice/.a2"

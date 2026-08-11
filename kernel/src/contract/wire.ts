@@ -199,21 +199,28 @@ export const ErrorCode = {
   servicePurgeHomeMismatch: "service_purge_home_mismatch",
 
   // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
+  //
+  // (原先还有一条 `mihomo_below_floor`:收编对象不达兼容地板。收编档 2026-08-12 废除后它
+  //  **没有任何产出方**了 —— 复用档不达地板走的是 result.fallback 那条成功路径,不是错误。
+  //  留一条永远不会出现的错误码,等于让 agent 为一个不存在的分支写代码,所以一并摘掉。)
 
-  /**
-   * 该走的那个 mihomo external-controller 连不上(或鉴权不过)。
-   * **收编档的核心分支**:被收编的实例是别人托管的,它没了只能报警 + 指引,内核绝不越权重拉。
-   */
+  /** 该走的那个 mihomo external-controller 连不上(或鉴权不过)。 */
   mihomoUnreachable: "mihomo_unreachable",
-  /** 要用的 mihomo 版本/能力位不达兼容地板。内核**不擅自升级别人的东西**,只给结构化降级报告与指引。 */
-  mihomoBelowFloor: "mihomo_below_floor",
   /**
-   * 这件事只能对 **a2 自管的** mihomo 做,而当前那份不归 a2 管(被收编的实例 / 只读复用的二进制)。
+   * 这件事只能对 **a2 自管的** mihomo 做,而当前那份不归 a2 管(只读复用的二进制)。
    * 这是「生命周期归原托管方」这条红线在报文上的投影。
    */
   mihomoNotManaged: "mihomo_not_managed",
   /** mihomo 操作执行了但没成:下载失败、摘要对不上、落位失败、unit 装了却没跑起来。 */
   mihomoOperationFailed: "mihomo_operation_failed",
+  /**
+   * 本机已经有**别人的** mihomo 实例在跑,而 a2 这边还没就位 —— 结构化拒绝,**零改动**。
+   *
+   * 用户裁定(2026-08-12):「本机已有在跑的 mihomo,应该只读状态,不用去接管」。所以这一支既不收编
+   * (收编档已废除),也不默默在人家旁边再起一份(端口必打架)。`a2 mihomo status` 照旧如实报告那个实例,
+   * 想要 a2 自己那份得显式 `a2 mihomo install --isolated` —— 让「机器上会有两份 mihomo」成为人的决定。
+   */
+  mihomoForeignInstanceRunning: "mihomo_foreign_instance_running",
 
   // MARK: 代理控制面(07 票)
 
@@ -648,8 +655,9 @@ export type ServiceChangeResult = z.infer<typeof ServiceChangeResultSchema>;
 // 与服务面同一种口径:**没有对应的 op**。「本机 mihomo 是个什么现状」问的是文件系统、supervisor 与
 // external-controller,不是 daemon 自己;daemon 没跑的时候这几条命令更要能答话。
 //
-// 一条贯穿本节的语义红线:**被收编的实例其生命周期归原托管方**。内核对它只做只读探测与配置面接管,
-// 绝不 stop/restart/kill;凡是"只能对 a2 自管那份做"的动作,对它一律返回 `mihomo_not_managed`。
+// 一条贯穿本节的语义红线:**别人那个实例的生命周期归原托管方**。内核对它只做只读探测,
+// 绝不 stop/restart/kill、也不替它改配置;凡是"只能对 a2 自管那份做"的动作,对它一律返回 `mihomo_not_managed`。
+// (2026-08-12 起这条红线又收紧一格:连「收编」本身都不做了 —— 见 `MihomoRungSchema`。)
 
 /**
  * 本机 mihomo 现状三态(取值即契约):
@@ -661,12 +669,16 @@ export const MihomoPresenceSchema = z.enum(["running_instance", "binary_only", "
 export type MihomoPresence = z.infer<typeof MihomoPresenceSchema>;
 
 /**
- * 共存阶梯三档(spec「共存 = 检测并优先复用,复用到实例级」):
- *   * `adopt_instance` —— 收编跑着的实例:经 API 接管配置与存活监督,**进程生死归原托管方**;
+ * 共存阶梯**两档**(spec「共存 = 检测并优先复用」;复用到**二进制**级为止):
  *   * `reuse_binary` —— 只读复用既有二进制:配置/数据目录与 `com.a2.mihomo` unit 全套自建;
  *   * `managed_install` —— 全无(或显式隔离):按锁定版下载校验落位,再挂 `com.a2.mihomo` unit。
+ *
+ * **原第一档 `adopt_instance`(收编跑着的实例)已于 2026-08-12 按用户裁定废除**:
+ * 「本机已有在跑的 mihomo,应该只读状态,不用去接管」。别人的实例现在只出现在 `presence`
+ * 与 `instance`(`owner: "foreign"`)里供人读,不再是 a2 会走的一档 —— 未就位时撞见它,
+ * `a2 mihomo install` 结构化拒绝(`mihomo_foreign_instance_running`)、零改动。
  */
-export const MihomoRungSchema = z.enum(["adopt_instance", "reuse_binary", "managed_install"]);
+export const MihomoRungSchema = z.enum(["reuse_binary", "managed_install"]);
 export type MihomoRung = z.infer<typeof MihomoRungSchema>;
 
 /** 实例归属:`a2` = `com.a2.mihomo` 托管的那份;`foreign` = 别人的(内核只读不碰生死)。 */
@@ -775,7 +787,7 @@ export const MihomoStatusResultSchema = z.object({
   compatibility: MihomoCompatibilitySchema,
   /**
    * 档位是**回退**来的时候的原委(spec「兼容性不达标回退隔离安装」)。
-   * 只在"本来要复用、但那份不达地板"时出现 —— 收编档不回退(见 `reason` 里写明的理由)。
+   * 只在"本来要复用、但那份不达地板"时出现。
    */
   fallback: z
     .object({
@@ -792,16 +804,12 @@ export type MihomoStatusResult = z.infer<typeof MihomoStatusResultSchema>;
 
 /**
  * mihomo 面的收敛动作(审计素材,词表封闭)。unit 那几个与服务面同名同义;
- * 二进制/配置那几个是本面独有。**没有任何一个动作作用在被收编的实例上** —— 那是设计,不是遗漏。
+ * 二进制/配置那几个是本面独有。**每一个动作都只作用在 a2 自管的那份上** —— 那是设计,不是遗漏。
+ *
+ * (收编档废除后 `adoption_recorded` / `adoption_released` 一并退场:a2 不再往盘上写任何
+ * 「我盯着别人哪个实例」的记录,别人的实例只在 `status` 里被读、被报告。)
  */
 export const MihomoActionSchema = z.enum([
-  /**
-   * 记下了「我收编的是这个实例」。**这是收编档唯一会落盘的东西**(a2 自己 home 里的一个小记录),
-   * 不装二进制、不写 unit、不碰对方一根汗毛 —— 但有了它,"我收编的那个实例死了"才是一句有主语的话。
-   */
-  "adoption_recorded",
-  /** 解除收编(卸载,或显式改走隔离安装)。同样只动 a2 自己的记录。 */
-  "adoption_released",
   /** 建了 a2 自管的数据目录。 */
   "data_dir_created",
   /** 写(或收敛)了 a2 自管的配置文件。 */
@@ -838,9 +846,13 @@ export type MihomoChangeResult = z.infer<typeof MihomoChangeResultSchema>;
 // 要读 daemon 里那份存活观测 —— 每一件都必须有一个唯一的仲裁点与唯一的状态持有者。
 //
 // 一条贯穿本节的边界:**「这份归不归 a2 管」决定写面能发到哪一层**。
-//   * 归 a2 管(自管档)→ 配置文件、整份重载、订阅激活全都可以;
-//   * 不归 a2 管(收编档)→ 只能 `PATCH /configs`(改 mode)与 `PUT /proxies/<组>`(选节点),
-//     凡是"换配置文件"的动作一律 `mihomo_not_managed`。这是「生命周期归原托管方」在代理面的投影。
+//   * 归 a2 管(自管那份)→ 配置文件、整份重载、订阅激活全都可以;
+//   * 不归 a2 管(别人托管的那份)→ 凡是"换配置文件"的动作一律 `mihomo_not_managed`。
+//     这是「生命周期归原托管方」在代理面的投影。
+//
+// **注(2026-08-12)**:上面这条边界描述的是能力**本身**的语义,与它此刻开不开放是两件事 ——
+// 会对 external-controller 发写请求的那一族当前整体停用(`capability/proxy.ts` 的
+// `DISABLED_CAPABILITY_IDS`),留下的只有读。恢复时这条边界原样生效。
 
 /** 代理模式三档。取值即契约(**大小写敏感**,与旧 `aa` 同口径:`RULE` 会被 allowedValues 拒掉)。 */
 export const ProxyModeSchema = z.enum(["rule", "global", "direct"]);
@@ -853,7 +865,7 @@ export const ProxyEndpointSchema = z.object({
   controller: z.string().min(1),
   /** 这份归不归 a2 管(决定"换配置文件"类写面能不能发)。 */
   managed: z.boolean(),
-  /** a2 自管那份的配置文件路径(收编档缺省 —— 那是别人的文件,内核不写)。 */
+  /** a2 自管那份的配置文件路径(别人那份缺省 —— 那是别人的文件,内核不写)。 */
   configPath: z.string().optional(),
 });
 export type ProxyEndpoint = z.infer<typeof ProxyEndpointSchema>;
@@ -1075,7 +1087,7 @@ export const ProxySupervisionEventSchema = z.object({
     "instance_up",
     /** 之前可达 → 现在不可达(**这就是票面说的报警**)。 */
     "instance_down",
-    /** 盯的对象换了(比如从收编档切到自管档)。 */
+    /** 盯的对象换了(比如自管那份的控制端点变了)。 */
     "target_changed",
     /** daemon 要停了。 */
     "watch_stopped",

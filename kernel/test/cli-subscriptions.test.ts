@@ -9,11 +9,12 @@
 //
 // 订阅源一律用 `file://` 指向沙盒里的文件:**门禁不出网**。
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test as baseTest } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SubscriptionListResultSchema } from "../src/contract/wire.ts";
+import { DISABLED_CAPABILITY_IDS } from "../src/capability/proxy.ts";
 import { subscriptionId } from "../src/proxy/subscriptions.ts";
 import { connectFakeClient, type FakeClient } from "./support/fake-client.ts";
 import { runCli } from "./support/harness.ts";
@@ -28,6 +29,16 @@ import {
   startProxyDaemon,
   type ProxySandbox,
 } from "./support/proxy-sandbox.ts";
+
+/**
+ * **本文件整组断言当前挂起** —— 订阅五条能力(list/add/update/activate/remove)已停用:
+ * 2026-08-12 用户裁定「restful 控制 mihomo 暂时关掉,读状态就够了;节点入库改由节点合并 CLI 承担」。
+ *
+ * 挂起条件**直接读生产常量**,不是手写的 skip —— 哪天把 `proxy.subscription.list` 从
+ * `DISABLED_CAPABILITY_IDS` 里删掉,这一整组覆盖会自动回来,没有人需要记得同时改测试。
+ * 断言本体一个字都没动,与 handler 一起原地保存。
+ */
+const test = baseTest.skipIf(DISABLED_CAPABILITY_IDS.has("proxy.subscription.list"));
 
 const BASE_GROUPS = "PROXY=A1,A2;GLOBAL=,A1";
 

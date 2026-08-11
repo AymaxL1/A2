@@ -3,10 +3,12 @@
 // 深模块的边界与服务面一样:调用方(CLI)只拿到一个 `OpOutcome`。检测、档位裁定、下载校验、
 // unit 编排、兼容地板与全部失败指引都在这一层里消化掉。
 //
-// **本文件里没有任何一条代码路径会去停/重启/杀一个不属于 a2 的 mihomo。** 这不是靠自觉:
+// **本文件里没有任何一条代码路径会去停/重启/杀/配置一个不属于 a2 的 mihomo。** 这不是靠自觉:
 //   * 能对进程动手的只有 `createSupervisor(plan)`,而 plan 恒是 `com.a2.mihomo` 那一份;
 //   * 对别人的实例只有 `controller.ts` 里那两条只读 GET;
-//   * 凡是"只能对自管那份做"的动作(升级、卸载),对方不是自管就返回 `mihomo_not_managed`。
+//   * 凡是"只能对自管那份做"的动作(升级、卸载),对方不是自管就返回 `mihomo_not_managed`;
+//   * 别人的实例在跑而 a2 未就位时,`install` 直接 `mihomo_foreign_instance_running` 拒绝、零改动
+//     (2026-08-12 用户裁定:只读状态,不去接管;收编档随之废除)。
 // 「数据面不随控制面起落」的另一半在 unit 层:`com.a2.mihomo` 与 `com.a2.kernel` 是两个独立 unit,
 // `a2 service uninstall` 碰不到前者(它的 plan 里根本没有那个 label)。
 
@@ -15,7 +17,6 @@ import {
   ErrorCode,
   opFailure,
   opSuccess,
-  type Guidance,
   type MihomoAction,
   type MihomoStatusResult,
   type OpOutcome,
@@ -45,12 +46,10 @@ import {
   ensureDataDir,
   linkForeignBinary,
   MihomoOperationError,
-  recordAdoption,
-  releaseAdoption,
 } from "./install.ts";
 import { resolveDesiredConfig } from "../proxy/config.ts";
 import { mihomoLayout, readSecretOf, resolveScanInputs, type MihomoLayout } from "./paths.ts";
-import { compareVersions, MIHOMO_COMPAT_FLOOR, MIHOMO_LOCKED_VERSION } from "./pin.ts";
+import { compareVersions, MIHOMO_LOCKED_VERSION } from "./pin.ts";
 
 /** 等"自管实例的控制端点真的应答"的上限。与内核 install 同一条口径:有 pid ≠ 能用。 */
 const CONTROLLER_READY_TIMEOUT_MS = 5000;
@@ -84,46 +83,26 @@ export async function mihomoInstall(
     const facts = await collect(ctx);
     const decision = decideLadder(facts, options);
 
-    // ① 收编档:什么都不装,只把「我收编的是这个」记在 a2 自己 home 里。
-    //    可达且达标才记 —— 否则结构化拒绝 + 指引(不可达时是"我收编的那个没了",归 unreachable)。
-    if (decision.rung === "adopt_instance") {
-      if (!decision.compatibility.meets) {
-        return opFailure(
-          decision.compatibility.shortfalls.includes("rest_api_unreachable")
-            ? unreachableError(ctx, facts)
-            : belowFloorError(ctx, facts, decision),
-        );
-      }
-      const found = facts.foreign!;
-      const actions: MihomoAction[] = [];
-      if (
-        await recordAdoption(ctx.layout, {
-          controller: found.target,
-          ...(found.configFile ? { configFile: found.configFile } : {}),
-        })
-      ) {
-        actions.push("adoption_recorded");
-      }
-      const after = await collect(ctx);
-      return opSuccess({ status: statusResult(ctx, after, decideLadder(after, options)), actions });
+    // ⓪ 别人的实例在跑,而 a2 这边还没就位 → **结构化拒绝,零改动**(用户裁定:只读,不接管)。
+    //    不收编(那一档已废除),也不默默在人家旁边再起一份 —— 端口打架该由人来权衡,不该由内核代劳。
+    //    `--isolated` 是唯一的逃生门;a2 已就位时不走这道闸(维持现状,见 ladder.ts 文件头)。
+    if (decision.foreignInstanceRunning && !decision.provisioned && !options.isolated) {
+      return opFailure(foreignRunningError(ctx, facts));
     }
 
     const actions: MihomoAction[] = [];
-    // 走到这儿说明这次要用 a2 自己那份(或人类显式要求隔离):先解除任何既有收编记录,
-    // 免得留着一个"我还盯着别人那个实例"的假状态。
-    if (await releaseAdoption(ctx.layout)) actions.push("adoption_released");
     if (await ensureDataDir(ctx.layout)) actions.push("data_dir_created");
     // 配置内容由 07 票的配置面算(可调项 + 当前激活订阅);install 只负责"把它落到位"。
     const desired = await resolveDesiredConfig(ctx.layout, ctx.env);
     if (await ensureConfig(ctx.layout, desired.text)) actions.push("config_written");
 
     if (decision.rung === "reuse_binary") {
-      // ② 只读复用:落点上放一个指向那份二进制的符号链接,真身一个字节都不碰。
+      // ① 只读复用:落点上放一个指向那份二进制的符号链接,真身一个字节都不碰。
       const target = facts.managed.binaryTarget ?? facts.foreignBinary?.path;
       if (!target) return opFailure(noBinaryError(ctx));
       if (await linkForeignBinary(ctx.layout, target)) actions.push("binary_linked");
     } else if (facts.managed.binaryKind !== "downloaded") {
-      // ③ 脚本安装:只在**还没有自管二进制**时下载。已经有了就绝不在 install 里换版本 ——
+      // ② 脚本安装:只在**还没有自管二进制**时下载。已经有了就绝不在 install 里换版本 ——
       //    换版本只有 `a2 mihomo upgrade` 一条路(「升级永远显式」)。
       await downloadLockedBinary(ctx.layout, ctx.env);
       actions.push("binary_downloaded");
@@ -142,16 +121,13 @@ export async function mihomoInstall(
 /**
  * 卸掉 **a2 自己那份**(unit + 进程)。**有意保留**二进制、配置与数据目录:
  * 它们是数据面资产(缓存、geo 库、你的 secret),删不删该由人类决定,路径在报文里给出。
- * 被收编的实例这条命令一根汗毛都碰不到 —— 它压根不在 `com.a2.mihomo` 这个 plan 里。
+ * 别人那份实例这条命令一根汗毛都碰不到 —— 它压根不在 `com.a2.mihomo` 这个 plan 里。
  */
 export async function mihomoUninstall(paths: KernelPaths): Promise<OpOutcome> {
   return await withMihomo(paths, async (ctx) => {
     const removed = await removeUnit(ctx.plan, ctx.supervisor);
     if (removed.state.pid !== undefined) return opFailure(stillRunningError(ctx, removed.state.pid));
     const actions = mihomoActions(removed.actions);
-    // 收编也是一次"就位",所以卸载要把它一并解除 —— 但解除的只是**我这边的记录**,
-    // 那个实例该怎么跑还怎么跑(内核从头到尾没碰过它)。
-    if (await releaseAdoption(ctx.layout)) actions.push("adoption_released");
     const facts = await collect(ctx);
     return opSuccess({ status: statusResult(ctx, facts, decideLadder(facts)), actions });
   });
@@ -159,7 +135,7 @@ export async function mihomoUninstall(paths: KernelPaths): Promise<OpOutcome> {
 
 /**
  * 显式升级 —— **本内核唯一会换 mihomo 版本的地方**,而且只换到 `MIHOMO_LOCKED_VERSION`。
- * 对象只能是 a2 自管的下载版:被收编的实例与只读复用的二进制都不归 a2 管,一律 `mihomo_not_managed`。
+ * 对象只能是 a2 自管的下载版:只读复用来的二进制不归 a2 管,一律 `mihomo_not_managed`。
  */
 export async function mihomoUpgrade(paths: KernelPaths): Promise<OpOutcome> {
   return await withMihomo(paths, async (ctx) => {
@@ -299,72 +275,44 @@ function statusResult(
 // MARK: - 拒绝即指引
 
 /**
- * 被收编的实例没了 —— 票面第 2 条:**只产出报警 + 结构化指引,内核不越权重拉**。
- * 指引里那条「等价的前台命令」是从检测到的事实拼出来的,人类可以原样敲。
+ * **别人的 mihomo 在跑,而 a2 还没就位** —— 结构化拒绝,零改动(用户裁定:只读状态,不去接管)。
+ *
+ * 这条报文要同时说清三件事,少一件人就不知道下一步该干嘛:
+ *   ① 我看见了什么(哪个端点、哪份配置、什么版本)—— 都是刚探到的事实,不是猜的;
+ *   ② 我**没有做**什么(没收编、没起进程、没写一个字节)—— 「零改动」必须明说,否则人会去查有没有残留;
+ *   ③ 想继续的两条路各自的代价 —— 就这么用(a2 只读它),或者显式并存(端口要你自己避开)。
  */
-function unreachableError(ctx: MihomoContext, facts: MihomoFacts): WireError {
+function foreignRunningError(ctx: MihomoContext, facts: MihomoFacts): WireError {
   const found = facts.foreign;
+  const controller = found?.target ?? "(未发现)";
   const configFile = found?.configFile;
-  const binary = facts.foreignBinary?.path;
-  const steps: Guidance["steps"] = [];
-  if (binary && configFile) {
-    steps.push({
-      description: "按你原本的方式把它拉起来(下面是等价的前台命令,拿去改成你自己的托管方式)",
-      command: `${binary} -d ${path.dirname(configFile)} -f ${configFile}`,
-    });
-  } else {
-    steps.push({ description: "按你原本的方式把那个 mihomo 拉起来(内核不会替你重拉别人托管的进程)" });
-  }
-  steps.push(
-    { description: "拉起来之后重新检测", command: "a2 mihomo status --json" },
-    {
-      description: "或者让 a2 装一份自管实例(与你那份并存,入站端口需你自行避开冲突)",
-      command: "a2 mihomo install --isolated",
-    },
-  );
+  const version = found?.probe.version;
   return {
-    code: ErrorCode.mihomoUnreachable,
-    message: "配置里写着的 mihomo external-controller 连不上,收编不成立。",
-    detail: found?.probe.detail ?? `未在 ${found?.target ?? "(未发现端点)"} 上发现可达的 external-controller。`,
-    guidance: {
-      summary: "被收编的实例其生命周期归原托管方 —— 内核只报警和指路,绝不替你重启它。",
-      steps,
-      context: {
-        controller: found?.target ?? "(未发现)",
-        ...(configFile ? { configFile } : {}),
-        home: ctx.paths.home,
-      },
-    },
-  };
-}
-
-/** 收编对象不达兼容地板 —— **不擅自升级别人的东西**,给降级报告与两条明路。 */
-function belowFloorError(
-  ctx: MihomoContext,
-  facts: MihomoFacts,
-  decision: LadderDecision,
-): WireError {
-  const found = facts.foreign;
-  return {
-    code: ErrorCode.mihomoBelowFloor,
-    message: `跑着的那个 mihomo 不达兼容地板 ${MIHOMO_COMPAT_FLOOR},已拒绝收编。`,
+    code: ErrorCode.mihomoForeignInstanceRunning,
+    message: "本机已经有一个别人托管的 mihomo 在跑,a2 不接管它,本次未做任何改动。",
     detail:
-      `版本 ${decision.compatibility.version ?? "问不出"};不达标项:` +
-      `${decision.compatibility.shortfalls.join("、")}。内核不会去升级不属于它的实例。`,
+      `可达的 external-controller:${controller}` +
+      `${version ? `(版本 ${version})` : ""}` +
+      `${configFile ? `;来自配置 ${configFile}` : ""}。` +
+      "内核对它只有两条只读 GET,既不收编、也不在它旁边自作主张再起一份。",
     guidance: {
-      summary: "两条明路:你自己把它升到地板之上,或者让 a2 装一份自管实例与之并存。",
+      summary:
+        "机器上要不要同时跑两份 mihomo,是一个有代价的决定(两套入站端口、两份配置)—— 该由你来做,不由内核代劳。",
       steps: [
-        { description: "自己升级那个 mihomo 之后重新检测", command: "a2 mihomo status --json" },
         {
-          description: "或者让 a2 按锁定版装一份自管实例(与你那份并存,入站端口需你自行避开冲突)",
-          command: "a2 mihomo install --isolated",
+          description: "就这么用:a2 只读它的状态(模式/节点/端口),配置由你自己或 agent 去改那份配置文件",
+          command: "a2 mihomo status --json",
+        },
+        {
+          description: "或者显式让 a2 装一份自管实例与之并存(入站端口需你自行避开冲突)",
+          command: "a2 mihomo install --isolated --json",
         },
       ],
       context: {
-        floor: MIHOMO_COMPAT_FLOOR,
-        lockedVersion: MIHOMO_LOCKED_VERSION,
-        controller: found?.target ?? "(未发现)",
-        shortfalls: decision.compatibility.shortfalls.join(","),
+        controller,
+        ...(configFile ? { configFile } : {}),
+        ...(version ? { version } : {}),
+        home: ctx.paths.home,
       },
     },
   };
@@ -376,7 +324,7 @@ function notManagedError(ctx: MihomoContext, facts: MihomoFacts): WireError {
   const why =
     kind === "reused"
       ? `a2 落点上的是一个指向 ${facts.managed.binaryTarget ?? "别处"} 的只读引用 —— 那份二进制不是内核装的,内核也不会去改它。`
-      : "a2 还没有自管的 mihomo 二进制(当前要么在收编别人的实例,要么还没就位)。";
+      : "a2 还没有自管的 mihomo 二进制(还没就位)。";
   return {
     code: ErrorCode.mihomoNotManaged,
     message: "升级只对 a2 自管的 mihomo 有效,当前这份不归 a2 管。",
@@ -503,7 +451,7 @@ function unsupportedPlatformError(reason: string, paths: KernelPaths): WireError
       steps: [
         { description: "自行前台起一个 mihomo,并把它的 external-controller 告诉 a2" },
         {
-          description: "然后让 a2 收编它(只读探测 + 配置面接管,进程生死仍归你)",
+          description: "然后 a2 就能读到它的状态(只读探测;它的配置与进程生死都仍归你)",
           command: "A2_MIHOMO_CONTROLLER=127.0.0.1:9090 a2 mihomo status --json",
         },
       ],

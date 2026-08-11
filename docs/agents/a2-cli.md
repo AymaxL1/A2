@@ -56,7 +56,7 @@ a2 proxy status --json           # 等价写法：域子命令面
 "guidance": {
   "summary": "…",
   "steps": [{"description": "…", "command": "a2 service install"}],
-  "context": {"capability": "proxy.subscription.add", "risk": "dangerous"}
+  "context": {"capability": "demo.wipe", "risk": "dangerous"}
 }
 ```
 

@@ -1,7 +1,7 @@
-// 代理域能力集(07 票)—— **17 条真能力**,全部经注册表、经 daemon。
+// 代理域能力集(07 票)—— 共 17 条,**当前对外开放 8 条**(见 `DISABLED_CAPABILITY_IDS`),全部经注册表、经 daemon。
 //
 // 为什么它们是能力而 `a2 service` / `a2 mihomo` 不是(口径见 `test/swift-parity-map.md`「有意的契约变更」13):
-// 这一族要对 external-controller 发**写**请求、要动**系统代理**、要读 daemon 里那份**存活观测** ——
+// 这一族要动**系统代理**、要读 daemon 里那份**存活观测** ——
 // 每一件都必须有唯一的仲裁点(dangerous 默拒就在 `registry.invoke` 里)和唯一的状态持有者。
 //
 // 风险三档怎么定的:
@@ -80,8 +80,39 @@ export interface ProxyContext {
   fetch?: SubscriptionFetcher;
 }
 
+/**
+ * **暂时停用**的能力 id —— 用户裁定(2026-08-12):「restful 控制 mihomo 的功能暂时关闭掉,
+ * 读一下 mihomo 状态就够了;mihomo 应该让用户自己用 agent 去配置」。
+ *
+ * 停用的是**会改变 mihomo 运行时状态或它那份配置**的那一族:
+ *   * `proxy.mode.set` / `proxy.node.select` —— 直接对 external-controller 发写请求;
+ *   * `proxy.latency.test` —— HTTP 谓词是 GET,但它命令 mihomo 真去发一轮网络请求,是「控制」不是「读状态」;
+ *   * `proxy.config.set` —— 写自管配置 + 整份重载;
+ *   * `proxy.subscription.*` —— 订阅五条整套停用(它的终点正是「把一份外部配置变成运行配置」,
+ *     即被否掉的那条「让小白在界面里配」的路;节点入库改由后续的节点合并 CLI 承担)。
+ *
+ * **只读的一条不停**:`proxy.status` / `proxy.mode.get` / `proxy.groups` / `proxy.config.get` /
+ * `proxy.supervision` 照旧。`proxy.system.*` 也照旧 —— 它改的是**系统**设置,对 mihomo 只发一个
+ * `GET /configs` 取端口,不在这次范围里。
+ *
+ * **实现形态是「摘注册」而不是删代码**,因为裁定说的是「暂时」:handler 与它们的测试原地留着,
+ * 恢复某一条 = 从这个集合里删掉一行。面板不需要任何改动 —— `A2MenuModelBuilder` 每一项都写着
+ * `has("<id>")` 守卫,能力不在集合里,菜单项与 CLI 子命令会自动一起消失。
+ */
+export const DISABLED_CAPABILITY_IDS: ReadonlySet<string> = new Set([
+  "proxy.config.set",
+  "proxy.mode.set",
+  "proxy.node.select",
+  "proxy.latency.test",
+  "proxy.subscription.list",
+  "proxy.subscription.add",
+  "proxy.subscription.update",
+  "proxy.subscription.activate",
+  "proxy.subscription.remove",
+]);
+
 export function proxyCapabilities(context: ProxyContext): Capability[] {
-  return [
+  const all = [
     status(context),
     configGet(context),
     configSet(context),
@@ -100,6 +131,7 @@ export function proxyCapabilities(context: ProxyContext): Capability[] {
     subscriptionRemove(context),
     supervisionGet(context),
   ];
+  return all.filter((capability) => !DISABLED_CAPABILITY_IDS.has(capability.descriptor.id));
 }
 
 // MARK: - 状态
@@ -181,7 +213,7 @@ function configSet(context: ProxyContext): Capability {
       id: "proxy.config.set",
       risk: "normal",
       summary:
-        "改 a2 自管配置的可调项并让内核重载(可逆写;只对 a2 自管那份有效,被收编的实例返回 mihomo_not_managed)",
+        "改 a2 自管配置的可调项并让内核重载(可逆写;只对 a2 自管那份有效,别人托管的实例返回 mihomo_not_managed)",
       parameters: [
         {
           name: "mixedPort",
@@ -278,8 +310,9 @@ function modeSet(context: ProxyContext): Capability {
     handler: async (input) => {
       const mode = input["mode"] as string;
       const target = await reachableTarget(context);
-      // 改的是**运行时开关**:`PATCH /configs`,不换配置文件、不碰进程 ——
-      // 所以这一条对被收编的实例同样成立(票面:收编档的写面到配置为止)。
+      // 改的是**运行时开关**:`PATCH /configs`,不换配置文件、不碰进程 —— 所以它对别人托管的实例
+      // 技术上也成立。(**这条能力当前停用**,见 `DISABLED_CAPABILITY_IDS`:恰恰因为它对别人那份也成立,
+      // 而「不接管」意味着连运行时开关也不替人家拨。)
       await withController(() => patchConfigs(target.controller, { mode }));
       return payload({ endpoint: target.endpoint, mode, set: true });
     },

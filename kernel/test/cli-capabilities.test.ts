@@ -6,6 +6,7 @@
 // 退出码语义(固定,进契约):0 成功 / 2 dangerous 被拒 / 4 daemon 不可达 / 5 能力业务失败 /
 // 6 能力或参数不合契约 / 1 用法错。
 
+import { DISABLED_CAPABILITY_IDS } from "../src/capability/proxy.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { CapabilityRegistry, DuplicateCapabilityError } from "../src/capability/registry.ts";
@@ -54,14 +55,26 @@ test("list --json:三档自检样本各一档在前、代理域真能力随后,�
   expect(capabilities.slice(0, 3).map((c) => c.risk)).toEqual(["safe", "normal", "dangerous"]);
   // 07 票起,真能力(代理域)也在这张表上 —— 它们必须经 daemon,所以只能从这里露出来。
   const ids = capabilities.map((c) => c.id);
-  expect(ids).toContain("proxy.mode.set");
+  expect(ids).toContain("proxy.status");
+  expect(ids).toContain("proxy.mode.get");
+  expect(ids).toContain("proxy.groups.list");
   expect(ids).toContain("proxy.system.disable");
-  expect(ids).toContain("proxy.subscription.add");
-  // 风险档随 manifest 下发,且**订阅换源仍是 dangerous**(沿旧 Swift 逐字)。
+  expect(ids).toContain("proxy.supervision.get");
+  // 风险档随 manifest 下发。
   const byId = new Map(capabilities.map((c) => [c.id, c.risk]));
   expect(byId.get("proxy.status")).toBe("safe");
-  expect(byId.get("proxy.mode.set")).toBe("normal");
-  expect(byId.get("proxy.subscription.add")).toBe("dangerous");
+  expect(byId.get("proxy.mode.get")).toBe("safe");
+  expect(byId.get("proxy.system.enable")).toBe("normal");
+
+  // **停用的那一族一条都不该出现在清单上** —— 这就是「关闭」在协议面的全部含义:
+  // agent 通过 list 发现能力,发现不到就不会去调,不需要另设一层"存在但拒绝"的半态。
+  // 判据直接读生产常量,恢复注册即自动恢复这条断言的另一侧。
+  for (const disabled of DISABLED_CAPABILITY_IDS) {
+    expect(ids).not.toContain(disabled);
+  }
+  // 停用集合本身不能悄悄变空(那样上面这个循环会退化成一句废话)。
+  expect(DISABLED_CAPABILITY_IDS.size).toBeGreaterThan(0);
+  expect(DISABLED_CAPABILITY_IDS.has("proxy.subscription.add")).toBe(true);
 });
 
 test("describe --json:交回可据以构造调用的参数声明(名/类型/必填/取值域)", async () => {

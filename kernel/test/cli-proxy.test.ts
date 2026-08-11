@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { DISABLED_CAPABILITY_IDS } from "../src/capability/proxy.ts";
 import { ProxyGroupsResultSchema, ProxyStatusResultSchema } from "../src/contract/wire.ts";
 import { runCli } from "./support/harness.ts";
 import {
@@ -29,6 +30,16 @@ import {
 const GROUPS = "PROXY=A1,A2,SLOW;GLOBAL=,A1";
 // **SLOW 有意不在延迟表里** —— 它就是"缺席即超时,绝不臆造 0"那条断言的活体样本。
 const DELAYS = "A1=120;A2=300";
+
+/**
+ * 停用能力的断言闸 —— 条件**直接读生产常量**,不是手写的 skip:把某条 id 从
+ * `DISABLED_CAPABILITY_IDS` 里删掉,它的覆盖会自动回来,没有人需要记得同时改测试。
+ *
+ * 停用原委(2026-08-12 用户裁定):「restful 控制 mihomo 的功能暂时关闭掉……读一下 mihomo 状态就够了;
+ * mihomo 应该让用户自己用 agent 去配置」。会对 external-controller 发写请求的那一族整体停用,
+ * 只留读面。下面被闸住的断言本体一个字都没改,与 handler 一起原地保存。
+ */
+const whenEnabled = (id: string) => test.skipIf(DISABLED_CAPABILITY_IDS.has(id));
 
 let sandbox: ProxySandbox | undefined;
 
@@ -94,7 +105,7 @@ test("proxy status:自管实例在跑 → 两条独立事实都为真,并如实�
 
 // MARK: - 模式
 
-test("proxy mode:set 之后 get 读回来真的变了(PATCH /configs,不换配置文件、不碰进程)", async () => {
+whenEnabled("proxy.mode.set")("proxy mode:set 之后 get 读回来真的变了(PATCH /configs,不换配置文件、不碰进程)", async () => {
   const box = await managedBox();
 
   expect(out(await proxy(box, ["mode", "get"])).mode).toBe("rule");
@@ -112,7 +123,7 @@ test("proxy mode:set 之后 get 读回来真的变了(PATCH /configs,不换配�
   expect(await readFile(box.managedConfig, "utf8")).toContain("mode: rule");
 });
 
-test("proxy mode:非法取值被**校验层**拦下 —— invalid_params + 退出码 6,且没触达内核", async () => {
+whenEnabled("proxy.mode.set")("proxy mode:非法取值被**校验层**拦下 —— invalid_params + 退出码 6,且没触达内核", async () => {
   const box = await managedBox();
   await proxy(box, ["mode", "--mode", "global"]);
 
@@ -146,7 +157,7 @@ test("proxy groups:按组名排序,候选与当前选中都是从内核读回来
   expect(global.all).toEqual(["A1"]);
 });
 
-test("proxy node:选中之后 groups 与 status 两处读回都变了", async () => {
+whenEnabled("proxy.node.select")("proxy node:选中之后 groups 与 status 两处读回都变了", async () => {
   const box = await managedBox();
 
   const result = await proxy(box, ["node", "--group", "PROXY", "--node", "A2"]);
@@ -164,7 +175,7 @@ test("proxy node:选中之后 groups 与 status 两处读回都变了", async ()
   expect(out(await proxy(box, ["status"])).node).toBe("A2");
 });
 
-test("proxy node:组不存在 → proxy_operation_failed + 退出码 5 + 指引指向 groups", async () => {
+whenEnabled("proxy.node.select")("proxy node:组不存在 → proxy_operation_failed + 退出码 5 + 指引指向 groups", async () => {
   const box = await managedBox();
 
   const result = await proxy(box, ["node", "--group", "NOPE", "--node", "A1"]);
@@ -178,7 +189,7 @@ test("proxy node:组不存在 → proxy_operation_failed + 退出码 5 + 指引�
 
 // MARK: - 测速
 
-test("proxy ping:逐节点延迟对齐候选清单,缺席的节点如实标注超时(不臆造 0)", async () => {
+whenEnabled("proxy.latency.test")("proxy ping:逐节点延迟对齐候选清单,缺席的节点如实标注超时(不臆造 0)", async () => {
   const box = await managedBox();
 
   const result = await proxy(box, ["ping", "--group", "PROXY"]);
@@ -196,7 +207,7 @@ test("proxy ping:逐节点延迟对齐候选清单,缺席的节点如实标注�
   ]);
 });
 
-test("proxy ping:timeout 防呆 —— CLI 层挡住 inf/nan(退出码 1),内核层挡住越界有限数(退出码 6)", async () => {
+whenEnabled("proxy.latency.test")("proxy ping:timeout 防呆 —— CLI 层挡住 inf/nan(退出码 1),内核层挡住越界有限数(退出码 6)", async () => {
   const box = await managedBox();
 
   for (const value of ["inf", "nan"]) {
@@ -235,7 +246,7 @@ test("域子命令 ≡ 能力调用:a2 proxy groups 与 capabilities call proxy.
 
 // MARK: - 配置面
 
-test("proxy config:改可调项 → 落盘 + 让内核重载 + 读回真的换了端口;再来一次是幂等的", async () => {
+whenEnabled("proxy.config.set")("proxy config:改可调项 → 落盘 + 让内核重载 + 读回真的换了端口;再来一次是幂等的", async () => {
   const box = await managedBox();
   const before = out(await proxy(box, ["config"]));
   expect(before.settings.mixedPort).toBe(box.mixedPort);
@@ -263,7 +274,7 @@ test("proxy config:改可调项 → 落盘 + 让内核重载 + 读回真的换�
   expect(again.actions).toEqual([]);
 });
 
-test("proxy config set:内核不认新配置 → 回滚到上一份并如实报错(磁盘与内核都不留半态)", async () => {
+whenEnabled("proxy.config.set")("proxy config set:内核不认新配置 → 回滚到上一份并如实报错(磁盘与内核都不留半态)", async () => {
   const box = (sandbox = await makeProxySandbox({ groups: GROUPS }));
   await provisionManaged(box);
   await startProxyDaemon(box);
@@ -289,28 +300,35 @@ test("proxy config set:内核不认新配置 → 回滚到上一份并如实报�
 
 // MARK: - 收编档的边界(写面到配置为止)
 
-test("收编档:改模式/选节点照做,但**换配置文件**类的动作一律 mihomo_not_managed", async () => {
+test("别人的实例在跑:proxy status **读得到**它(只读),但 a2 既不接管它、也没有任何写面能碰它", async () => {
   const box = (sandbox = await makeProxySandbox());
   const foreign = await startForeignInstance(box, { groups: "PROXY=F1,F2" });
-  // 先真的收编一次(落一笔收编记录),这样端点解析才指向别人那个实例。
-  await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  // 2026-08-12 起 `mihomo install` 撞见别人在跑的实例会**结构化拒绝、零改动** —— 收编档已废除。
+  const install = await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  expect(install.exitCode).toBe(5);
+  expect(JSON.parse(install.stdout).error.code).toBe("mihomo_foreign_instance_running");
   await startProxyDaemon(box);
 
+  // 「只读状态就够了」那一半仍然成立:端点解析照旧指向它,状态照旧读得出来。
   const status = out(await proxy(box, ["status"]));
   expect(status.endpoint.owner).toBe("foreign");
   expect(status.endpoint.managed).toBe(false);
   expect(status.endpoint.controller).toBe(`127.0.0.1:${foreign.port}`);
   expect(status.endpoint.configPath).toBeUndefined();
+  expect(out(await proxy(box, ["mode", "get"])).mode).toBeDefined();
+  expect(out(await proxy(box, ["groups"])).groups.length).toBeGreaterThan(0);
 
-  // ① 改运行时开关:可以(票面「收编档的写面到配置为止」)。
-  expect((await proxy(box, ["mode", "--mode", "direct"])).exitCode).toBe(0);
-  expect(out(await proxy(box, ["mode", "get"])).mode).toBe("direct");
-  expect((await proxy(box, ["node", "--group", "PROXY", "--node", "F2"])).exitCode).toBe(0);
-
-  // ② 换配置文件:一律拒(那是别人的文件,内核不替它换)。
-  const configSet = await proxy(box, ["config", "set", "--logLevel", "debug"]);
-  expect(configSet.exitCode).toBe(5);
-  expect(body(configSet).error.code).toBe("mihomo_not_managed");
+  // 另一半:写面**在别名层就不存在了** —— 能力没注册,子命令也就无从谈起(退出码 1 = 用法错)。
+  for (const args of [
+    ["mode", "--mode", "direct"],
+    ["node", "--group", "PROXY", "--node", "F2"],
+    ["ping", "--group", "PROXY"],
+    ["config", "set", "--logLevel", "debug"],
+  ]) {
+    const result = await proxy(box, args);
+    expect(result.exitCode).toBe(1);
+    expect(body(result).error.code).toBe("usage");
+  }
 
   // 别人的进程从头到尾活得好好的。
   expect(box.foreignProc && !box.foreignProc.killed).toBe(true);
@@ -353,7 +371,7 @@ test("proxy 用法错:缺动作 / 未知动作 / 未知旗标 / 缺值,一律退
   }
 });
 
-test("proxy --help --json:帮助进 result,写明两种写法等价、收编档边界与显式还原", async () => {
+test("proxy --help --json:帮助进 result,写明两种写法等价、当前停用清单与显式还原", async () => {
   const box = (sandbox = await makeProxySandbox());
 
   const result = await proxy(box, ["--help"]);
@@ -361,7 +379,10 @@ test("proxy --help --json:帮助进 result,写明两种写法等价、收编档�
   expect(result.exitCode).toBe(0);
   const usage = body(result).result.usage as string;
   expect(usage).toContain("a2 capabilities call proxy.system.enable");
-  expect(usage).toContain("mihomo_not_managed");
   expect(usage).toContain("system-proxy.json");
+  // 帮助必须把「哪些当前停用」写在明面上 —— 否则人只会看到子命令报"未知",不知道是有意关的。
+  expect(usage).toContain("**当前停用**");
+  expect(usage).toContain("proxy subscription");
+  expect(usage).toContain("只读");
   // 帮助不需要 daemon(它是纯文本)—— 上面这条 case 压根没起 daemon。
 });

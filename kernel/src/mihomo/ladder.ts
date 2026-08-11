@@ -1,15 +1,17 @@
-// 三档阶梯的**裁定**——纯计算:一组检测事实进,一个档位 + 兼容地板结论出。不碰文件、不发请求。
+// 两档阶梯的**裁定**——纯计算:一组检测事实进,一个档位 + 兼容地板结论出。不碰文件、不发请求。
 //
-// 优先级(spec「共存 = 检测并优先复用,复用到实例级」):
-//   ① 跑着的实例(external-controller 可达)→ `adopt_instance`,进程生死归原托管方;
-//   ② 只有二进制 → `reuse_binary`,只读复用它,配置/数据/unit 全套自建;
-//   ③ 全无 → `managed_install`,按锁定版下载校验落位。
+// 优先级(spec「共存 = 检测并优先复用」;2026-08-12 起复用**到二进制级为止**):
+//   ① 盘上有二进制 → `reuse_binary`,只读复用它,配置/数据/unit 全套自建;
+//   ② 全无 → `managed_install`,按锁定版下载校验落位。
 //
-// 两条压在优先级之上的规则,理由都是「不让检测结果反复横跳把数据面掀了」:
+// **原来还有一档 `adopt_instance`(收编跑着的实例),已按用户裁定废除**:
+// 「本机已有在跑的 mihomo,应该只读状态,不用去接管」。别人的实例现在只进 `presence` 与 `instance`
+// 供人读 —— 它不再影响档位,也不再有任何一条写路径通向它。「未就位时撞见别人的实例该怎么办」
+// 不在本文件裁定(这里只算档位),而是 `manager.ts` 里那道闸:结构化拒绝 + 零改动。
+//
+// 一条压在优先级之上的规则,理由是「不让检测结果反复横跳把数据面掀了」:
 //   * **a2 已就位(`com.a2.mihomo` 的 unit 文件在)就维持现状** —— 用户后来自己装了一份 mihomo,
-//     不该让 a2 悄悄放弃自己那份正在跑的实例。这种情况下报文里两边的事实都在,由人类决定要不要切。
-//   * **收编档不因不达地板而自动回退** —— 回退等于在用户实例旁边再起一份,端口必打架。
-//     那一档只出结构化降级报告 + 指引(`--isolated` 是人类显式选择的逃生门)。
+//     不该让 a2 悄悄换掉自己那份正在跑的实例。这种情况下报文里两边的事实都在,由人类决定要不要切。
 
 import type {
   MihomoCompatibility,
@@ -18,7 +20,7 @@ import type {
   MihomoRung,
   MihomoShortfall,
 } from "../contract/wire.ts";
-import { probeCapabilities, type ControllerProbe } from "./controller.ts";
+import { probeCapabilities } from "./controller.ts";
 import type { MihomoFacts } from "./detect.ts";
 import { MIHOMO_COMPAT_FLOOR, MIHOMO_LOCKED_VERSION, versionShortfall } from "./pin.ts";
 
@@ -29,51 +31,54 @@ export interface LadderDecision {
   instance?: MihomoInstance;
   compatibility: MihomoCompatibility;
   fallback?: { from: MihomoRung; shortfalls: MihomoShortfall[]; reason: string };
+  /**
+   * **别人的**实例此刻可达。档位算式里已经用不到它了(收编档废除),留在裁定结果里是因为
+   * `manager.ts` 那道「未就位 + 别人在跑 → 拒绝」的闸要用,而闸的判据不该各写各的。
+   */
+  foreignInstanceRunning: boolean;
 }
 
 export interface LadderOptions {
-  /** 人类显式要求隔离安装:忽略别人那份,直接走 ③ 档(不达地板时的逃生门)。 */
+  /**
+   * 人类显式要求隔离安装:不复用盘上那份二进制,直接走 ② 档按锁定版下载。
+   * 它同时是「别人的实例在跑」那道闸的唯一逃生门 —— 机器上要不要并存两份 mihomo,由人来定。
+   */
   isolated?: boolean;
 }
 
 export function decideLadder(facts: MihomoFacts, options: LadderOptions = {}): LadderDecision {
   const managedRunning = facts.managed.probe.reachable || facts.managed.state.pid !== undefined;
-  const foreignRunning = facts.foreign?.probe.reachable === true;
-  // 「就位」= a2 这边做过一次决定并留了痕:要么装了自己的 unit,要么记下了收编对象。
-  const adopted = facts.adoption !== undefined && !options.isolated;
-  const provisioned = facts.managed.unitInstalled || adopted;
+  const foreignInstanceRunning = facts.foreign?.probe.reachable === true;
+  // 「就位」= a2 这边装过自己那套 unit。(收编记录曾经也算一种就位,随收编档一并退场。)
+  const provisioned = facts.managed.unitInstalled;
 
-  const presence: MihomoPresence = managedRunning || foreignRunning
+  const presence: MihomoPresence = managedRunning || foreignInstanceRunning
     ? "running_instance"
     : facts.managed.binaryKind !== "absent" || facts.foreignBinary
       ? "binary_only"
       : "absent";
 
-  // 收编档下,那个实例**探不通也照样报出来**:它是"我收编的那一个",不可达本身就是要说的话。
+  // 自管那份优先报;它不在时,别人那份**可达才报**(不可达 = 这台机器上没有跑着的实例可说)。
   const instance = managedRunning
     ? managedInstance(facts)
-    : adopted || foreignRunning
+    : foreignInstanceRunning
       ? foreignInstance(facts)
       : undefined;
 
   // 档位。已就位就维持现状(自管形态由二进制是不是符号链接决定 —— 见 detect.ts 的 classifyManagedBinary)。
   const baseRung: MihomoRung = options.isolated
     ? "managed_install"
-    : adopted
-      ? "adopt_instance"
-      : facts.managed.unitInstalled
-        ? facts.managed.binaryKind === "reused"
-          ? "reuse_binary"
-          : "managed_install"
-        : foreignRunning
-          ? "adopt_instance"
-          : facts.foreignBinary
-            ? "reuse_binary"
-            : "managed_install";
+    : provisioned
+      ? facts.managed.binaryKind === "reused"
+        ? "reuse_binary"
+        : "managed_install"
+      : facts.foreignBinary
+        ? "reuse_binary"
+        : "managed_install";
 
   const compatibility = compatibilityFor(baseRung, facts, provisioned);
 
-  // 复用档不达地板 → 回退隔离安装并说明原因(收编档不回退,理由见文件头)。
+  // 复用档不达地板 → 回退隔离安装并说明原因。
   if (baseRung === "reuse_binary" && !provisioned && !compatibility.meets) {
     return {
       presence,
@@ -81,6 +86,7 @@ export function decideLadder(facts: MihomoFacts, options: LadderOptions = {}): L
       provisioned,
       ...(instance ? { instance } : {}),
       compatibility: lockedCompatibility(),
+      foreignInstanceRunning,
       fallback: {
         from: "reuse_binary",
         shortfalls: compatibility.shortfalls,
@@ -98,6 +104,7 @@ export function decideLadder(facts: MihomoFacts, options: LadderOptions = {}): L
     provisioned,
     ...(instance ? { instance } : {}),
     compatibility,
+    foreignInstanceRunning,
   };
 }
 
@@ -113,17 +120,11 @@ function managedInstance(facts: MihomoFacts): MihomoInstance {
   };
 }
 
-/** 能力位为空数组 = 一条都没探出来(通常就是这个实例此刻不在了)。 */
+/** 只在 `facts.foreign` 可达时被调用 —— 别人的实例只报「此刻确实在跑的那一个」。 */
 function foreignInstance(facts: MihomoFacts): MihomoInstance {
   const found = facts.foreign;
   if (!found) {
-    return {
-      owner: "foreign",
-      controller: facts.adoption?.controller ?? "(未知)",
-      secretConfigured: false,
-      capabilities: [],
-      ...(facts.adoption?.configFile ? { configFile: facts.adoption.configFile } : {}),
-    };
+    return { owner: "foreign", controller: "(未知)", secretConfigured: false, capabilities: [] };
   }
   return {
     owner: "foreign",
@@ -137,9 +138,11 @@ function foreignInstance(facts: MihomoFacts): MihomoInstance {
 
 /**
  * 兼容地板判定,判的是**这一档将要用的那份东西**:
- *   * 收编档 → 那个实例(版本 + 三个能力位都要);
  *   * 复用档 → 那个二进制(**只判版本**:能力位得跑起来才问得出,没起来就不当作不达标);
  *   * 安装档 → 锁定版本身,恒达标。
+ *
+ * (收编档废除后,「判别人那个实例够不够格」这件事没有了对象 —— 内核不接管它,也就无需为它设门槛。
+ * 它的版本与能力位仍如实出现在 `status` 的 `instance` 里,那是报告,不是判据。)
  */
 function compatibilityFor(
   rung: MihomoRung,
@@ -148,31 +151,11 @@ function compatibilityFor(
 ): MihomoCompatibility {
   if (rung === "managed_install") return lockedCompatibility();
 
-  if (rung === "adopt_instance") {
-    const probe = facts.foreign?.probe;
-    return fromProbe(probe, probe?.version);
-  }
-
   // 复用档:未就位时看盘上那份;已就位时看 a2 落点上那个符号链接指向的那份。
   const version = provisioned ? facts.managed.version : facts.foreignBinary?.version;
   const shortfalls: MihomoShortfall[] = [];
   const shortfall = versionShortfall(version);
   if (shortfall) shortfalls.push(shortfall);
-  return {
-    floor: MIHOMO_COMPAT_FLOOR,
-    meets: shortfalls.length === 0,
-    ...(version ? { version } : {}),
-    shortfalls,
-  };
-}
-
-function fromProbe(probe: ControllerProbe | undefined, version: string | undefined): MihomoCompatibility {
-  const shortfalls: MihomoShortfall[] = [];
-  if (!probe?.reachable) shortfalls.push("rest_api_unreachable");
-  const shortfall = versionShortfall(version);
-  if (shortfall) shortfalls.push(shortfall);
-  if (probe?.reachable && !probe.meta) shortfalls.push("not_meta_core");
-  if (probe?.reachable && !probe.configsReadable) shortfalls.push("configs_unreadable");
   return {
     floor: MIHOMO_COMPAT_FLOOR,
     meets: shortfalls.length === 0,

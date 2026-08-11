@@ -161,11 +161,15 @@ final class Probe: A2PanelSessionDelegate {
     ///
     /// 这是 `A2PanelFixtures` 头注承诺的那道防漂门:纯逻辑测试喂的是手写清单,
     /// 而手写清单会漂 —— 漂了就在这里当场红。
+    ///
+    /// 对照的是 `liveCapabilities`(手写全集减去当前停用的九条),不是 `capabilities` 全集 ——
+    /// 全集是**渲染器的覆盖面**,里面有意保留着停用能力的描述符,好让那部分渲染逻辑继续被验。
+    /// 两个方向都要判:装置里有而内核没有 = 该摘没摘;内核有而装置没有 = 该加没加(下面第二段)。
     private func checkManifest(_ live: [A2CapabilityDescriptor]) -> Bool {
         var byID: [String: A2CapabilityDescriptor] = [:]
         for capability in live { byID[capability.id] = capability }
         var drift: [String] = []
-        for fixture in A2PanelFixtures.capabilities {
+        for fixture in A2PanelFixtures.liveCapabilities {
             guard let real = byID[fixture.id] else {
                 drift.append("\(fixture.id):真内核里没有这条")
                 continue
@@ -191,7 +195,18 @@ final class Probe: A2PanelSessionDelegate {
                 drift.append("\(fixture.id):allowedValues 装置=\(fixtureAllowed) 真=\(realAllowed)")
             }
         }
-        say("PANEL_MANIFEST: ok=\(drift.isEmpty ? 1 : 0) checked=\(A2PanelFixtures.capabilities.count) "
+        // 反向:真内核注册了、而装置的 live 清单里没有 —— 要么是新能力没登记,要么是某条被"恢复"了
+        // 却忘了从 `disabledCapabilityIDs` 里删掉。两种都必须当场红,否则停用名单会悄悄失真。
+        let liveIDs = Set(live.map(\.id))
+        let fixtureLiveIDs = Set(A2PanelFixtures.liveCapabilities.map(\.id))
+        let unlisted = liveIDs.subtracting(fixtureLiveIDs)
+            .filter { $0.hasPrefix("proxy.") || $0.hasPrefix("arbitration.") }
+        if !unlisted.isEmpty { drift.append("真内核有而装置 live 清单没有:\(unlisted.sorted())") }
+        // 停用名单里的 id 必须真的不在内核注册表里(名单与实现同步的活体判据)。
+        let stillLive = A2PanelFixtures.disabledCapabilityIDs.filter { liveIDs.contains($0) }
+        if !stillLive.isEmpty { drift.append("列入停用却仍在内核注册表里:\(stillLive.sorted())") }
+
+        say("PANEL_MANIFEST: ok=\(drift.isEmpty ? 1 : 0) checked=\(A2PanelFixtures.liveCapabilities.count) "
             + "drift=\(drift.isEmpty ? "-" : drift.joined(separator: " | "))")
         return drift.isEmpty
     }
@@ -222,10 +237,24 @@ final class Probe: A2PanelSessionDelegate {
             problems.append("有项认领了用户操作却没绑能力(空头认领)")
         }
 
-        // ③ 04 票 In 清单六项逐项有落到真实能力的菜单项。
+        // ③ 04 票 In 清单六项逐项有落到真实能力的菜单项 —— **但只对背后能力当前真在注册表里的那几项**。
+        //    某项承诺被暂时收回(2026-08-12:写面九条停用)时,它「没露出来」不是回归而是设计;
+        //    分母因此跟着活着的能力走,而不是恒等于 6。判据来自 `userActionCapabilities` 那张对账表。
         var covered = 0
+        var expected = 0
         for action in A2MenuUserAction.allCases {
             let items = allItems.filter { $0.userAction == action && $0.capabilityID != nil }
+            let backing = A2PanelFixtures.userActionCapabilities[action.rawValue] ?? []
+            if backing.isEmpty { problems.append("用户操作「\(action.displayName)」没有登记它背后的能力") ; continue }
+            guard backing.contains(where: { liveIDs.contains($0) }) else {
+                // 背后一条能力都没注册 → 这一项**本就不该露出来**。反过来若它还露着,那才是缺陷:
+                // 点了会打到一个内核根本不认的 id。
+                if !items.isEmpty {
+                    problems.append("用户操作「\(action.displayName)」背后的能力一条都没注册,菜单却仍有项")
+                }
+                continue
+            }
+            expected += 1
             let hit = !items.isEmpty && items.allSatisfy { liveIDs.contains($0.capabilityID!) }
             if hit { covered += 1 } else { problems.append("用户操作「\(action.displayName)」没有落到真实能力的菜单项") }
         }
@@ -243,7 +272,7 @@ final class Probe: A2PanelSessionDelegate {
         let ghosts = A2PanelFixtures.menuExemptCapabilities.keys.filter { !liveIDs.contains($0) }
         if !ghosts.isEmpty { problems.append("豁免表里有内核已经没有的能力:\(ghosts.sorted())") }
 
-        say("PANEL_COVERAGE: ok=\(problems.isEmpty ? 1 : 0) actions=\(covered)/\(A2MenuUserAction.allCases.count) "
+        say("PANEL_COVERAGE: ok=\(problems.isEmpty ? 1 : 0) actions=\(covered)/\(expected) "
             + "boundItems=\(bound.count) actionableCaps=\(actionable.count) "
             + "exempt=\(A2PanelFixtures.menuExemptCapabilities.keys.sorted().joined(separator: ",")) "
             + "problems=\(problems.isEmpty ? "-" : problems.joined(separator: " | "))")

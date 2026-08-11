@@ -17,7 +17,6 @@ import { outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
 import { MIHOMO_USAGE, helpOutcome, mihomoUsageOutcome } from "./usage.ts";
 
 const RUNG_LABEL: Record<MihomoStatusResult["rung"], string> = {
-  adopt_instance: "收编运行中的实例(进程生死归原托管方)",
   reuse_binary: "只读复用既有二进制(配置/数据/unit 自建)",
   managed_install: "按锁定版隔离安装(a2 自管)",
 };
@@ -111,8 +110,13 @@ function renderStatus(status: MihomoStatusResult): string {
   if (status.skippedController) {
     lines.push(`  已跳过的非回环控制端点:${status.skippedController}(内核不对非本机端点发请求)`);
   }
-  if (!status.provisioned && status.rung !== "adopt_instance") {
-    lines.push("  让它就位(幂等):a2 mihomo install");
+  if (!status.provisioned) {
+    // 别人的实例在跑时,`a2 mihomo install` 会拒绝(内核只读、不接管)—— 那就别在这儿劝人去敲它。
+    lines.push(
+      status.instance?.owner === "foreign"
+        ? "  本机有别人托管的实例在跑 —— a2 只读它,不接管;真要 a2 自己那份:a2 mihomo install --isolated"
+        : "  让它就位(幂等):a2 mihomo install",
+    );
   }
   return lines.join("\n");
 }

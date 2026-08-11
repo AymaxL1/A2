@@ -90,6 +90,17 @@ PROBE_BIN="$("$SWIFT_BIN" build --scratch-path "$ROOT/.build/flagship" --show-bi
 
 # ---- ③ 沙盒 ---------------------------------------------------------------------------
 BOX="$(mktemp -d /tmp/a2pe-XXXXXX)"
+
+# 真实 `~/.a2` 的**本轮基线**(红线自查 R-1 用)。
+#
+# 原判据是「`~/.a2` 不存在」—— 那条在开发机上成立,但用户**真的把 a2 装到自己机器上**之后
+# 就永远红了(2026-08-12 实测:真机验收装出的 ~/.a2 让门禁两条 e2e 齐红)。红线的本意从来不是
+# 「这台机器不许有 a2」,而是**「门禁不许碰用户那一份」**。所以改成基线比对:落一个时间戳标记,
+# 跑完用 `find -newer` 看真实 home 里有没有任何文件被本轮写过。它同时更严 —— 原判据对
+# 「home 本来就在、被门禁改了」是完全看不见的。
+REAL_A2_MARKER="$BOX/.real-a2-marker"
+: > "$REAL_A2_MARKER"
+
 A2HOME="$BOX/a2home"
 WORKSPACE="$BOX/agent-workspace"     # agent 写插件的地方(**不是** A2_HOME)
 SUPPORT="$ROOT/kernel/test/support"
@@ -412,7 +423,13 @@ assert_not_contains "$(a2 capabilities list --json 2>&1)" "plugin.nativeplug" "6
 # ---- ⑩ 红线自查 -----------------------------------------------------------------------
 echo
 echo "-- 红线自查"
-if [ -e "$HOME/.a2" ]; then bad "R-1 真实 ~/.a2 出现了"; else ok "R-1 真实 ~/.a2 仍不存在"; fi
+if [ ! -e "$HOME/.a2" ]; then
+  ok "R-1 真实 ~/.a2 仍不存在"
+elif [ -z "$(find "$HOME/.a2" -newer "$REAL_A2_MARKER" 2>/dev/null | head -1)" ]; then
+  ok "R-1 真实 ~/.a2 存在(用户自己装的),但本轮一个字节都没被碰"
+else
+  bad "R-1 真实 ~/.a2 在本轮被写过:$(find "$HOME/.a2" -newer "$REAL_A2_MARKER" 2>/dev/null | head -3 | tr '\n' ' ')"
+fi
 if grep -rq "33888" "$BOX/daemon.log" "$BOX/probe.log" 2>/dev/null; then
   bad "R-2 日志里出现了用户 mihomo 的端口"
 else

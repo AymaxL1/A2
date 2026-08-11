@@ -287,14 +287,17 @@ test("mihomo status:只有二进制 → presence=binary_only、档位=只读复�
   expect(body.result.compatibility.floor).toBe("1.19.0");
 });
 
-test("mihomo status:跑着别人的实例 → presence=running_instance、档位=收编,能力位三条都是探出来的", async () => {
+test("mihomo status:跑着别人的实例 → 如实报出它(owner=foreign),但那**不构成 a2 已就位**", async () => {
   const box = (sandbox = await makeSandbox());
   const foreign = await startForeignInstance(box, { version: "v1.19.28" });
 
   const body = parseJsonStdout(await mihomo(box, ["status"]));
 
   expect(body.result.presence).toBe("running_instance");
-  expect(body.result.rung).toBe("adopt_instance");
+  // 收编档废除后,别人的实例**不再影响档位** —— 档位只看"a2 自己要就位的话走哪条"。
+  // 盘上有那份二进制,所以是复用档;而 provisioned=false,因为 a2 这边什么都还没装。
+  expect(body.result.rung).toBe("reuse_binary");
+  expect(body.result.provisioned).toBe(false);
   expect(body.result.instance.owner).toBe("foreign");
   expect(body.result.instance.controller).toBe(`127.0.0.1:${foreign.port}`);
   expect(body.result.instance.secretConfigured).toBe(true);
@@ -325,39 +328,11 @@ test("mihomo status:配置里的 external-controller 不是回环 → 有意不�
   expect(body.result.instance).toBeUndefined();
 });
 
-// MARK: - ① 收编档(生命周期归原托管方)
+// MARK: - ⓪ 别人的实例在跑(只读,不接管 —— 2026-08-12 用户裁定,收编档废除)
 
-test("mihomo install:收编档只记一笔收编、什么都不装,那个实例的 pid 全程没被碰过", async () => {
+test("mihomo install:别人的实例在跑 → 结构化拒绝 + **零改动**,那个 pid 全程没被碰过", async () => {
   const box = (sandbox = await makeSandbox());
   const foreign = await startForeignInstance(box, { version: "v1.19.28" });
-  const foreignPid = box.foreignProc!.pid;
-
-  const result = await mihomo(box, ["install"]);
-
-  expect(result.exitCode).toBe(0);
-  const body = parseJsonStdout(result);
-  expect(MihomoChangeResultSchema.safeParse(body.result).success).toBe(true);
-  // 收编档唯一的动作是"记下我收编的是谁"——落的是 a2 自己 home 里的一个小记录。
-  expect(body.result.actions).toEqual(["adoption_recorded"]);
-  expect(body.result.status.rung).toBe("adopt_instance");
-  expect(body.result.status.provisioned).toBe(true);
-  expect(body.result.status.instance.owner).toBe("foreign");
-  expect(body.result.status.instance.controller).toBe(`127.0.0.1:${foreign.port}`);
-  // **绝不越权**:没有 unit、没有自管二进制,别人的进程活得好好的。
-  expect(existsSync(box.mihomoUnitPath)).toBe(false);
-  expect(existsSync(box.managedBinary)).toBe(false);
-  expect(isAlive(foreignPid)).toBe(true);
-  // supervisor 那边只发生过只读的 print(没有任何一条改状态的命令)。
-  const calls = await supervisorCalls(box);
-  expect(calls.every((call) => call.startsWith("launchctl print "))).toBe(true);
-  // 幂等:第二次什么都不改。
-  expect(parseJsonStdout(await mihomo(box, ["install"])).result.actions).toEqual([]);
-  expect(isAlive(foreignPid)).toBe(true);
-}, 20000);
-
-test("mihomo install:收编对象不达兼容地板 → 结构化拒绝 + 退出码 5,不擅自升级、不擅自并存", async () => {
-  const box = (sandbox = await makeSandbox());
-  await startForeignInstance(box, { version: "v1.10.0" });
   const foreignPid = box.foreignProc!.pid;
 
   const result = await mihomo(box, ["install"]);
@@ -365,55 +340,69 @@ test("mihomo install:收编对象不达兼容地板 → 结构化拒绝 + 退出
   expect(result.exitCode).toBe(5);
   const body = parseJsonStdout(result);
   expect(body.ok).toBe(false);
-  expect(body.error.code).toBe("mihomo_below_floor");
-  expect(body.error.detail).toContain("version_below_floor");
-  // 拒绝即指引:两条明路,一条是人类自己升级,一条是显式隔离安装。
+  expect(body.error.code).toBe("mihomo_foreign_instance_running");
+  // 报文要说清"我看见的是哪一个"——地址与来源配置都是刚探到的事实。
+  expect(body.error.detail).toContain(`127.0.0.1:${foreign.port}`);
+  expect(body.error.detail).toContain(box.foreignConfig);
+  expect(body.error.context ?? body.error.guidance.context).toBeDefined();
+  // 拒绝即指引:一条是"就这么用"(a2 只读它),一条是显式并存。
   const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain("a2 mihomo install --isolated");
   expect(commands).toContain("a2 mihomo status --json");
-  // 不擅自升级 = 那个实例原样活着;不擅自并存 = 没偷偷装 a2 自己那份。
-  expect(isAlive(foreignPid)).toBe(true);
+  expect(commands).toContain("a2 mihomo install --isolated --json");
+
+  // **零改动**的活体证据:unit、自管二进制、数据目录一个都没出现,别人的进程活得好好的。
   expect(existsSync(box.mihomoUnitPath)).toBe(false);
   expect(existsSync(box.managedBinary)).toBe(false);
-});
+  expect(existsSync(path.join(box.home, "mihomo"))).toBe(false);
+  expect(isAlive(foreignPid)).toBe(true);
+  // 也没有任何"我盯上了谁"的记录落盘 —— 收编记录随收编档一起退场了。
+  expect(existsSync(path.join(box.home, "mihomo", "adopted.json"))).toBe(false);
+  // supervisor 那边只发生过只读的 print(没有任何一条改状态的命令)。
+  const calls = await supervisorCalls(box);
+  expect(calls.every((call) => call.startsWith("launchctl print "))).toBe(true);
 
-test("mihomo install:被收编的实例死了 → 报警 + 指引(含人类可执行的重启命令),内核绝不重拉", async () => {
+  // 再敲一次还是同一种收场 —— 拒绝是稳定的,不会第二次就"想通了"。
+  expect((await mihomo(box, ["install"])).exitCode).toBe(5);
+  expect(isAlive(foreignPid)).toBe(true);
+}, 20000);
+
+test("mihomo status:别人的实例在跑时,人类面明说「只读不接管」并给出 --isolated 那条路", async () => {
   const box = (sandbox = await makeSandbox());
   await startForeignInstance(box, { version: "v1.19.28" });
-  // 先真的收编一次 —— 有了这笔记录,"我收编的那个实例死了"才是一句有主语的话
-  // (否则内核无从区分它与"这台机器上本来就没有跑着的 mihomo")。
-  expect(parseJsonStdout(await mihomo(box, ["install"])).result.actions).toEqual([
-    "adoption_recorded",
-  ]);
+
+  // 这一条看的是**人类面**(不加 --json),所以直接走 runCli。
+  const result = await runCli(["mihomo", "status"], { home: box.home, env: box.env });
+
+  expect(result.exitCode).toBe(0);
+  // 未就位时那句提示不能再劝人去敲 `a2 mihomo install` —— 那条命令此刻必然被拒。
+  expect(result.stdout).toContain("a2 mihomo install --isolated");
+  expect(result.stdout).not.toContain("让它就位(幂等):a2 mihomo install");
+});
+
+test("mihomo install:那道闸拦的是「正在跑」—— 别人的实例没了之后,a2 照常走复用档就位", async () => {
+  const box = (sandbox = await makeSandbox());
+  await startForeignInstance(box, { version: "v1.19.28" });
   const foreignPid = box.foreignProc!.pid;
+  const beforeBytes = await readFile(box.foreignBinary);
+
+  // 先确认闸是关着的。
+  expect((await mihomo(box, ["install"])).exitCode).toBe(5);
+
   box.foreignProc!.kill("SIGKILL");
   await box.foreignProc!.exited;
   await waitFor("别人的实例真的没了", () => !isAlive(foreignPid));
 
   const result = await mihomo(box, ["install"]);
 
-  expect(result.exitCode).toBe(5);
+  expect(result.exitCode).toBe(0);
   const body = parseJsonStdout(result);
-  expect(body.error.code).toBe("mihomo_unreachable");
-  expect(body.error.guidance.summary).toContain("原托管方");
-  const commands: string[] = body.error.guidance.steps.map((s: { command?: string }) => s.command);
-  // 「人类可执行的重启命令」是从检测到的事实拼出来的,原样可敲。
-  expect(commands).toContain(
-    `${box.foreignBinary} -d ${path.dirname(box.foreignConfig)} -f ${box.foreignConfig}`,
-  );
-  expect(commands).toContain("a2 mihomo install --isolated");
-  // 内核没有替它重拉:没装任何 unit,也没对 supervisor 发过任何改状态的命令。
-  expect(existsSync(box.mihomoUnitPath)).toBe(false);
-  const calls = await supervisorCalls(box);
-  expect(calls.every((call) => call.startsWith("launchctl print "))).toBe(true);
-  // status 也如实降级:档位仍是收编(我盯着的还是那个端点),但能力位一条都探不到。
-  const statusResult = await mihomo(box, ["status"]);
-  expect(statusResult.exitCode).toBe(0);
-  const status = parseJsonStdout(statusResult);
-  expect(status.result.rung).toBe("adopt_instance");
-  expect(status.result.instance.capabilities).toEqual([]);
-  expect(status.result.compatibility.shortfalls).toContain("rest_api_unreachable");
-}, 20000);
+  expect(body.result.status.rung).toBe("reuse_binary");
+  expect(body.result.status.provisioned).toBe(true);
+  expect(body.result.actions).toContain("binary_linked");
+  // 复用 = 只读引用:那份二进制的真身一个字节都没变。
+  expect(await readFile(box.foreignBinary)).toEqual(beforeBytes);
+  expect((await lstat(box.managedBinary)).isSymbolicLink()).toBe(true);
+}, 25000);
 
 // MARK: - ② 只读复用档
 
@@ -638,10 +627,11 @@ test("升级永远显式:install 绝不换版本,只有 upgrade 会换(换完还
   }
 }, 30000);
 
-test("mihomo upgrade:收编档没有可升级的对象 → mihomo_not_managed(内核不替别人升级)", async () => {
+test("mihomo upgrade:a2 压根没有自管二进制时 → mihomo_not_managed(内核不替别人升级)", async () => {
   const box = (sandbox = await makeSandbox());
   await startForeignInstance(box, { version: "v1.19.28" });
-  await mihomo(box, ["install"]);
+  // install 此刻会被那道闸拒掉(别人的实例在跑)—— 所以 a2 这边确实一份自管二进制都没有。
+  expect((await mihomo(box, ["install"])).exitCode).toBe(5);
 
   const result = await mihomo(box, ["upgrade"]);
 
@@ -649,7 +639,7 @@ test("mihomo upgrade:收编档没有可升级的对象 → mihomo_not_managed(�
   const body = parseJsonStdout(result);
   expect(body.error.code).toBe("mihomo_not_managed");
   const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain("a2 mihomo install --isolated");
+  expect(commands).toContain("a2 mihomo status --json");
   expect(isAlive(box.foreignProc!.pid)).toBe(true);
 }, 20000);
 
@@ -748,14 +738,17 @@ test("mihomo 用法错:缺动作 / 未知动作 / 多余参数 / --isolated 用�
   expect(await supervisorCalls(box)).toEqual([]);
 });
 
-test("mihomo --help --json:帮助进 result,写明三档阶梯、两个 unit 独立、升级永远显式", async () => {
+test("mihomo --help --json:帮助进 result,写明两档阶梯 + 只读不接管、两个 unit 独立、升级永远显式", async () => {
   const box = (sandbox = await makeSandbox());
 
   const result = await mihomo(box, ["--help"]);
 
   expect(result.exitCode).toBe(0);
   const body = parseJsonStdout(result);
-  expect(body.result.usage).toContain("adopt_instance");
+  // 收编档已废除:帮助里不能再出现那个档位名,取而代之的是「只读,不接管」这条口径。
+  expect(body.result.usage).not.toContain("adopt_instance");
+  expect(body.result.usage).toContain("只读,不接管");
+  expect(body.result.usage).toContain("--isolated");
   expect(body.result.usage).toContain("reuse_binary");
   expect(body.result.usage).toContain("managed_install");
   expect(body.result.usage).toContain(MIHOMO_LABEL);

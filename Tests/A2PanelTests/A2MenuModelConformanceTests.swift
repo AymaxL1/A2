@@ -54,7 +54,10 @@ struct A2MenuModelConformanceTests {
 
     @Test("10 反向核对:manifest 里每条可发起的 proxy 能力都在菜单里露出,或在豁免表里记账")
     func actionableCapabilitiesExposed() {
-        let actionable = A2PanelFixtures.capabilities
+        // 判据对的是 `liveCapabilities`(内核当前真注册的那一份)。停用的那几条不参与:
+        // 它们不在菜单里的理由是「内核压根没注册」,不是「有意不投影」—— 后者才需要豁免记账。
+        // 用 live 而不是全集,也顺带保证这条断言在能力恢复注册时自动把它们重新纳入判据。
+        let actionable = A2PanelFixtures.liveCapabilities
             .filter { $0.id.hasPrefix("proxy.") && ($0.risk == .normal || $0.risk == .dangerous) }
             .map(\.id)
         #expect(!actionable.isEmpty, "manifest 里应当有可发起的 proxy 能力")
@@ -63,6 +66,22 @@ struct A2MenuModelConformanceTests {
             !exposed.contains($0) && A2PanelFixtures.menuExemptCapabilities[$0] == nil
         }
         #expect(missing.isEmpty, "既没进菜单也没记账的能力:\(missing.sorted())")
+    }
+
+    @Test("10 停用名单与渲染覆盖面是两件事:停用的能力仍有渲染断言,但不算在对账清单里")
+    func disabledCapabilitiesStillRendered() {
+        // 停用名单非空,且每一条都真的从 live 清单里被摘掉了。
+        #expect(!A2PanelFixtures.disabledCapabilityIDs.isEmpty)
+        let liveIDs = Set(A2PanelFixtures.liveCapabilities.map(\.id))
+        for id in A2PanelFixtures.disabledCapabilityIDs {
+            #expect(!liveIDs.contains(id), "\(id) 列入停用却还在 live 清单里")
+        }
+        // 但渲染器的覆盖面**保留**着它们 —— 那部分渲染逻辑一行没删,断言就得继续跑,
+        // 否则能力恢复注册的那天,菜单是一片没人验过的代码。
+        let allIDs = Set(A2PanelFixtures.capabilities.map(\.id))
+        for id in A2PanelFixtures.disabledCapabilityIDs {
+            #expect(allIDs.contains(id), "\(id) 从渲染覆盖面里丢了 —— 停用不等于删测试")
+        }
     }
 
     @Test("10 豁免表:每条都指向真实能力,且理由非空(空理由不接受)")

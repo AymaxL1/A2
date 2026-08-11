@@ -116,27 +116,25 @@ test("supervision:实例掉了 → instance_down + 指引;回来了 → instance
   expect((await supervision(box)).alive).toBe(true);
 }, 40000);
 
-test("supervision:被收编的实例死了 → 报警指引明说「生命周期归原托管方」,内核绝不重拉", async () => {
+test("supervision:别人的实例在跑也**不进观测循环** —— 没有可盯的对象就如实说没有,不报警", async () => {
   const box = (sandbox = await makeProxySandbox());
   await startForeignInstance(box, { groups: "PROXY=F1" });
-  await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  // 收编档废除后 install 会拒(别人在跑),a2 这边不会有自管配置 —— 也就没有可盯的对象。
+  const install = await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  expect(install.exitCode).toBe(5);
   await startProxyDaemon(box);
 
-  const started = await waitForEvent(box, "watch_started");
-  expect(started.owner).toBe("foreign");
-  expect((await supervision(box)).target.managed).toBe(false);
+  // 等够几个观测周期,确认它一直没认领任何目标。
+  await Bun.sleep(600);
+  const snapshot = await supervision(box);
+  expect(snapshot.watching).toBe(true);
+  expect(snapshot.target).toBeUndefined();
+  // 「没有对象」不是「对象死了」:一条 instance_down 都不该出现,否则等于替一个不归我们管的
+  // 进程发假警报(而它此刻恰恰活得好好的)。
+  expect(snapshot.events.some((e: { kind: string }) => e.kind === "instance_down")).toBe(false);
+  expect(isAlive(box.foreignProc!.pid)).toBe(true);
 
-  const pid = box.foreignProc!.pid;
-  box.foreignProc!.kill("SIGKILL");
-  await box.foreignProc!.exited;
-  await waitFor("别人的实例真的没了", () => !isAlive(pid));
-
-  const down = await waitForEvent(box, "instance_down");
-  expect(down.owner).toBe("foreign");
-  expect(down.guidance.summary).toContain("原托管方");
-  const commands = down.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain("a2 mihomo install --isolated --json");
-  // 那个实例不在任何 a2 的 unit 里,观测者压根没有能碰它的手段。
+  // 观测者对 supervisor 依旧只有只读的 print。
   const calls = (await readFile(box.supervisorLog, "utf8")).split("\n").filter((l) => l.length > 0);
   expect(calls.every((line) => line.startsWith("launchctl print "))).toBe(true);
 }, 40000);

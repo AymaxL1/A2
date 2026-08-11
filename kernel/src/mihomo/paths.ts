@@ -49,7 +49,7 @@ export const MihomoEnv = {
   binDirs: "A2_MIHOMO_BIN_DIRS",
   /** 覆写「读哪些配置文件找 external-controller」(冒号分隔)。仅测试与诊断用。 */
   configFiles: "A2_MIHOMO_CONFIG_FILES",
-  /** 直接指定要收编的 external-controller(`host:port`),跳过配置解析。 */
+  /** 直接指定别人那个 external-controller(`host:port`),跳过配置解析。**只用于读**(收编档已废除)。 */
   controller: "A2_MIHOMO_CONTROLLER",
   /** 配套 `A2_MIHOMO_CONTROLLER` 的 secret。 */
   secret: "A2_MIHOMO_SECRET",
@@ -176,7 +176,7 @@ export function readControllerFromConfig(
 /**
  * 从**一份配置文件**里现读 secret —— 读不到(文件不在、没那一行)就当没有,不猜、不报错。
  *
- * **每次现读、绝不缓存**:那份配置的主人随时可能改 secret(收编档尤其 —— 那压根是别人的文件),
+ * **每次现读、绝不缓存**:那份配置的主人随时可能改 secret(别人那份尤其 —— 那压根是别人的文件),
  * 缓存一把过期的钥匙只会让探测在某个时刻毫无征兆地变成 401。
  * 三处调用点(检测自管实例、检测别人的实例、就位后等控制端点应答)共用这一条,免得各写各的 catch。
  */
