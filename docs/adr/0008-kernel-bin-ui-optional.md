@@ -22,6 +22,7 @@ date: 2026-08-04
 5. **UI = 可选的对等客户端**：Mac 菜单栏壳 `a2-panel`（.app 显示名「A2 Panel」）与其他客户端走同一条 UDS capability 面，**无特权通道**；确认器（confirm agent）与订阅者（subscriber）只是长连接上注册的**角色**。壳只做两件事——内核事件流的投影（全量快照 + 增量推送，零轮询）与确认器呈现；**`a2-panel` 不得含业务逻辑**（新架构下的结构红线）。壳缺席/崩溃时内核静默运行：事件入日志、CLI 可查、dangerous 自动降回默拒。**「退出即还原」语义废除**——系统代理还原等动作改挂内核显式命令，壳退出仅是客户端断连。
 6. **常驻 = 显式安装 + 系统托管**：一个编译产物多模式（默认 CLI，`a2 daemon run` 进前台常驻）；`a2 service install|uninstall|status` 落 launchd user 域 plist / systemd user unit，开机自启与崩溃自愈全归系统 supervisor，应用层不造看门狗。未安装/未运行时 CLI **永不隐式拉起** daemon，返回含精确修复命令的结构化指引（与「拒绝即指引」同构）——系统状态永远不因 agent 的一次查询而被动改变。
    > **修订（2026-08-09，14 票）**：本条**不改写**。菜单栏壳自 [ADR 0012](0012-panel-self-sufficient-bootstrap.md)（面板自足引导）起可经 `.app` 内嵌的内核 bin、以白名单 `service` 命令引导安装——那是**多了一条显式发起路径**（用户的一次点击），「永不隐式拉起」与「系统托管、应用层不造看门狗」两条边界原样有效。
+   > **修订（2026-08-18，[ADR 0014](0014-mihomo-embedded-subprocess.md)）**：「应用层不造看门狗」对 **mihomo 开显式例外**——mihomo 改为内核直接子进程，保活（节流重拉、故障态、启动认尸）由内核亲管；**a2 daemon 自身仍归系统 supervisor，本条对 a2 自身原样有效**。连带：`com.a2.kernel` 的 KeepAlive 修为 `{Crashed:true, SuccessfulExit:false}`（补 kill -9 不自愈缺口，实测见 0014 Context），代价是主动停止路径必须 exit 0。
 7. **命名与路径统一 a2 系**（品牌级改名，原 `aa` 系全面退场）：bin `a2`、常驻 `a2 daemon run`、服务 `a2 service …`、壳 target `a2-panel`；路径 `~/.a2`（`A2_HOME` 可覆写）、socket `~/.a2/run/kernel.sock`、unit 命名空间 `com.a2.*`。中文概念名不变（「菜单栏壳」「确认器」）。
 
 ## Consequences
