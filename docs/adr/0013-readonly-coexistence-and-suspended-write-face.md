@@ -5,7 +5,7 @@ date: 2026-08-12
 
 # 与既有 mihomo 的关系收窄为**只读共存**;控制面写这一族**暂时停用**
 
-> **2026-08-18 修订**（[ADR 0014](0014-mihomo-embedded-subprocess.md)）：本 ADR 的「只读共存」立场**原样并入**托管模式的 `observe` 档，继续有效；「共存阶梯」词汇退场（`reuse_binary`/`managed_install` 两档由 embedded 子进程取代）；`mihomo_foreign_instance_running` 拒绝与 `--isolated` 逃生门被「首启双选流 + 并跑口径」取代（0014 第 3/7 条）。写面九条维持摘注册；文末预告的节点合并 CLI 方向不变、地位上升。
+> **2026-08-18 修订**（[ADR 0014](0014-mihomo-embedded-subprocess.md)）：本 ADR 的「只读共存」立场**原样并入**托管模式的 `observe` 档，继续有效；「共存阶梯」词汇退场（`reuse_binary`/`managed_install` 两档由 embedded 子进程取代）；`mihomo_foreign_instance_running` 拒绝与 `--isolated` 逃生门被「首启双选流 + 并跑口径」取代（0014 第 3/7 条）。写面九条维持摘注册；文末预告的节点合并 CLI **不做了**（2026-08-18 用户裁定：配置的事全归 agent，不为它造专用命令）。
 
 2026-08-12 用户裁定,两件事一起做:
 
