@@ -131,36 +131,33 @@ status 的三态(机读字段 result.state):
        6 这条请求在这台机器 / 这个 bin / 这个 $A2_HOME 上根本不成立(本平台无已支持的 supervisor;
          源码态的 a2 用了 --copy-to-home;--purge 的目标不是缺省 ~/.a2、或者是一根符号链接)`;
 
-export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据面不随控制面起落)
+export const MIHOMO_USAGE = `a2 mihomo —— 内嵌代理内核的托管面(mihomo 随 a2 生、随 a2 死)
 
 用法:
-  a2 [--json] mihomo status                检测本机现状与将采用的阶梯档位(只读)
-  a2 [--json] mihomo install [--isolated]  按阶梯就位(幂等);--isolated = 不复用别人的,装 a2 自己那份
-  a2 [--json] mihomo uninstall             卸掉 a2 自管的那份(unit + 进程;二进制/配置/数据保留)
-  a2 [--json] mihomo upgrade               显式升级 a2 自管的二进制到锁定版
+  a2 [--json] mihomo status                     本机现状 + 给 agent 的下一步指引(只读;daemon 没跑也能答)
+  a2 [--json] mihomo enable --mode=embedded     启用内置代理内核(下载锁定版并由 a2 内核服务托管其生死)
+  a2 [--json] mihomo enable --mode=observe      只读旁观本机已有的 mihomo(a2 不改动、不接管、不重启它)
+  a2 [--json] mihomo disable                    停用 mihomo 功能(落盘 off;内置子进程随之停下)
+  a2 [--json] mihomo restart                    重启内置子进程(改完配置让它生效;故障态计数清零。需 daemon 在跑)
 
-共存阶梯(检测并优先复用,复用**到二进制级为止**):
-  reuse_binary          盘上有二进制 → 只读复用它(落点上放一个符号链接,真身一个字节都不碰),
-                        配置/数据目录与 com.a2.mihomo unit 全套自建
-  managed_install       全无(或 --isolated)→ 按锁定版从官方渠道下载 + SHA-256 校验 + 落位,再挂 unit
+托管模式(用户显式裁定、一次性落盘;检测结果只进报告面,永不自动切换):
+  off        出厂缺省 —— 不管
+  observe    只读旁观本机已有的那份(它的配置与生死都归它的主人)
+  embedded   a2 自己拉起一个子进程:锁定版二进制、配置头部由 a2 钉住、**正文归你与你的 agent 直接改**
 
-已有实例在跑怎么办:**只读,不接管**(2026-08-12 用户裁定)。a2 mihomo status 照旧如实报出它的地址、
-版本与能力位;但 a2 未就位时 install 会结构化拒绝(mihomo_foreign_instance_running)且**零改动** ——
-机器上要不要并存两份 mihomo 是有代价的决定,交给人来做,逃生门是显式的 --isolated。
+配置怎么改(embedded):直接编辑 <A2_HOME>/mihomo/config.yaml(a2 只钉自己的七个头部键,
+其余每一个字节都归你),改完 a2 mihomo restart 生效。
 
-兼容地板:要复用的那份二进制不达地板时,内核**不擅自升级别人的东西** ——
-回退为隔离安装并在报文里说明原因(result.fallback)。
+升级随 a2 走:锁定版由内核编译期常量固定;a2 升级后下次拉起前自动换二进制,没有独立的 upgrade 命令。
 
-版本:锁定版由内核编译期常量固定;**任何路径都不静默换版本**,换版本只有 a2 mihomo upgrade 一条命令。
-
-数据面不随控制面起落:com.a2.mihomo 与 com.a2.kernel 是两个独立 unit —— 卸内核不卸 mihomo,
-内核崩了 mihomo 照跑,mihomo 崩了由系统按 KeepAlive.Crashed / Restart=on-failure 重拉。
+别人的 mihomo:任何模式下 a2 都**只读不碰**(不 stop/restart/kill、不改它的配置)。
+检测到旧版 a2 自己装的 com.a2.mihomo 服务时,enable --mode=embedded 会自动移除它(审计留痕)。
 
 环境变量:
-  A2_HOME                  覆写 ~/.a2(自管 mihomo 落在 <A2_HOME>/mihomo/)
+  A2_HOME                  覆写 ~/.a2(内嵌 mihomo 落在 <A2_HOME>/mihomo/)
   A2_MIHOMO_CONTROLLER     直接指定别人那个 external-controller(host:port),跳过配置解析(只用于读)
   A2_MIHOMO_SECRET         配套上一条的 secret
-  A2_MIHOMO_CONTROLLER_PORT 覆写 a2 自管实例的控制端口(默认 ${A2_MIHOMO_CONTROLLER_PORT},有意避开 mihomo 默认的 9090)
+  A2_MIHOMO_CONTROLLER_PORT 覆写 a2 内置实例的控制端口(默认 ${A2_MIHOMO_CONTROLLER_PORT},有意避开 mihomo 默认的 9090)
   A2_MIHOMO_RELEASE_BASE   覆写发布渠道根地址(镜像源)
   A2_MIHOMO_BIN_DIRS       覆写二进制搜索目录(冒号分隔)。仅测试与诊断用
   A2_MIHOMO_CONFIG_FILES   覆写配置搜索路径(冒号分隔)。仅测试与诊断用
@@ -169,7 +166,7 @@ export const MIHOMO_USAGE = `a2 mihomo —— mihomo 的获取与共存(数据�
 
 内核只对回环地址上的 external-controller 发只读请求(GET /version、GET /configs),从不做端口扫描。
 
-退出码:0 成功 / 1 用法错 / 5 事没办成(不可达、不达地板、不归 a2 管、下载校验失败)/ 6 本平台无已支持的 supervisor`;
+退出码:0 成功 / 1 用法错 / 4 restart 时 daemon 不可达 / 5 事没办成(下载校验失败、故障态、拆旧 unit 失败)`;
 
 export const PROXY_USAGE = `a2 proxy —— 代理控制面(域子命令 = 能力调用的另一种 argv 写法)
 

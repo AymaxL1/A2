@@ -1,0 +1,32 @@
+{
+  "mode": "embedded",
+  "embedded": {
+    "state": "failed",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": false,
+    "restartCount": 3,
+    "binaryVersion": "v1.19.28",
+    "lastError": "FATA[0000] Parse config error: yaml: line 12: mapping values are not allowed in this context"
+  },
+  "guidance": {
+    "summary": "内置 mihomo 连续 3 次启动失败,A2 已暂停重拉。最近一次错误输出附在 result.embedded.lastError(原文)。常见原因:配置 YAML 语法错误、端口被占用。",
+    "steps": [
+      {
+        "description": "检查配置文件(路径 /Users/alice/.a2/mihomo/config.yaml),对照 lastError 修复"
+      },
+      {
+        "description": "修好后重启内置内核",
+        "command": "a2 mihomo restart --json"
+      }
+    ],
+    "context": {
+      "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+      "lockedVersion": "v1.19.28"
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

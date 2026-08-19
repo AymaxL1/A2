@@ -1,0 +1,26 @@
+{
+  "mode": "off",
+  "embedded": {
+    "state": "stopped",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": false,
+    "restartCount": 0
+  },
+  "guidance": {
+    "summary": "mihomo 功能未启用。两种模式:embedded(A2 管理内置 mihomo,推荐)/observe(只读旁观本机已有 mihomo)。本机未检测到在跑的 mihomo,推荐 embedded。",
+    "steps": [
+      {
+        "description": "与用户确认后启用内置代理内核(将下载 mihomo v1.19.28,约 15 MB,校验后启用)",
+        "command": "a2 mihomo enable --mode=embedded --json"
+      }
+    ],
+    "context": {
+      "lockedVersion": "v1.19.28"
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

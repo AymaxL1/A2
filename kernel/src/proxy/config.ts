@@ -66,6 +66,7 @@ function orderedSettings(settings: ProxySettings): ProxySettings {
     allowLan: settings.allowLan,
     logLevel: settings.logLevel,
     mode: settings.mode,
+    managedMode: settings.managedMode,
   };
 }
 

@@ -1,16 +1,15 @@
 // 存活监督:daemon 里那条**只读**的观测循环。
 //
-// 它回答的问题只有一个 ——「a2 自管的那个 mihomo 实例,此刻还在吗」。为此它每隔一段时间
-// 对那个 external-controller 发一次 `GET /version`,把状态变化写成结构化事件。
+// 它回答的问题只有一个 ——「a2 内嵌的那个 mihomo 子进程,此刻控制面还应答吗」。为此它每隔一段时间
+// 对自家 external-controller 发一次 `GET /version`,把状态变化写成结构化事件。
 //
-// **本文件里没有任何一行会改变系统状态**:不写配置、不碰 supervisor、不动系统代理、不重拉任何进程。
-// 这不是自律,是设计 —— 观测者一旦有权动手,「数据面不随控制面起落」就没人守得住了:
-// 内核崩一次就会引发一串它自以为好心的重启。实例没了,内核只产出报警 + 指引(06 票的口径),
-// 由人或 agent 决定怎么办。
+// **本文件里没有任何一行会改变系统状态**:不写配置、不动系统代理、不重拉任何进程。
+// 重拉是 `child.ts` 的事(它有节流与故障态);这条循环是**控制面视角**的第二只眼 ——
+// 进程活着但控制面不应答(端口被抢、配置里的 controller 漂了)只有它看得见。
 //
-// 「盯谁」只用一件事实,**不跑那套完整检测**(那要 spawn `mihomo -v` 又要问 supervisor,
-// 每 5 秒来一遍太贵):a2 自管配置 `config.yaml` 在不在。它不在 = 此刻没有可盯的对象,如实报告,不报警。
-// (收编档废除后,「盯别人那个实例」这件事整个退场 —— 判据从两件事实缩成一件。)
+// 「盯谁」只用一件事实,**不跑那套完整检测**:落盘的托管模式是不是 `embedded`。
+// 不是 = 没有可盯的对象,如实报告,不报警 —— observe 模式**有意不进循环**(ADR 0013 的裁定原样有效:
+// 反复探一个我们既不负责拉起、也不负责配置的进程,只会产出一份看着像"我管着它"的假报警)。
 //
 // 推送面(订阅 / 确认器)归 08 票。本票产出的 `ProxySupervisionEvent` **就是**将来要推的那份载荷,
 // 形状不变 —— 08 票只需把它发出去,不必再造一遍。
@@ -20,6 +19,7 @@ import path from "node:path";
 import type { MihomoOwner, ProxySupervisionEvent, ProxySupervisionResult } from "../contract/wire.ts";
 import { probeController } from "../mihomo/controller.ts";
 import { mihomoLayout, readSecretOf } from "../mihomo/paths.ts";
+import { readSettings } from "./config.ts";
 import { LOG_DIR_MODE, LOG_DIR_NAME } from "../service/unit.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 
@@ -126,13 +126,17 @@ export function createProxySupervisor(
       lastCheckAt = at;
 
       if (alive === undefined) {
+        // **首拍恒记 watch_started**(14 票):daemon 起来的同一瞬孩子往往还在拉起,首拍不可达是
+        // 预期中的过渡,不是事故 —— 把它报成 instance_down 等于 daemon 每次启动都先自吓一跳。
+        // 持续不应答自有去处:后续转变出 up/down,连续启动失败走 status 的故障态。
         await record({
           at,
-          kind: probe.reachable ? "watch_started" : "instance_down",
+          kind: "watch_started",
           controller: next.controller,
           owner: next.owner,
-          ...(probe.detail ? { detail: probe.detail } : {}),
-          ...(probe.reachable ? {} : { guidance: downGuidance(next) }),
+          ...(probe.reachable
+            ? {}
+            : { detail: "控制面尚未应答(子进程可能正在拉起)。持续不应答看 a2 mihomo status 的故障态。" }),
         });
       } else if (alive !== probe.reachable) {
         await record({
@@ -173,7 +177,7 @@ export function createProxySupervisor(
           kind: "watch_stopped",
           controller: current.controller,
           owner: current.owner,
-          detail: "内核 daemon 停止,观测结束 —— mihomo 与系统代理不受影响(数据面不随控制面起落)。",
+          detail: "内核 daemon 停止,观测结束 —— 内嵌 mihomo 随 daemon 一并停下(14 票:随 a2 生死);系统代理设置不受影响。",
         });
       }
     },
@@ -203,24 +207,18 @@ export function createProxySupervisor(
 }
 
 /**
- * 盯谁 —— **只盯 a2 自管的那一份**(判据:自管配置在不在)。没有它 = 没有可盯的对象。
+ * 盯谁 —— **只盯 a2 内嵌的那一份**(判据:落盘的托管模式 = `embedded`)。其余模式 = 没有可盯的对象。
  *
- * 收编档废除后(2026-08-12 用户裁定:已有在跑的 mihomo 只读、不接管),内核不再存
- * 「我盯着别人哪个实例」这种记录,存活监督自然也就只剩自管那一个对象。别人的实例仍能被
- * `a2 mihomo status` 现探现报,但**不进这条 5 秒一轮的循环** —— 反复探一个我们既不负责拉起、
- * 也不负责配置的进程,除了给人一份看着像"我管着它"的报警之外没有别的作用。
+ * observe 模式与别人的实例**有意不进循环**(ADR 0013 → ADR 0014 一脉相承):它们仍能被
+ * `a2 mihomo status` 现探现报,但内核不对一个自己不负责拉起的进程做常驻监督。
  */
 async function resolveWatchTarget(
   paths: KernelPaths,
   env: Record<string, string | undefined>,
 ): Promise<WatchTarget | undefined> {
   const layout = mihomoLayout(paths, env);
-
-  const hasManagedConfig = await Bun.file(layout.configPath)
-    .text()
-    .then(() => true)
-    .catch(() => false);
-  if (!hasManagedConfig) return undefined;
+  const settings = await readSettings(layout, env);
+  if (settings.managedMode !== "embedded") return undefined;
   const secret = await readSecretOf(layout.configPath);
   return {
     owner: "a2",
@@ -231,15 +229,16 @@ async function resolveWatchTarget(
   };
 }
 
-/** 「实例没了」那条报警自带的指引 —— 与 06 票 `a2 mihomo install` 的拒绝报文同一口径。 */
+/** 「实例没了」那条报警自带的指引 —— 与 status 故障态(guidance 态 C)同一口径。 */
 function downGuidance(target: WatchTarget): ProxySupervisionEvent["guidance"] {
-  // 收编档废除后被盯的对象恒是 a2 自管那份(`resolveWatchTarget` 只认它),所以这里只剩一种说法。
+  // 被盯的对象恒是 a2 内嵌那份(`resolveWatchTarget` 只认它),所以这里只剩一种说法。
   // `owner`/`managed` 两个字段仍留在 `WatchTarget` 上 —— 它们进事件载荷,是给读事件的人看的事实。
   return {
-    summary: "a2 自管的那份 mihomo 没在应答。它由系统 supervisor 托管,先看它现在什么状态。",
+    summary:
+      "内置 mihomo 的控制面没在应答。进程面与最近错误看 status;连续启动失败会转故障态并停止重拉。",
     steps: [
-      { description: "看 mihomo 现状(进程面 + 控制面)", command: "a2 mihomo status --json" },
-      { description: "让它就位(幂等)", command: "a2 mihomo install --json" },
+      { description: "看 mihomo 现状(进程面 + 控制面 + lastError)", command: "a2 mihomo status --json" },
+      { description: "重启内置内核(故障计数清零)", command: "a2 mihomo restart --json" },
     ],
     context: { controller: target.controller, owner: target.owner },
   };

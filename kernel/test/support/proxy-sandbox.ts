@@ -146,6 +146,9 @@ export async function makeProxySandbox(
       ...(options.delays ? { A2_FAKE_MIHOMO_DELAYS: options.delays } : {}),
       // 观测循环在测试里要跑得够快才看得到状态变化。
       A2_PROXY_WATCH_INTERVAL_MS: "200",
+      // 内嵌子进程的节流/健康阈值同理调快:等真 10 秒的重拉是浪费门禁的命。
+      A2_MIHOMO_CHILD_THROTTLE_MS: "400",
+      A2_MIHOMO_CHILD_HEALTHY_MS: "200",
     },
   };
 }
@@ -196,21 +199,27 @@ export async function waitFor(
   throw new Error(`等「${what}」超时(${timeoutMs}ms)`);
 }
 
-/** 把假 mihomo 放进"别人的 bin 目录"(复用档的复用对象)。 */
+/** 把假 mihomo 放进"别人的 bin 目录"(检测面的外来二进制样本)。 */
 export async function installForeignBinary(box: ProxySandbox): Promise<void> {
   await copyFile(FAKE_MIHOMO_SH, box.foreignBinary);
   await chmod(box.foreignBinary, 0o755);
 }
 
 /**
- * 让 a2 自管的 mihomo 就位(走复用档:落点是指向假件的符号链接),并起一个 daemon。
- * 返回之后,`a2 proxy …` 就有对象了。
+ * 让内嵌 mihomo 就位(14 票):把假 mihomo 放到 a2 自管落点(有二进制且版本=锁定版,
+ * enable 因此不会走下载),再显式启用 embedded(模式落盘)。**子进程由 daemon 拉起** ——
+ * 所以真正"有对象了"要等 `startProxyDaemon` 里的那一段就绪等待。
  */
 export async function provisionManaged(box: ProxySandbox): Promise<void> {
-  await installForeignBinary(box);
-  const result = await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  await mkdir(path.dirname(box.managedBinary), { recursive: true });
+  await copyFile(FAKE_MIHOMO_SH, box.managedBinary);
+  await chmod(box.managedBinary, 0o755);
+  const result = await runCli(["mihomo", "enable", "--mode=embedded", "--json"], {
+    home: box.home,
+    env: box.env,
+  });
   if (result.exitCode !== 0) {
-    throw new Error(`mihomo install 失败(exit=${result.exitCode}):${result.stdout}${result.stderr}`);
+    throw new Error(`mihomo enable 失败(exit=${result.exitCode}):${result.stdout}${result.stderr}`);
   }
 }
 
@@ -263,6 +272,19 @@ export async function startForeignInstance(
 /** 起 daemon(代理域能力跑在它里面,所以整套沙盒环境都要喂给它)。 */
 export async function startProxyDaemon(box: ProxySandbox): Promise<DaemonHandle> {
   box.daemon = await startDaemon(box.home, box.env);
+  // embedded 已就位(自管落点有二进制)时,等 daemon 把内嵌子进程拉起并应答 ——
+  // 拉起是 daemon 启动后的异步收敛,不等它,紧接着的断言会踩在"正在起"的窗口上。
+  if (existsSync(box.managedBinary)) {
+    await waitFor("内嵌 mihomo 拉起并应答", async () => {
+      const result = await runCli(["mihomo", "status", "--json"], { home: box.home, env: box.env });
+      try {
+        const embedded = parseJsonStdout(result)?.result?.embedded;
+        return embedded?.state === "running" && embedded?.controllerReachable === true;
+      } catch {
+        return false;
+      }
+    });
+  }
   return box.daemon;
 }
 

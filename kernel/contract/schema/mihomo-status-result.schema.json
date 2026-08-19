@@ -3,114 +3,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "presence": {
+    "mode": {
       "type": "string",
       "enum": [
-        "running_instance",
-        "binary_only",
-        "absent"
+        "off",
+        "observe",
+        "embedded"
       ]
     },
-    "rung": {
-      "type": "string",
-      "enum": [
-        "reuse_binary",
-        "managed_install"
-      ]
-    },
-    "provisioned": {
-      "type": "boolean"
-    },
-    "lockedVersion": {
-      "type": "string",
-      "minLength": 1
-    },
-    "instance": {
+    "embedded": {
       "type": "object",
       "properties": {
-        "owner": {
-          "type": "string",
-          "enum": [
-            "a2",
-            "foreign"
-          ]
-        },
-        "controller": {
-          "type": "string",
-          "minLength": 1
-        },
-        "secretConfigured": {
-          "type": "boolean"
-        },
-        "version": {
-          "type": "string"
-        },
-        "capabilities": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "rest_api",
-              "meta_core",
-              "configs_read"
-            ]
-          }
-        },
-        "configFile": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "owner",
-        "controller",
-        "secretConfigured",
-        "capabilities"
-      ],
-      "additionalProperties": false
-    },
-    "foreignBinary": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "minLength": 1
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "managed": {
-      "type": "object",
-      "properties": {
-        "label": {
-          "type": "string",
-          "minLength": 1
-        },
-        "supervisor": {
-          "type": "string",
-          "enum": [
-            "launchd",
-            "systemd"
-          ]
-        },
-        "unitPath": {
-          "type": "string",
-          "minLength": 1
-        },
-        "unitInstalled": {
-          "type": "boolean"
-        },
         "state": {
           "type": "string",
           "enum": [
-            "not_installed",
-            "installed_not_running",
-            "running"
+            "running",
+            "stopped",
+            "failed"
           ]
         },
         "pid": {
@@ -118,23 +27,16 @@
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
         },
-        "binaryKind": {
-          "type": "string",
-          "enum": [
-            "absent",
-            "downloaded",
-            "reused"
-          ]
-        },
         "binaryPath": {
           "type": "string",
           "minLength": 1
         },
-        "binaryTarget": {
+        "binaryVersion": {
           "type": "string"
         },
-        "version": {
-          "type": "string"
+        "lockedVersion": {
+          "type": "string",
+          "minLength": 1
         },
         "configPath": {
           "type": "string",
@@ -147,93 +49,146 @@
         "controller": {
           "type": "string",
           "minLength": 1
-        }
-      },
-      "required": [
-        "label",
-        "supervisor",
-        "unitPath",
-        "unitInstalled",
-        "state",
-        "binaryKind",
-        "binaryPath",
-        "configPath",
-        "dataDir",
-        "controller"
-      ],
-      "additionalProperties": false
-    },
-    "compatibility": {
-      "type": "object",
-      "properties": {
-        "floor": {
-          "type": "string",
-          "minLength": 1
         },
-        "meets": {
+        "controllerReachable": {
           "type": "boolean"
         },
-        "version": {
-          "type": "string"
+        "restartCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
-        "shortfalls": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "version_unknown",
-              "version_below_floor",
-              "rest_api_unreachable",
-              "not_meta_core",
-              "configs_unreadable"
-            ]
-          }
+        "lastError": {
+          "type": "string"
         }
       },
       "required": [
-        "floor",
-        "meets",
-        "shortfalls"
+        "state",
+        "binaryPath",
+        "lockedVersion",
+        "configPath",
+        "dataDir",
+        "controller",
+        "controllerReachable",
+        "restartCount"
       ],
       "additionalProperties": false
     },
-    "fallback": {
+    "foreign": {
       "type": "object",
       "properties": {
-        "from": {
-          "type": "string",
-          "enum": [
-            "reuse_binary",
-            "managed_install"
-          ]
+        "binary": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
         },
-        "shortfalls": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "version_unknown",
-              "version_below_floor",
-              "rest_api_unreachable",
-              "not_meta_core",
-              "configs_unreadable"
-            ]
-          }
+        "instance": {
+          "type": "object",
+          "properties": {
+            "controller": {
+              "type": "string",
+              "minLength": 1
+            },
+            "address": {
+              "type": "string",
+              "minLength": 1
+            },
+            "secretConfigured": {
+              "type": "boolean"
+            },
+            "configFile": {
+              "type": "string"
+            },
+            "reachable": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": "string"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "rest_api",
+                  "meta_core",
+                  "configs_read"
+                ]
+              }
+            }
+          },
+          "required": [
+            "controller",
+            "address",
+            "secretConfigured",
+            "reachable",
+            "capabilities"
+          ],
+          "additionalProperties": false
         },
-        "reason": {
+        "skippedController": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "legacyUnit": {
+      "type": "boolean"
+    },
+    "guidance": {
+      "type": "object",
+      "properties": {
+        "summary": {
           "type": "string",
           "minLength": 1
+        },
+        "steps": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
-        "from",
-        "shortfalls",
-        "reason"
+        "summary",
+        "steps"
       ],
       "additionalProperties": false
-    },
-    "skippedController": {
-      "type": "string"
     },
     "home": {
       "type": "string",
@@ -241,12 +196,8 @@
     }
   },
   "required": [
-    "presence",
-    "rung",
-    "provisioned",
-    "lockedVersion",
-    "managed",
-    "compatibility",
+    "mode",
+    "embedded",
     "home"
   ],
   "additionalProperties": false

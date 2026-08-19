@@ -1,0 +1,32 @@
+{
+  "mode": "observe",
+  "embedded": {
+    "state": "stopped",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": false,
+    "restartCount": 0
+  },
+  "foreign": {
+    "binary": {
+      "path": "/usr/local/bin/mihomo"
+    },
+    "skippedController": "192.168.1.10:9090"
+  },
+  "guidance": {
+    "summary": "observe 模式:读不到 mihomo 的 external-controller(它未开放、不可达,或配置里压根没写),仅能报告有限事实。",
+    "steps": [
+      {
+        "description": "如需接管系统代理,先向用户问到 mihomo 的混入端口,再显式带参执行",
+        "command": "a2 proxy system enable --port <端口> --json"
+      }
+    ],
+    "context": {
+      "skippedController": "192.168.1.10:9090"
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

@@ -67,14 +67,16 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.capabilityFailed:
     // service 操作同理:unit 写了、命令发了,但事没办成(supervisor 报错 / 装完没跑起来)。
     case ErrorCode.serviceOperationFailed:
-    // mihomo 面四码同档:探测发了、命令走了,但这件事这会儿办不成 —— 报文里带的是「人类如何完成」,
-    // 不是"你参数写错了"。特别地,`mihomo_not_managed` 与 `mihomo_foreign_instance_running` 都是
-    // **红线的报文投影**(那份不归我管,我不动它 / 别人在跑我不接管),它们也不是用法错:
-    // 命令本身完全成立,只是对象不对、或此刻不该动手。
+    // mihomo 面五码同档:探测发了、命令走了,但这件事这会儿办不成 —— 报文里带的是「人类如何完成」,
+    // 不是"你参数写错了"。特别地,`mihomo_not_managed` 是**红线的报文投影**(那份不归我管,我不动它),
+    // 它也不是用法错:命令本身完全成立,只是对象不对。
+    // `mihomo_not_enabled` / `mihomo_failed` 同理 —— 一个是"还没选模式",一个是"它此刻是坏的",
+    // 两者的下一步都在 guidance 里写着(选模式 / 看 lastError 改配置再 restart)。
     case ErrorCode.mihomoUnreachable:
     case ErrorCode.mihomoNotManaged:
+    case ErrorCode.mihomoNotEnabled:
+    case ErrorCode.mihomoFailed:
     case ErrorCode.mihomoOperationFailed:
-    case ErrorCode.mihomoForeignInstanceRunning:
     // 代理面同档:控制面通了但这件事没办成 / networksetup 报错 / 订阅拉不到。
     // 「参数写错了」仍归 6(那是校验层的事),这三码说的都是"路走通了、事没办成"。
     case ErrorCode.proxyOperationFailed:

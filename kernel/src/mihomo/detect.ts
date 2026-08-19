@@ -1,22 +1,21 @@
-// 检测:把「本机 mihomo 是个什么现状」收集成一组**事实**(不做判断,判断在 ladder.ts)。
+// 检测:把「本机上**不归 a2 管**的那些 mihomo」收集成一组**事实**(不做判断,判断在 manager.ts)。
 //
 // 三个扫描面,全部只看被交给我的东西:
 //   * 二进制面 —— 只在 `scan.binaryDirs` 里找名叫 `mihomo` 的可执行文件;
 //   * 配置面 —— 只读 `scan.configFiles` 里那几份,且只读 `external-controller` / `secret` 两行;
 //   * 实例面 —— 只对上一步读出来的**回环**地址发只读 GET(见 controller.ts)。
 // 没有端口扫描,没有进程表遍历,没有"顺着 PATH 一路找过去"。这既是红线,也是让检测可测的前提。
+//
+// **14 票起本文件只剩「别人那份」**:a2 自己那份不再靠检测拼凑(它是 daemon 的子进程,
+// 事实来自认尸文件 + 那个 pid 活不活,见 `child.ts`)。检测的产物只进报告面与 guidance ——
+// 没有任何一条写路径从这里通向别人的实例。
 
-import { lstat, readlink, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
-import type { MihomoBinaryKind } from "../contract/wire.ts";
-import type { Supervisor, SupervisorState } from "../service/supervisor.ts";
-import type { ServicePlan } from "../service/unit.ts";
 import { probeController, type ControllerProbe } from "./controller.ts";
 import {
   loopbackTarget,
   readControllerFromConfig,
-  readSecretOf,
-  type MihomoLayout,
   type MihomoScanInputs,
 } from "./paths.ts";
 import { parseVersion } from "./pin.ts";
@@ -39,97 +38,34 @@ export interface ControllerFinding {
   probe: ControllerProbe;
 }
 
-export interface ManagedFacts {
-  binaryKind: MihomoBinaryKind;
-  binaryPath: string;
-  /** `reused` 时符号链接指向的真身。 */
-  binaryTarget?: string;
-  version?: string;
-  unitInstalled: boolean;
-  state: SupervisorState;
-  /** a2 自管实例的控制端点探测结果(unit 没跑时也探一次:进程在不在与控制面通不通是两件事)。 */
-  probe: ControllerProbe;
-  secretConfigured: boolean;
-}
-
-export interface MihomoFacts {
-  layout: MihomoLayout;
-  scan: MihomoScanInputs;
-  managed: ManagedFacts;
+export interface ForeignFacts {
   /** 别人的二进制(a2 自管落点下的那个不算)。 */
-  foreignBinary?: ForeignBinary;
+  binary?: ForeignBinary;
   /** 别人的实例(可达与否都记下来 —— "配置里写着但连不上"本身就是要报告的事实)。 */
-  foreign?: ControllerFinding;
+  instance?: ControllerFinding;
   /** 配置里写着、但**不是回环**因而没去探的端点(如实报告,不静默丢弃)。 */
   skipped?: { address: string; configFile?: string };
 }
 
-export async function collectFacts(
-  layout: MihomoLayout,
+/**
+ * 收集「别人那份」的全部事实。`managedBinDir` 只用来**排除自己**:a2 自己的落点不算别人的,
+ * 否则 embedded 一装上,内核就会把自己认成"检测到一份外来二进制"。
+ */
+export async function collectForeignFacts(
   scan: MihomoScanInputs,
-  plan: ServicePlan,
-  supervisor: Supervisor,
-): Promise<MihomoFacts> {
-  const [managed, foreignBinary, foreignConfig] = await Promise.all([
-    collectManaged(layout, plan, supervisor),
-    findForeignBinary(scan.binaryDirs, layout.binDir),
+  managedBinDir: string,
+): Promise<ForeignFacts> {
+  const [binary, config] = await Promise.all([
+    findForeignBinary(scan.binaryDirs, managedBinDir),
     findForeignController(scan),
   ]);
 
-  const base = {
-    layout,
-    scan,
-    managed,
-    ...(foreignBinary ? { foreignBinary } : {}),
-  };
-  if (!foreignConfig) return base;
-  if ("skipped" in foreignConfig) return { ...base, skipped: foreignConfig.skipped };
+  const base: ForeignFacts = { ...(binary ? { binary } : {}) };
+  if (!config) return base;
+  if ("skipped" in config) return { ...base, skipped: config.skipped };
 
-  const probe = await probeController(foreignConfig.target, foreignConfig.secret);
-  return { ...base, foreign: { ...foreignConfig, probe } };
-}
-
-async function collectManaged(
-  layout: MihomoLayout,
-  plan: ServicePlan,
-  supervisor: Supervisor,
-): Promise<ManagedFacts> {
-  const [kind, state] = await Promise.all([
-    classifyManagedBinary(layout.binaryPath),
-    supervisor.query(),
-  ]);
-  const secret = await readSecretOf(layout.configPath);
-  const version =
-    kind.binaryKind === "absent" ? undefined : await binaryVersion(layout.binaryPath);
-  const probe = await probeController(layout.controller, secret);
-  return {
-    ...kind,
-    binaryPath: layout.binaryPath,
-    ...(version ? { version } : {}),
-    unitInstalled: await exists(plan.unitPath),
-    state,
-    probe,
-    secretConfigured: secret !== undefined,
-  };
-}
-
-/**
- * a2 自管落点上那个文件是什么形态。**判据是文件类型本身**,不是另存一份"我当初是怎么装的"状态:
- * 符号链接 = 只读复用别人的二进制,真文件 = 我自己下载的锁定版。少一份会漂移的状态。
- */
-async function classifyManagedBinary(
-  binaryPath: string,
-): Promise<{ binaryKind: MihomoBinaryKind; binaryTarget?: string }> {
-  try {
-    const info = await lstat(binaryPath);
-    if (info.isSymbolicLink()) {
-      const target = await readlink(binaryPath);
-      return { binaryKind: "reused", binaryTarget: path.resolve(path.dirname(binaryPath), target) };
-    }
-    return { binaryKind: "downloaded" };
-  } catch {
-    return { binaryKind: "absent" };
-  }
+  const probe = await probeController(config.target, config.secret);
+  return { ...base, instance: { ...config, probe } };
 }
 
 /** 在被交给我的那几个目录里找 `mihomo`。**a2 自己的落点不算别人的** —— 否则自管会被认成"复用自己"。 */
@@ -215,15 +151,6 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   try {
     const info = await stat(candidate);
     return info.isFile() && (info.mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
-}
-
-async function exists(file: string): Promise<boolean> {
-  try {
-    await stat(file);
-    return true;
   } catch {
     return false;
   }

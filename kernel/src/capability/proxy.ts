@@ -250,6 +250,8 @@ function configSet(context: ProxyContext): Capability {
         allowLan: booleanOr(input["allowLan"], before.allowLan),
         logLevel: stringOr(input["logLevel"], before.logLevel),
         mode: stringOr(input["mode"], before.mode),
+        // 托管模式不是本能力的可调项(它有自己的显式命令 `a2 mihomo enable|disable`),原样带过。
+        managedMode: before.managedMode,
       } satisfies Record<keyof ProxySettings, unknown>);
 
       const actions: string[] = [];

@@ -24,6 +24,8 @@ export function defaultSettings(
     allowLan: false,
     logLevel: "info",
     mode: "rule",
+    // 出厂即 off:mihomo 功能是否启用、以哪种姿势启用,是**人的显式裁定**(ADR 0014),不随检测漂。
+    managedMode: "off",
   };
 }
 
@@ -86,7 +88,7 @@ export function renderManagedConfig(input: ManagedConfigInput): RenderedConfig {
 }
 
 /** 默认正文:全直连。逐字沿用旧仓 `Sources/PluginProxy/Resources/default-config.yaml` 的那三段。 */
-const DEFAULT_BODY = ["proxies: []", "proxy-groups: []", "rules:", "  - MATCH,DIRECT"].join("\n");
+export const DEFAULT_BODY = ["proxies: []", "proxy-groups: []", "rules:", "  - MATCH,DIRECT"].join("\n");
 
 /**
  * 顶层键的三种合法写法(YAML 允许键加引号):裸键、单引号、双引号。
@@ -134,6 +136,76 @@ export function stripOwnedKeys(body: string): { text: string; strippedKeys: stri
   }
 
   return { text: kept.join("\n").trimEnd(), strippedKeys };
+}
+
+
+/**
+ * **embedded 收敛的姿势(14 票)**:与 `renderManagedConfig`(订阅世界的全量渲染)不同,
+ * 内嵌模式下**正文的主人是用户与他的 agent** —— 他们直接改这份 YAML,a2 只保证自己的七个头部键
+ * 是对的。所以这里做的是**外科手术**:逐行找零缩进的 owned 键,值不对就替换那一行;
+ * 键缺失就按固定顺序补在文件最前;其余每一个字节(agent 的节点、规则、注释)原样保留。
+ *
+ * 确定性同 `renderManagedConfig`:同输入必同字节(幂等判据仍是逐字比较)。
+ */
+export function ensureOwnedHeader(
+  current: string,
+  input: { layout: MihomoLayout; secret: string; settings: ProxySettings },
+): { text: string; changed: boolean } {
+  const desired: [key: string, value: string][] = [
+    ["mixed-port", String(input.settings.mixedPort)],
+    ["allow-lan", String(input.settings.allowLan)],
+    ["bind-address", "127.0.0.1"],
+    ["mode", input.settings.mode],
+    ["log-level", input.settings.logLevel],
+    ["external-controller", input.layout.controller],
+    ["secret", input.secret],
+  ];
+  const lines = current.split("\n");
+  const seen = new Set<string>();
+  let changed = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = TOP_LEVEL_KEY.exec(lines[i] as string);
+    if (!match) continue;
+    const key = (match[1] ?? match[2] ?? match[3]) as string;
+    const want = desired.find(([k]) => k === key);
+    if (!want || seen.has(key)) continue;
+    seen.add(key);
+    const wantedLine = `${want[0]}: ${want[1]}`;
+    if (lines[i] !== wantedLine) {
+      lines[i] = wantedLine;
+      changed = true;
+    }
+  }
+
+  const missing = desired.filter(([key]) => !seen.has(key));
+  if (missing.length > 0) {
+    changed = true;
+    lines.unshift(...missing.map(([key, value]) => `${key}: ${value}`));
+  }
+  return { text: lines.join("\n"), changed };
+}
+
+/**
+ * 这份配置里**有没有节点**(guidance 态 F「尚未配置节点」的判据)。
+ * 行级启发式,与本文件其余部分同一condition:零缩进 `proxies:` 后面跟着至少一个列表项,
+ * 或行内非空数组。判不准宁可判"有"(不该在人配好了之后还唠叨)。
+ */
+export function configHasProxies(text: string): boolean {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] as string;
+    if (/^proxies[ \t]*:[ \t]*\[/.test(line)) return !/\[[ \t]*\]/.test(line);
+    if (/^proxies[ \t]*:[ \t]*$/.test(line)) {
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const next = lines[j] as string;
+        if (/^[ \t]*$/.test(next) || /^[ \t]*#/.test(next)) continue;
+        return /^[ \t]+-/.test(next);
+      }
+      return false;
+    }
+  }
+  return false;
 }
 
 /**

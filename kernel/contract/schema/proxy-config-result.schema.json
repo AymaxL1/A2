@@ -31,13 +31,23 @@
             "global",
             "direct"
           ]
+        },
+        "managedMode": {
+          "default": "off",
+          "type": "string",
+          "enum": [
+            "off",
+            "observe",
+            "embedded"
+          ]
         }
       },
       "required": [
         "mixedPort",
         "allowLan",
         "logLevel",
-        "mode"
+        "mode",
+        "managedMode"
       ],
       "additionalProperties": false
     },

@@ -1,46 +1,53 @@
-// `a2 mihomo status|install|uninstall|upgrade` —— mihomo 的获取与共存面(06 票)。
+// `a2 mihomo status|enable|disable|restart` —— 内嵌 mihomo 的托管面(14 票 / ADR 0014)。
 //
-// 与服务面同一种安排:**不经 UDS**(检测问的是文件系统、supervisor 与 external-controller,
-// daemon 没跑的时候恰恰最需要它答话),但机读面与走 daemon 的命令一模一样,agent 看不出区别。
+// 通路分两种,agent 在机读面上看不出区别:
+//   * status / enable / disable **不经 UDS**(问的是文件系统与只读探测,daemon 没跑时恰恰最需要它们答话);
+//     enable / disable 落盘后会**尽力**通知 daemon 立即照办(`mihomo.apply`)—— daemon 不在就等它下次启动。
+//   * restart **必须经 daemon**(子进程是 daemon 的孩子,别的进程替它重启不了),daemon 不在 → 退出码 4 + 指引。
 //
 // 本文件不做任何裁定(那是 `src/mihomo/` 的事),只管:argv 怎么解析、结果怎么给人看。
 
 import {
   MihomoChangeResultSchema,
   MihomoStatusResultSchema,
+  Op,
+  type MihomoAction,
   type MihomoChangeResult,
+  type MihomoManagedMode,
   type MihomoStatusResult,
 } from "../contract/wire.ts";
-import { mihomoInstall, mihomoStatus, mihomoUninstall, mihomoUpgrade } from "../mihomo/manager.ts";
+import { callKernel } from "../client/kernel-client.ts";
+import { mihomoDisable, mihomoEnable, mihomoStatus } from "../mihomo/manager.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
-import { outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
+import { outcomeFromEnvelope, outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
 import { MIHOMO_USAGE, helpOutcome, mihomoUsageOutcome } from "./usage.ts";
 
-const RUNG_LABEL: Record<MihomoStatusResult["rung"], string> = {
-  reuse_binary: "只读复用既有二进制(配置/数据/unit 自建)",
-  managed_install: "按锁定版隔离安装(a2 自管)",
+const MODE_LABEL: Record<MihomoManagedMode, string> = {
+  off: "未启用",
+  observe: "observe(只读旁观本机已有 mihomo)",
+  embedded: "embedded(A2 内置代理内核)",
 };
 
-const PRESENCE_LABEL: Record<MihomoStatusResult["presence"], string> = {
-  running_instance: "有跑着的实例",
-  binary_only: "只有二进制,没有可达实例",
-  absent: "本机没有 mihomo",
+const STATE_LABEL: Record<MihomoStatusResult["embedded"]["state"], string> = {
+  running: "运行中",
+  stopped: "未在运行",
+  failed: "故障(已暂停重拉)",
 };
 
 export async function mihomoCommand(args: string[], paths: KernelPaths): Promise<CommandOutcome> {
-  const isolated = args.includes("--isolated");
-  const [action, ...rest] = args.filter((arg) => arg !== "--isolated");
+  const modeArg = args.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length);
+  const positional = args.filter((arg) => !arg.startsWith("--mode="));
+  const [action, ...rest] = positional;
 
   if (action === undefined) {
-    return mihomoUsageOutcome("mihomo 需要一个动作:status / install / uninstall / upgrade");
+    return mihomoUsageOutcome("mihomo 需要一个动作:status / enable / disable / restart");
   }
   if (action === "help" || action === "-h" || action === "--help") return helpOutcome(MIHOMO_USAGE);
   if (rest.length > 0) {
     return mihomoUsageOutcome(`mihomo ${action} 不接受多余参数:${rest.join(" ")}`);
   }
-  // `--isolated` 只对 install 有意义。默默忽略等于让人以为它生效了,所以照用法错处理。
-  if (isolated && action !== "install") {
-    return mihomoUsageOutcome(`--isolated 只对 install 有意义(收到:mihomo ${action} --isolated)`);
+  if (modeArg !== undefined && action !== "enable") {
+    return mihomoUsageOutcome(`--mode 只对 enable 有意义(收到:mihomo ${action} --mode=${modeArg})`);
   }
 
   if (action === "status") {
@@ -51,85 +58,112 @@ export async function mihomoCommand(args: string[], paths: KernelPaths): Promise
       renderStatus,
     );
   }
-  if (action === "install") {
+
+  if (action === "enable") {
+    if (modeArg !== "observe" && modeArg !== "embedded") {
+      return mihomoUsageOutcome(
+        `enable 需要 --mode=observe 或 --mode=embedded(收到:${modeArg ?? "(缺省)"})`,
+      );
+    }
+    const outcome = await mihomoEnable(paths, modeArg);
+    const applied = outcome.ok ? await notifyDaemonApply(paths) : [];
     return outcomeFromOpOutcome(
-      await mihomoInstall(paths, { isolated }),
-      "mihomo.install",
+      outcome.ok && applied.length > 0
+        ? { ok: true, result: withExtraActions(outcome.result as MihomoChangeResult, applied) }
+        : outcome,
+      "mihomo.enable",
       MihomoChangeResultSchema,
-      (result) => renderChange(result, "就位"),
+      (result) => renderChange(result, "启用"),
     );
   }
-  if (action === "uninstall") {
+
+  if (action === "disable") {
+    const outcome = await mihomoDisable(paths);
+    const applied = outcome.ok ? await notifyDaemonApply(paths) : [];
     return outcomeFromOpOutcome(
-      await mihomoUninstall(paths),
-      "mihomo.uninstall",
+      outcome.ok && applied.length > 0
+        ? { ok: true, result: withExtraActions(outcome.result as MihomoChangeResult, applied) }
+        : outcome,
+      "mihomo.disable",
       MihomoChangeResultSchema,
-      (result) => renderChange(result, "卸载"),
+      (result) => renderChange(result, "停用"),
     );
   }
-  if (action === "upgrade") {
-    return outcomeFromOpOutcome(
-      await mihomoUpgrade(paths),
-      "mihomo.upgrade",
+
+  if (action === "restart") {
+    return outcomeFromEnvelope(
+      await callKernel(paths, Op.mihomoRestart),
+      "mihomo.restart",
       MihomoChangeResultSchema,
-      (result) => renderChange(result, "升级"),
+      (result) => renderChange(result, "重启"),
     );
   }
 
   return mihomoUsageOutcome(`未知的 mihomo 动作:${action}`);
 }
 
+/**
+ * 尽力通知 daemon「模式落盘了,照着办」。daemon 不在场不是错误 —— 模式已经落盘,
+ * 它下次启动自然照办;status 的 guidance(态 G)会把「服务没跑」这件事说清楚。
+ * daemon 在场且真做了事时,把它的动作(child_started / child_stopped)并进本次报文。
+ */
+async function notifyDaemonApply(paths: KernelPaths): Promise<MihomoAction[]> {
+  const envelope = await callKernel(paths, Op.mihomoApply);
+  if (!envelope.ok) return [];
+  const parsed = MihomoChangeResultSchema.safeParse(envelope.result);
+  return parsed.success ? parsed.data.actions : [];
+}
+
+function withExtraActions(result: MihomoChangeResult, extra: MihomoAction[]): MihomoChangeResult {
+  return { ...result, actions: [...result.actions, ...extra] };
+}
+
+// MARK: - 人类面
+
 function renderStatus(status: MihomoStatusResult): string {
-  const lines = [
-    `mihomo 现状:${PRESENCE_LABEL[status.presence]} —— 阶梯档位:${RUNG_LABEL[status.rung]}`,
-  ];
-  if (status.instance) {
-    const owner = status.instance.owner === "a2" ? "a2 自管" : "别人托管";
-    lines.push(
-      `  实例(${owner}):${status.instance.controller}` +
-        `${status.instance.version ? ` 版本 ${status.instance.version}` : ""}` +
-        `,能力位 [${status.instance.capabilities.join(", ") || "无"}]`,
-    );
-    if (status.instance.configFile) lines.push(`    来自配置:${status.instance.configFile}`);
-  }
-  if (status.foreignBinary) {
-    lines.push(
-      `  盘上的二进制:${status.foreignBinary.path}` +
-        `${status.foreignBinary.version ? `(${status.foreignBinary.version})` : ""}`,
-    );
-  }
+  const lines = [`mihomo 托管模式:${MODE_LABEL[status.mode]}`];
+
+  const e = status.embedded;
   lines.push(
-    `  a2 自管:${status.provisioned ? "已就位" : "未就位"}(unit ${status.managed.label},${status.managed.state})`,
-    `    unit 文件:${status.managed.unitPath}${status.managed.unitInstalled ? "" : "(尚不存在)"}`,
-    `    二进制:${status.managed.binaryPath} —— ${describeBinary(status)}`,
-    `    配置:${status.managed.configPath};控制端点:${status.managed.controller}`,
-    `  兼容地板 ${status.compatibility.floor}:${status.compatibility.meets ? "达标" : `不达标(${status.compatibility.shortfalls.join("、")})`}`,
-    `  锁定版本:${status.lockedVersion}(换版本只有 a2 mihomo upgrade 一条路)`,
+    `  内置内核:${STATE_LABEL[e.state]}` +
+      `${e.pid !== undefined ? `(pid ${e.pid})` : ""}` +
+      `${e.state === "failed" ? `,连续失败 ${e.restartCount} 次` : ""}`,
+    `    二进制:${e.binaryPath}${e.binaryVersion ? `(${e.binaryVersion})` : "(尚未下载)"};锁定版 ${e.lockedVersion}`,
+    `    配置:${e.configPath}`,
+    `    控制端点:${e.controller}${e.state === "running" ? `(${e.controllerReachable ? "可达" : "未应答"})` : ""}`,
   );
-  if (status.fallback) lines.push(`  档位回退:${status.fallback.reason}`);
-  if (status.skippedController) {
-    lines.push(`  已跳过的非回环控制端点:${status.skippedController}(内核不对非本机端点发请求)`);
-  }
-  if (!status.provisioned) {
-    // 别人的实例在跑时,`a2 mihomo install` 会拒绝(内核只读、不接管)—— 那就别在这儿劝人去敲它。
+  if (e.lastError) lines.push(`    最近错误:${firstLine(e.lastError)}`);
+
+  const f = status.foreign;
+  if (f?.instance) {
     lines.push(
-      status.instance?.owner === "foreign"
-        ? "  本机有别人托管的实例在跑 —— a2 只读它,不接管;真要 a2 自己那份:a2 mihomo install --isolated"
-        : "  让它就位(幂等):a2 mihomo install",
+      `  外来实例(非 A2 管理,只读):${f.instance.controller}` +
+        `${f.instance.version ? ` 版本 ${f.instance.version}` : ""}` +
+        `${f.instance.reachable ? "" : "(不可达)"}`,
     );
+    if (f.instance.configFile) lines.push(`    来自配置:${f.instance.configFile}`);
+  }
+  if (f?.binary) {
+    lines.push(`  盘上的外来二进制:${f.binary.path}${f.binary.version ? `(${f.binary.version})` : ""}`);
+  }
+  if (f?.skippedController) {
+    lines.push(`  已跳过的非回环控制端点:${f.skippedController}(内核不对非本机端点发请求)`);
+  }
+  if (status.legacyUnit) {
+    lines.push("  检测到旧版 A2 的 com.a2.mihomo 服务 —— 启用 embedded 时会自动移除(审计留痕)。");
+  }
+  if (status.guidance) {
+    lines.push(`  下一步:${status.guidance.summary}`);
+    for (const step of status.guidance.steps) {
+      lines.push(`    - ${step.description}${step.command ? `:${step.command}` : ""}`);
+    }
   }
   return lines.join("\n");
 }
 
-function describeBinary(status: MihomoStatusResult): string {
-  switch (status.managed.binaryKind) {
-    case "absent":
-      return "尚未就位";
-    case "downloaded":
-      return `按锁定版下载的自管二进制${status.managed.version ? `(${status.managed.version})` : ""}`;
-    case "reused":
-      return `只读引用 → ${status.managed.binaryTarget ?? "(链接已断)"}${status.managed.version ? `(${status.managed.version})` : ""}`;
-  }
+function firstLine(text: string): string {
+  const line = text.split("\n").find((entry) => entry.trim().length > 0) ?? "";
+  return line.length > 120 ? `${line.slice(0, 117)}…` : line;
 }
 
 /** 幂等的人类面:什么都没改时明说"本来就是这样",而不是假装干了活。 */

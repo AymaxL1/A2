@@ -60,44 +60,61 @@ export async function resolveProxyTarget(
   }
   const status = MihomoStatusResultSchema.parse(outcome.result);
   const layout = mihomoLayout(paths, env);
-  const instance = status.instance;
 
+  // embedded:代理域的对话对象恒是自己那份(它归 a2 管,写面的闸门也只对它开)。
+  if (status.mode === "embedded") {
+    const secret = await readSecretOf(layout.configPath);
+    const apiReachable = status.embedded.controllerReachable;
+    return {
+      endpoint: {
+        owner: "a2",
+        controller: status.embedded.controller,
+        managed: true,
+        configPath: layout.configPath,
+      },
+      controller: { target: status.embedded.controller, ...(secret ? { secret } : {}) },
+      apiReachable,
+      // 「进程活着但控制面还没就绪」不该被说成"没在跑"—— embedded 的进程事实来自认尸文件。
+      running: apiReachable || status.embedded.state === "running",
+      ...(status.embedded.binaryVersion ? { version: status.embedded.binaryVersion } : {}),
+      layout,
+      status,
+    };
+  }
+
+  // observe / off:只可能跟别人那份说话(只读;写面在 requireManaged 处被挡)。
+  const instance = status.foreign?.instance;
   if (!instance) {
     throw new CapabilityFailedError(
       "本机没有可用于控制的 mihomo 实例。",
-      `现状:${status.presence};将采用的阶梯档位:${status.rung}。`,
+      `托管模式:${status.mode};未检测到可达的外来实例。`,
       {
         code: ErrorCode.mihomoUnreachable,
         guidance: {
-          summary: "先让一个 mihomo 就位(a2 自管或你自己那份),代理域的命令才有对象。",
+          summary: "先启用一种托管模式(embedded 推荐),代理域的命令才有对象。",
           steps: [
-            { description: "看本机现状与将采用的档位", command: "a2 mihomo status --json" },
-            { description: "让它按阶梯就位(幂等)", command: "a2 mihomo install --json" },
+            { description: "看本机现状与两种模式的说明", command: "a2 mihomo status --json" },
+            {
+              description: "与用户确认后启用内置代理内核",
+              command: "a2 mihomo enable --mode=embedded --json",
+            },
           ],
-          context: { home: paths.home, presence: status.presence, rung: status.rung },
+          context: { home: paths.home, mode: status.mode },
         },
       },
     );
   }
 
-  const managed = instance.owner === "a2";
-  const secret = managed
-    ? await readSecretOf(layout.configPath)
-    : instance.configFile
-      ? await readSecretOf(instance.configFile)
-      : env[MihomoEnv.secret]?.trim() || undefined;
-
+  const secret = instance.configFile
+    ? await readSecretOf(instance.configFile)
+    : env[MihomoEnv.secret]?.trim() || undefined;
   const apiReachable = instance.capabilities.includes("rest_api");
   return {
-    endpoint: {
-      owner: instance.owner,
-      controller: instance.controller,
-      managed,
-      ...(managed ? { configPath: layout.configPath } : {}),
-    },
+    endpoint: { owner: "foreign", controller: instance.controller, managed: false },
     controller: { target: instance.controller, ...(secret ? { secret } : {}) },
     apiReachable,
-    running: apiReachable || (managed && status.managed.state === "running"),
+    // 别人那份没有"进程窗口":它的生死归原托管方,内核对它只有控制面这一个观察窗口(红线,不是遗漏)。
+    running: apiReachable,
     ...(instance.version ? { version: instance.version } : {}),
     layout,
     status,
@@ -120,11 +137,11 @@ export function requireReachable(target: ProxyTarget): void {
       code: ErrorCode.mihomoUnreachable,
       guidance: {
         summary: managed
-          ? "让 a2 自管那份就位(幂等),再重试这条命令。"
+          ? "重启 a2 内置那份(或先看它为什么没起来),再重试这条命令。"
           : "按你原本的方式把那个 mihomo 拉起来,再重试;内核只报警和指路。",
         steps: managed
           ? [
-              { description: "让 a2 自管的 mihomo 就位(幂等)", command: "a2 mihomo install --json" },
+              { description: "重启内置内核(故障态也走这条,计数清零)", command: "a2 mihomo restart --json" },
               { description: "确认它真的在跑", command: "a2 mihomo status --json" },
             ]
           : [
@@ -160,8 +177,8 @@ export function requireManaged(target: ProxyTarget, what: string): void {
         steps: [
           { description: "看清楚现在是哪一档、各自是什么", command: "a2 mihomo status --json" },
           {
-            description: "要让 a2 管配置,得让它拥有一份自己的实例(与你那份并存,入站端口需自行避开冲突)",
-            command: "a2 mihomo install --isolated --json",
+            description: "要让 a2 管配置,启用内置模式(与你那份并行,端口自动错开)",
+            command: "a2 mihomo enable --mode=embedded --json",
           },
         ],
         context: { controller: target.endpoint.controller, owner: target.endpoint.owner },

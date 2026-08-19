@@ -20,8 +20,12 @@ import type { KernelPaths } from "../runtime/paths.ts";
 export const SERVICE_LABEL = "com.a2.kernel";
 
 /**
- * a2 自管 mihomo 的 unit 名(06 票)。**与 `com.a2.kernel` 各自独立** —— 这就是
- * 「数据面不随控制面起落」在系统托管层的落点:卸掉内核不动它,内核崩了也不影响它被系统重拉。
+ * **旧版** a2 自管 mihomo 的 unit 名(06 票立,14 票退场)。
+ *
+ * 14 票(ADR 0014)起内核**不再写这个 unit** —— mihomo 是 daemon 的直接子进程,全机只剩
+ * `com.a2.kernel` 一个 unit。常量保留下来只为一件事:**认得自己的遗产并拆掉它**
+ * (`enable --mode=embedded` 的迁移、`service uninstall --purge` 的兜底)。
+ * 「数据面不随控制面起落」随之废除 —— a2 死则 mihomo 死,这正是「小白第一」下要的心智模型。
  */
 export const MIHOMO_SERVICE_LABEL = "com.a2.mihomo";
 
@@ -32,7 +36,10 @@ export const SUPERVISOR_ENV = "A2_SERVICE_SUPERVISOR";
 export const LOG_DIR_NAME = "log";
 export const STDOUT_LOG_NAME = "kernel.out.log";
 export const STDERR_LOG_NAME = "kernel.err.log";
-/** a2 自管 mihomo 的日志(与内核同一个 log 目录、不同文件名 —— 两条命的日志不该混在一起看)。 */
+/**
+ * a2 内嵌 mihomo 子进程的日志(与内核同一个 log 目录、不同文件名 —— 两条命的日志不该混在一起看)。
+ * 14 票起由 `src/mihomo/child.ts` 直接把子进程的 stdout/stderr 重定向到这两个文件(不再经 unit)。
+ */
 export const MIHOMO_STDOUT_LOG_NAME = "mihomo.out.log";
 export const MIHOMO_STDERR_LOG_NAME = "mihomo.err.log";
 
@@ -168,61 +175,36 @@ export function servicePlan(
   };
 }
 
-/** a2 自管 mihomo 的落点(由 `src/mihomo/paths.ts` 算出;这里只当结构体用,不反向依赖那一层)。 */
-export interface MihomoUnitSpec {
-  /** unit 里跑的可执行(恒为 a2 自管落点:下载的真文件,或指向既有二进制的符号链接)。 */
-  binaryPath: string;
-  /** mihomo 的 `-d`(工作目录:缓存、geo 库)。 */
-  dataDir: string;
-  /** mihomo 的 `-f`(配置文件)。 */
-  configPath: string;
-}
-
 /**
- * `com.a2.mihomo` 的 unit 计划。与内核那份**同一套渲染器、同一套自愈自启语义**
- * (launchd `KeepAlive.Crashed` + `RunAtLoad`;systemd `Restart=on-failure` + `WantedBy=default.target`)——
- * 「杀掉 mihomo 进程由系统按策略重拉」这条票面要求就落在这里,应用层同样不造看门狗。
+ * **旧版** `com.a2.mihomo` unit 的**移除专用** plan(14 票 / ADR 0014)。
  *
- * 有意**不**注入 `A2_HOME`:mihomo 不认识这个变量,它的一切都由 `-d`/`-f` 两个绝对路径决定。
+ * 14 票起 mihomo 是 daemon 的直接子进程,内核**再也不写这个 unit** —— 所以渲染族
+ * (`MihomoUnitSpec` / `mihomoServicePlan`)整族删码。留下的只有「怎么把它拆掉」:
+ *   * `a2 mihomo enable --mode=embedded` 检出它 → bootout + 删 plist(自己的遗产自己收);
+ *   * `a2 service uninstall --purge` 的兜底路径继续认得这个 label。
+ *
+ * 因此 `unitContent` 恒为空串:移除路径从不写文件,只 unload + unlink。
+ * `programArguments` 仍照旧版的 argv 形状拼(`<bin> -d <data> -f <config>`)—— 它是
+ * `service/manager.ts::unitRecordedHome` 判「盘上这份 unit 是给哪个 `$A2_HOME` 装的」的指纹,
+ * 那条判断读的正是旧 unit 里写着的 argv[0]。**红线**:label 恒是 `com.a2.mihomo`,
+ * 别人装的 mihomo(`io.metacubex.mihomo` 等)在任何路径下都进不了这个 plan。
  */
-export function mihomoServicePlan(
+export function legacyMihomoRemovalPlan(
   kind: SupervisorKind,
   paths: KernelPaths,
-  mihomo: MihomoUnitSpec,
+  mihomo: { binaryPath: string; dataDir: string; configPath: string },
   env: Record<string, string | undefined> = process.env,
 ): ServicePlan {
-  const programArguments = [mihomo.binaryPath, "-d", mihomo.dataDir, "-f", mihomo.configPath];
-  const logDir = path.join(paths.home, LOG_DIR_NAME);
-
-  if (kind === "launchd") {
-    return {
-      kind,
-      label: MIHOMO_SERVICE_LABEL,
-      unitPath: path.join(launchAgentsDir(env), `${MIHOMO_SERVICE_LABEL}.plist`),
-      unitContent: renderLaunchdPlist({
-        label: MIHOMO_SERVICE_LABEL,
-        programArguments,
-        environment: {},
-        stdoutPath: path.join(logDir, MIHOMO_STDOUT_LOG_NAME),
-        stderrPath: path.join(logDir, MIHOMO_STDERR_LOG_NAME),
-      }),
-      programArguments,
-      logDir,
-      paths,
-    };
-  }
-
   return {
     kind,
     label: MIHOMO_SERVICE_LABEL,
-    unitPath: path.join(systemdUserDir(env), `${MIHOMO_SERVICE_LABEL}.service`),
-    unitContent: renderSystemdUnit({
-      programArguments,
-      environment: {},
-      description: "a2-managed mihomo (proxy data plane)",
-    }),
-    programArguments,
-    logDir,
+    unitPath:
+      kind === "launchd"
+        ? path.join(launchAgentsDir(env), `${MIHOMO_SERVICE_LABEL}.plist`)
+        : path.join(systemdUserDir(env), `${MIHOMO_SERVICE_LABEL}.service`),
+    unitContent: "",
+    programArguments: [mihomo.binaryPath, "-d", mihomo.dataDir, "-f", mihomo.configPath],
+    logDir: path.join(paths.home, LOG_DIR_NAME),
     paths,
   };
 }

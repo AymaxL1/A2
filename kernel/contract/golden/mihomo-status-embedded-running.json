@@ -1,0 +1,16 @@
+{
+  "mode": "embedded",
+  "embedded": {
+    "state": "running",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": true,
+    "restartCount": 0,
+    "pid": 4242,
+    "binaryVersion": "v1.19.28"
+  },
+  "home": "/Users/alice/.a2"
+}

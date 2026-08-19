@@ -1,9 +1,9 @@
 // CLI 缝:存活监督(07 票)—— daemon 里那条**只读**观测循环。
 //
-// 它要证的三件事:
-//   1. 实例掉了会产出**结构化报警**(带「人类如何完成」的指引),而内核**不越权重拉**;
-//   2. 它对系统状态**零影响** —— 观测者一旦有权动手,「数据面不随控制面起落」就没人守得住了;
-//   3. **杀掉内核 daemon,mihomo 与系统代理都不受影响,内核回来后监督恢复**(票面第 4 条)。
+// 它要证的三件事(14 票改判后的口径):
+//   1. 实例掉了会产出**结构化报警**(带「人类如何完成」的指引),而重拉归 child.ts(节流/故障态),观测者自己不动手;
+//   2. 观测本身对系统状态**零影响**(不写配置、不动系统代理);
+//   3. **杀掉内核 daemon,内嵌 mihomo 随之停下(随 a2 生死);系统代理不变;内核回来后子进程与监督恢复**。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
@@ -54,9 +54,14 @@ async function waitForEvent(box: ProxySandbox, kind: string): Promise<any> {
   return found;
 }
 
+/** 等观测循环真正看见实例活着(首拍 watch_started 可能记录于子进程还在拉起的瞬间)。 */
+async function waitAlive(box: ProxySandbox): Promise<void> {
+  await waitFor("观测认到 alive", async () => (await supervision(box)).alive === true);
+}
+
 async function managedPid(box: ProxySandbox): Promise<number> {
   const result = await runCli(["mihomo", "status", "--json"], { home: box.home, env: box.env });
-  return JSON.parse(result.stdout).result.managed.pid as number;
+  return JSON.parse(result.stdout).result.embedded.pid as number;
 }
 
 // MARK: - 观测在跑
@@ -69,6 +74,7 @@ test("supervision:daemon 一起来就盯着自管实例,checks 会涨,事件落�
   const started = await waitForEvent(box, "watch_started");
   expect(started.owner).toBe("a2");
   expect(started.controller).toBe(`127.0.0.1:${box.controllerPort}`);
+  await waitAlive(box);
 
   const snapshot = await supervision(box);
   expect(ProxySupervisionResultSchema.safeParse(snapshot).success).toBe(true);
@@ -86,11 +92,12 @@ test("supervision:daemon 一起来就盯着自管实例,checks 会涨,事件落�
   expect(JSON.parse(lines[0] as string).kind).toBe("watch_started");
 }, 30000);
 
-test("supervision:实例掉了 → instance_down + 指引;回来了 → instance_up。内核全程没有重拉它", async () => {
+test("supervision:实例掉了 → instance_down + 指引;a2 **自己把它重拉回来** → instance_up(14 票:保活归内核)", async () => {
   const box = (sandbox = await makeProxySandbox({ groups: GROUPS }));
   await provisionManaged(box);
   await startProxyDaemon(box);
   await waitForEvent(box, "watch_started");
+  await waitAlive(box);
 
   const pid = await managedPid(box);
   process.kill(pid, "SIGKILL");
@@ -98,30 +105,29 @@ test("supervision:实例掉了 → instance_down + 指引;回来了 → instance
 
   const down = await waitForEvent(box, "instance_down");
   expect(down.owner).toBe("a2");
-  // **报警自带「人类如何完成」**(与 06 票 mihomo install 的拒绝报文同一口径)。
+  // **报警自带「人类如何完成」**(与 status 故障态同一口径:restart,不再是 install)。
   const commands = down.guidance.steps.map((step: { command?: string }) => step.command);
-  expect(commands).toContain("a2 mihomo install --json");
-  expect((await supervision(box)).alive).toBe(false);
+  expect(commands).toContain("a2 mihomo restart --json");
 
-  // 内核**没有**替它重拉:假 supervisor 那边没多出任何改状态的命令。
-  const calls = (await readFile(box.supervisorLog, "utf8")).split("\n").filter((l) => l.length > 0);
-  const afterDeath = calls.filter((line) => !line.startsWith("launchctl print "));
-  // 只有 install 那几条(写 unit + bootstrap),观测本身一条都没发过。
-  expect(afterDeath.every((line) => line.startsWith("launchctl bootstrap "))).toBe(true);
-
-  // 人把它拉回来(这里由测试代劳 —— 现实中是人或 supervisor 的事,不是观测者的事)。
-  await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
+  // 14 票改判:内嵌子进程的保活归 a2 亲管 —— 节流之后它**自己**回来,不需要人。
   const up = await waitForEvent(box, "instance_up");
   expect(up.owner).toBe("a2");
-  expect((await supervision(box)).alive).toBe(true);
+  await waitFor("重拉后的子进程可达", async () => (await supervision(box)).alive === true);
+  const revived = await managedPid(box);
+  expect(revived).not.toBe(pid);
+  expect(isAlive(revived)).toBe(true);
+
+  // 全程没有一条 supervisor 命令:重拉是 child.ts 干的,launchd 与它无关(全机只剩 com.a2.kernel 一个 unit)。
+  const calls = (await readFile(box.supervisorLog, "utf8")).split("\n").filter((l) => l.length > 0);
+  expect(calls).toEqual([]);
 }, 40000);
 
 test("supervision:别人的实例在跑也**不进观测循环** —— 没有可盯的对象就如实说没有,不报警", async () => {
   const box = (sandbox = await makeProxySandbox());
   await startForeignInstance(box, { groups: "PROXY=F1" });
-  // 收编档废除后 install 会拒(别人在跑),a2 这边不会有自管配置 —— 也就没有可盯的对象。
-  const install = await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
-  expect(install.exitCode).toBe(5);
+  // 14 票:双模式取代拒绝闸。observe = 只读旁观,**有意不进观测循环**(不对别人的进程做常驻监督)。
+  const enable = await runCli(["mihomo", "enable", "--mode=observe", "--json"], { home: box.home, env: box.env });
+  expect(enable.exitCode).toBe(0);
   await startProxyDaemon(box);
 
   // 等够几个观测周期,确认它一直没认领任何目标。
@@ -134,14 +140,14 @@ test("supervision:别人的实例在跑也**不进观测循环** —— 没有�
   expect(snapshot.events.some((e: { kind: string }) => e.kind === "instance_down")).toBe(false);
   expect(isAlive(box.foreignProc!.pid)).toBe(true);
 
-  // 观测者对 supervisor 依旧只有只读的 print。
+  // 观测者对 supervisor 一条命令都没有(observe 连 unit 都不涉及)。
   const calls = (await readFile(box.supervisorLog, "utf8")).split("\n").filter((l) => l.length > 0);
-  expect(calls.every((line) => line.startsWith("launchctl print "))).toBe(true);
+  expect(calls).toEqual([]);
 }, 40000);
 
 // MARK: - 票面第 4 条:杀掉内核 daemon
 
-test("杀掉内核 daemon:mihomo 的 pid 不变、系统代理不变;内核回来后监督恢复", async () => {
+test("杀掉内核 daemon:内嵌 mihomo **随之停下**(14 票:随 a2 生死);系统代理不变;内核回来后子进程与监督恢复", async () => {
   const box = (sandbox = await makeProxySandbox({ groups: GROUPS }));
   await provisionManaged(box);
   await startProxyDaemon(box);
@@ -154,28 +160,30 @@ test("杀掉内核 daemon:mihomo 的 pid 不变、系统代理不变;内核回�
   // 内核 daemon 整个没了(等价于崩溃 / `a2 service uninstall`)。
   await stopDaemon(box.daemon!);
   box.daemon = undefined;
-  await Bun.sleep(400);
+  await waitFor("内嵌 mihomo 随 daemon 停下", () => !isAlive(pidBefore));
 
-  // **数据面纹丝不动**:同一个 pid 还在跑,控制端点照样答话
-  // (`a2 mihomo status` 不经 daemon —— daemon 没跑的时候它恰恰最该能答话)。
-  expect(isAlive(pidBefore)).toBe(true);
+  // **14 票改判**:「数据面不随控制面起落」废除 —— a2 死则 mihomo 死,这是「小白第一」显式收下的代价。
+  // `a2 mihomo status` 不经 daemon,daemon 没跑的时候它恰恰最该能答话:如实报 stopped,不臆造。
   const detached = await runCli(["mihomo", "status", "--json"], { home: box.home, env: box.env });
   expect(detached.exitCode).toBe(0);
   const detachedStatus = JSON.parse(detached.stdout).result;
-  expect(detachedStatus.managed.pid).toBe(pidBefore);
-  expect(detachedStatus.instance.capabilities).toContain("rest_api");
-  // 系统代理也纹丝不动(「退出即还原」已废除)。
+  expect(detachedStatus.mode).toBe("embedded");
+  expect(detachedStatus.embedded.state).toBe("stopped");
+  // 系统代理**纹丝不动**(「退出即还原」仍是废除态:还原只有显式命令一条路)。
   expect(await networkState(box)).toEqual(netBefore);
   expect(netBefore).not.toEqual(INITIAL_NETWORK_STATE);
 
-  // 内核回来:观测重新起来,盯的还是同一个端点。
+  // 内核回来:子进程按落盘的模式重建(新 pid),观测重新盯上同一个端点。
   await startProxyDaemon(box);
   await waitForEvent(box, "watch_started");
+  await waitAlive(box);
   const snapshot = await supervision(box);
   expect(snapshot.watching).toBe(true);
   expect(snapshot.alive).toBe(true);
   expect(snapshot.target.controller).toBe(`127.0.0.1:${box.controllerPort}`);
-  expect(await managedPid(box)).toBe(pidBefore);
+  const pidAfter = await managedPid(box);
+  expect(pidAfter).not.toBe(pidBefore);
+  expect(isAlive(pidAfter)).toBe(true);
 
   // 日志是**追加**的:上一世代的事件还在,新世代接在后面。
   const lines = (await readFile(box.supervisionLog, "utf8")).split("\n").filter((l) => l.length > 0);
@@ -214,6 +222,7 @@ test("supervision:事件同时推给订阅者,载荷与查询到的那一条逐�
   });
   try {
     await subscriber.register("subscriber");
+    await waitAlive(box);
 
     // 让实例掉下去 —— 这是"状态真的变了"的那一刻。
     const pid = await managedPid(box);

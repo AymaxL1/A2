@@ -34,6 +34,7 @@ import {
   removePlugin,
   type PluginHostContext,
 } from "../plugin/host.ts";
+import { mihomoApplyOp, mihomoRestartOp } from "../mihomo/manager.ts";
 import type { ClientConnection } from "./hub.ts";
 import { statusSnapshot, type KernelRuntime } from "./runtime.ts";
 
@@ -132,6 +133,14 @@ const HANDLERS: Record<string, OpHandler> = {
     if (!params.success) return invalidParams("plugin.remove", params.error.message);
     return await removePlugin(pluginContext(runtime), params.data.plugin);
   },
+
+  // MARK: mihomo 内嵌子进程的内部命令(14 票)—— 不进能力表,见 wire.ts 的 Op 注释。
+
+  [Op.mihomoApply]: async (_request, runtime) =>
+    await mihomoApplyOp(runtime.paths, runtime.mihomo),
+
+  [Op.mihomoRestart]: async (_request, runtime) =>
+    await mihomoRestartOp(runtime.paths, runtime.mihomo),
 
   [Op.rolesRegister]: (request, runtime, connection) => {
     const params = RoleRegisterParamsSchema.safeParse(request.params ?? {});

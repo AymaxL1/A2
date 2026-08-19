@@ -145,7 +145,7 @@ test("renderManagedConfig:a2 头部恒在最前,且**订阅赢不了头部里的
   const rendered = renderManagedConfig({
     layout,
     secret: "a2-的钥匙",
-    settings: { mixedPort: 7897, allowLan: false, logLevel: "info", mode: "rule" },
+    settings: { mixedPort: 7897, allowLan: false, logLevel: "info", mode: "rule", managedMode: "embedded" },
     subscription: {
       id: "sub-1",
       body: ["'external-controller': 10.0.0.1:9090", '"secret": 别人的', "proxies: []"].join("\n"),

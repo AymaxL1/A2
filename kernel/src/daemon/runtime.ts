@@ -11,6 +11,9 @@ import { PROTOCOL_VERSION, type KernelSnapshot, type StatusResult } from "../con
 import { restorePlugins } from "../plugin/host.ts";
 import { sweepStaleBuildAreas } from "../plugin/bundle.ts";
 import { sweepStagingArtifacts } from "../plugin/store.ts";
+import { MihomoChild } from "../mihomo/child.ts";
+import { mihomoApplyOp } from "../mihomo/manager.ts";
+import { mihomoLayout } from "../mihomo/paths.ts";
 import { createProxySupervisor, type ProxySupervisor } from "../proxy/supervision.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
@@ -39,6 +42,11 @@ export interface KernelRuntime {
   supervisor: ProxySupervisor;
   /** 长连接与角色(08 票):谁在场、推给谁。 */
   hub: ClientHub;
+  /**
+   * 内嵌 mihomo 子进程(14 票 / ADR 0014)。**一个 daemon 一只**,生死随 daemon:
+   * daemon 正常退出走 `stop()`(SIGTERM → 宽限 → SIGKILL → exit 0),崩溃则由 launchd 的组清理兜住。
+   */
+  mihomo: MihomoChild;
   /** 仲裁审计:dangerous 的每一次仲裁都在这里留痕。 */
   audit: AuditLog;
   /** 三层仲裁的第③层(带外确认)。 */
@@ -62,6 +70,7 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
   const supervisor = createProxySupervisor(paths, env, (event) =>
     hub.broadcast({ kind: "supervision", at: event.at, supervision: event }),
   );
+  const mihomo = new MihomoChild(paths, mihomoLayout(paths, env));
   // 11 票:已登记的插件在**建注册表之前**还原出来 —— 于是"内核提供哪些能力"从第一帧起就是完整的,
   // 不存在"daemon 起来了但插件还没装上"的中间态(那会让刚连上的壳先看到一份少一截的快照)。
   const plugins = restorePlugins(paths, env);
@@ -94,6 +103,7 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
     version: KERNEL_VERSION,
     registry,
     supervisor,
+    mihomo,
     hub,
     audit,
     arbiter,

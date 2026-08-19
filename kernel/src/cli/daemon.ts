@@ -7,6 +7,7 @@
 import { ExitCode, exitCodeForErrorCode } from "../contract/exit-codes.ts";
 import { ErrorCode, PROTOCOL_VERSION, failureResponse } from "../contract/wire.ts";
 import { AlreadyRunningError, startKernelServer } from "../daemon/server.ts";
+import { mihomoApplyOp } from "../mihomo/manager.ts";
 import { createRuntime } from "../daemon/runtime.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { renderWireError, type CommandOutcome } from "./outcome.ts";
@@ -33,6 +34,10 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
   // 停掉它不会碰 mihomo 一根汗毛,也不会动系统代理:数据面不随控制面起落。
   runtime.supervisor.start();
 
+  // 照落盘的托管模式把内嵌子进程收敛到位(embedded → 拉起;其余 → 确保停着)。
+  // 不 await:下载/认尸再慢也不该拦着 socket 就绪;失败会体现在 status 的故障态里,不该拦启动。
+  void mihomoApplyOp(paths, runtime.mihomo).catch(() => {});
+
   emitEvent("daemon.listening", {
     socketPath: server.socketPath,
     home: paths.home,
@@ -43,6 +48,9 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
   });
 
   const signal = await shutdown;
+  // 先送走孩子(SIGTERM → 宽限 → SIGKILL):launchd 只对进程组发一记**可捕获**的 SIGTERM,
+  // 真正保证"a2 停则 mihomo 停"的是这一步;它也是 KeepAlive.SuccessfulExit=false 下 exit 0 的前提。
+  await runtime.mihomo.stop().catch(() => {});
   await runtime.supervisor.stop();
   await server.stop();
   emitEvent("daemon.stopped", { signal, pid: runtime.pid });

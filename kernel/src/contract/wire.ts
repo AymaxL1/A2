@@ -198,29 +198,31 @@ export const ErrorCode = {
    */
   servicePurgeHomeMismatch: "service_purge_home_mismatch",
 
-  // MARK: mihomo 共存面(06 票)—— 四码全部映射退出码 5(路走通了、事没办成)
+  // MARK: mihomo 托管面(06 票立,14 票重塑)—— 五码全部映射退出码 5(路走通了、事没办成)
   //
-  // (原先还有一条 `mihomo_below_floor`:收编对象不达兼容地板。收编档 2026-08-12 废除后它
-  //  **没有任何产出方**了 —— 复用档不达地板走的是 result.fallback 那条成功路径,不是错误。
-  //  留一条永远不会出现的错误码,等于让 agent 为一个不存在的分支写代码,所以一并摘掉。)
+  // (退场过两条:`mihomo_below_floor` 随收编档 2026-08-12 废除;
+  //  `mihomo_foreign_instance_running` 随 14 票的三值托管模式退场 —— 别人的实例在跑不再是一种拒绝,
+  //  而是 `off` 态下由用户在 agent 对话里二选一(observe / embedded 并跑)的岔路口。
+  //  留一条永远不会出现的错误码,等于让 agent 为一个不存在的分支写代码。)
 
   /** 该走的那个 mihomo external-controller 连不上(或鉴权不过)。 */
   mihomoUnreachable: "mihomo_unreachable",
   /**
-   * 这件事只能对 **a2 自管的** mihomo 做,而当前那份不归 a2 管(只读复用的二进制)。
-   * 这是「生命周期归原托管方」这条红线在报文上的投影。
+   * 这件事只能对 **a2 自己那份** mihomo 做,而当前托管模式下没有那样一份
+   * (`observe` —— 在跑的是别人的;`off` —— 谁的都不管)。
+   * 这是「生命周期归原托管方」这条红线在报文上的投影:内核不会替别人重启、也不会替别人换配置。
    */
   mihomoNotManaged: "mihomo_not_managed",
-  /** mihomo 操作执行了但没成:下载失败、摘要对不上、落位失败、unit 装了却没跑起来。 */
-  mihomoOperationFailed: "mihomo_operation_failed",
+  /** mihomo 面还没启用(模式仍是 `off`)—— 该做的第一件事是让用户选一个模式,不是重试。 */
+  mihomoNotEnabled: "mihomo_not_enabled",
   /**
-   * 本机已经有**别人的** mihomo 实例在跑,而 a2 这边还没就位 —— 结构化拒绝,**零改动**。
-   *
-   * 用户裁定(2026-08-12):「本机已有在跑的 mihomo,应该只读状态,不用去接管」。所以这一支既不收编
-   * (收编档已废除),也不默默在人家旁边再起一份(端口必打架)。`a2 mihomo status` 照旧如实报告那个实例,
-   * 想要 a2 自己那份得显式 `a2 mihomo install --isolated` —— 让「机器上会有两份 mihomo」成为人的决定。
+   * 内嵌子进程处于**故障态**(连续启动失败达上限,已暂停重拉)。
+   * 此时除了 `a2 mihomo restart`(修完配置后清零重来)之外的操作都没有意义 —— 报文里带的是
+   * mihomo 自己 stderr 的原文与配置路径,让 agent 直接去看错在哪。
    */
-  mihomoForeignInstanceRunning: "mihomo_foreign_instance_running",
+  mihomoFailed: "mihomo_failed",
+  /** mihomo 操作执行了但没成:下载失败、摘要对不上、落位失败、子进程拉起来就退。 */
+  mihomoOperationFailed: "mihomo_operation_failed",
 
   // MARK: 代理控制面(07 票)
 
@@ -328,6 +330,17 @@ export const Op = {
   pluginList: "plugin.list",
   /** 卸掉一个插件(它的能力当场从注册表消失)。 */
   pluginRemove: "plugin.remove",
+
+  // MARK: mihomo 内嵌子进程的**内部命令**(14 票)—— 不进能力表,与 `confirmations.resolve` 同类
+  //
+  // 为什么不做成能力:能力是**给 agent 用的调用面**(有 manifest、有仲裁、有别名),而这两条是
+  // 「CLI 刚把模式落了盘,通知 daemon 照着办」——它们没有独立的语义,只是同一条命令的下半程。
+  // mihomo 域整体不进能力表这条口径(builtin.ts)因此一字未改。
+
+  /** 按落盘的托管模式收敛内嵌子进程(embedded → 确保在跑;off/observe → 确保停了)。 */
+  mihomoApply: "mihomo.apply",
+  /** 显式重启内嵌子进程(**连续失败计数清零**:故障态唯一的出路)。 */
+  mihomoRestart: "mihomo.restart",
 } as const;
 export type Op = (typeof Op)[keyof typeof Op];
 
@@ -650,38 +663,26 @@ export const ServiceChangeResultSchema = z.object({
 });
 export type ServiceChangeResult = z.infer<typeof ServiceChangeResultSchema>;
 
-// MARK: - mihomo 共存面 result(06 票)
+// MARK: - mihomo 托管面 result(06 票立,14 票重塑)
 //
-// 与服务面同一种口径:**没有对应的 op**。「本机 mihomo 是个什么现状」问的是文件系统、supervisor 与
-// external-controller,不是 daemon 自己;daemon 没跑的时候这几条命令更要能答话。
+// 与服务面同一种口径:**status 没有对应的 op**。「本机 mihomo 是个什么现状」问的是配置、文件系统与
+// external-controller,不是 daemon 自己;daemon 没跑的时候这条命令更要能答话。
 //
-// 一条贯穿本节的语义红线:**别人那个实例的生命周期归原托管方**。内核对它只做只读探测,
-// 绝不 stop/restart/kill、也不替它改配置;凡是"只能对 a2 自管那份做"的动作,对它一律返回 `mihomo_not_managed`。
-// (2026-08-12 起这条红线又收紧一格:连「收编」本身都不做了 —— 见 `MihomoRungSchema`。)
+// 14 票(ADR 0014)把这一面整个换了骨:**mihomo 不再挂自己的 unit,而是 a2 daemon 的直接子进程**,
+// 随 a2 生、随 a2 死。于是「共存阶梯」(presence / rung / provisioned / 复用档)整族退场,
+// 取而代之的是一个**用户显式裁定、一次性落盘**的三值托管模式:
+//   * `off`      —— 不管(出厂缺省);
+//   * `observe`  —— 只读旁观本机已有的那份(ADR 0013 的只读契约原样并入);
+//   * `embedded` —— a2 自己拉起一个子进程(锁定版二进制,配置由 a2 渲染)。
+//
+// 一条贯穿本节、且比以前更硬的红线:**别人那份 mihomo 的生命周期归它的主人**。内核对它只做只读探测,
+// 绝不 stop/restart/kill、也不替它改配置;它只出现在 `foreign` 与 guidance 里,没有任何一条写路径通向它。
 
-/**
- * 本机 mihomo 现状三态(取值即契约):
- *   * `running_instance` —— 有跑着的实例,且它的 external-controller 可达;
- *   * `binary_only` —— 盘上有 mihomo 二进制,但没有可达的实例;
- *   * `absent` —— 两样都没有。
- */
-export const MihomoPresenceSchema = z.enum(["running_instance", "binary_only", "absent"]);
-export type MihomoPresence = z.infer<typeof MihomoPresenceSchema>;
+/** 托管模式三值(取值即契约)。缺省 `off`;切换是**人的显式裁定**,内核绝不因为检测结果自己改。 */
+export const MihomoManagedModeSchema = z.enum(["off", "observe", "embedded"]);
+export type MihomoManagedMode = z.infer<typeof MihomoManagedModeSchema>;
 
-/**
- * 共存阶梯**两档**(spec「共存 = 检测并优先复用」;复用到**二进制**级为止):
- *   * `reuse_binary` —— 只读复用既有二进制:配置/数据目录与 `com.a2.mihomo` unit 全套自建;
- *   * `managed_install` —— 全无(或显式隔离):按锁定版下载校验落位,再挂 `com.a2.mihomo` unit。
- *
- * **原第一档 `adopt_instance`(收编跑着的实例)已于 2026-08-12 按用户裁定废除**:
- * 「本机已有在跑的 mihomo,应该只读状态,不用去接管」。别人的实例现在只出现在 `presence`
- * 与 `instance`(`owner: "foreign"`)里供人读,不再是 a2 会走的一档 —— 未就位时撞见它,
- * `a2 mihomo install` 结构化拒绝(`mihomo_foreign_instance_running`)、零改动。
- */
-export const MihomoRungSchema = z.enum(["reuse_binary", "managed_install"]);
-export type MihomoRung = z.infer<typeof MihomoRungSchema>;
-
-/** 实例归属:`a2` = `com.a2.mihomo` 托管的那份;`foreign` = 别人的(内核只读不碰生死)。 */
+/** 实例归属:`a2` = a2 自己那份(14 票起 = daemon 的子进程);`foreign` = 别人的(内核只读不碰生死)。 */
 export const MihomoOwnerSchema = z.enum(["a2", "foreign"]);
 export type MihomoOwner = z.infer<typeof MihomoOwnerSchema>;
 
@@ -689,52 +690,51 @@ export type MihomoOwner = z.infer<typeof MihomoOwnerSchema>;
  * 能力位 —— **观察到的事实,不是推断**:每一位都对应一次真实探测。
  *   * `rest_api` —— `GET /version` 应答了;
  *   * `meta_core` —— `/version` 的 `meta` 为真(mihomo 系内核,不是原版 clash);
- *   * `configs_read` —— `GET /configs` 读得到(07 票的配置面要靠它)。
+ *   * `configs_read` —— `GET /configs` 读得到。
  */
 export const MihomoCapabilitySchema = z.enum(["rest_api", "meta_core", "configs_read"]);
 export type MihomoCapability = z.infer<typeof MihomoCapabilitySchema>;
 
-/** 兼容地板的不达标项(机读词表,不是自由文本 —— 它是 agent 分支与审计的素材)。 */
-export const MihomoShortfallSchema = z.enum([
-  /** 问不出版本(`-v` 不认、`/version` 不给)。 */
-  "version_unknown",
-  /** 版本低于兼容地板。 */
-  "version_below_floor",
-  /** external-controller 不可达(或鉴权不过)。 */
-  "rest_api_unreachable",
-  /** 不是 mihomo 系内核(`/version` 的 meta 不为真)。 */
-  "not_meta_core",
-  /** `GET /configs` 读不到。 */
-  "configs_unreadable",
-]);
-export type MihomoShortfall = z.infer<typeof MihomoShortfallSchema>;
+/**
+ * 内嵌子进程的三态。**判据是进程本身**(认尸文件里的身份 + 那个 pid 此刻活不活),不是控制面通不通 ——
+ * 「进程在但控制面还没就绪」与「进程压根没了」是两件事,报文必须分得清。
+ *   * `running` —— 子进程活着(`pid` 必在);
+ *   * `stopped` —— 没在跑(还没启用、daemon 没跑、或刚被 disable);**这不是故障**;
+ *   * `failed`  —— 连续启动失败达到上限,a2 **已暂停重拉**(`lastError` 必在,内容是 mihomo stderr 尾部原文)。
+ */
+export const MihomoEmbeddedStateSchema = z.enum(["running", "stopped", "failed"]);
+export type MihomoEmbeddedState = z.infer<typeof MihomoEmbeddedStateSchema>;
 
-/** 兼容地板判定。`meets=false` 时 `shortfalls` 非空,且拒绝报文必带指引(内核不擅自升级)。 */
-export const MihomoCompatibilitySchema = z.object({
-  /** 地板版本(内核编译期常量)。 */
-  floor: z.string().min(1),
-  meets: z.boolean(),
-  /** 被判定的那份东西的版本(问不出时缺省)。 */
-  version: z.string().optional(),
-  shortfalls: z.array(MihomoShortfallSchema),
-});
-export type MihomoCompatibility = z.infer<typeof MihomoCompatibilitySchema>;
-
-/** 一个可达实例的事实。 */
-export const MihomoInstanceSchema = z.object({
-  owner: MihomoOwnerSchema,
-  /** external-controller 地址(恒为回环:非回环端点内核不探测)。 */
+/**
+ * a2 自己那份(内嵌子进程)的落点与状态。**未启用时路径照样给出**:那是启用会写的位置,agent 不必猜。
+ *
+ * `restartCount` 是**连续**失败次数(不是历史累计):子进程正常活过一段时间就清零,
+ * `a2 mihomo restart` 也清零 —— 它要回答的是「此刻离故障态还有几步」,而不是「这台机器上一共崩过几次」。
+ */
+export const MihomoEmbeddedSchema = z.object({
+  state: MihomoEmbeddedStateSchema,
+  /** 子进程 pid(`state=running` 时必在)。 */
+  pid: z.number().int().positive().optional(),
+  /** 落点上那份二进制的路径(不在盘上时也给 —— 那是下载会落到的位置)。 */
+  binaryPath: z.string().min(1),
+  /** 落点上那份二进制自报的版本(`mihomo -v`;不在盘上或问不出则缺省)。 */
+  binaryVersion: z.string().optional(),
+  /** 内核会装的锁定版。`binaryVersion` 与它不一致 = 下次拉起前自动换二进制(升级随 a2 走)。 */
+  lockedVersion: z.string().min(1),
+  configPath: z.string().min(1),
+  dataDir: z.string().min(1),
+  /** a2 自管实例的 external-controller(恒回环 + secret)。 */
   controller: z.string().min(1),
-  /** 该端点是否需要 secret(有配置到 secret 即真)。 */
-  secretConfigured: z.boolean(),
-  version: z.string().optional(),
-  capabilities: z.array(MihomoCapabilitySchema),
-  /** controller 地址是从哪份配置里读到的(显式指定时缺省)。 */
-  configFile: z.string().optional(),
+  /** 那个控制端点此刻答不答话(有 pid ≠ 能用)。 */
+  controllerReachable: z.boolean(),
+  /** 连续启动失败次数(达到上限即转 `failed`)。 */
+  restartCount: z.number().int().nonnegative(),
+  /** `failed` 必带:最近一次失败时 mihomo 自己在 stderr 上说的话(**原文**,不转述)。 */
+  lastError: z.string().optional(),
 });
-export type MihomoInstance = z.infer<typeof MihomoInstanceSchema>;
+export type MihomoEmbedded = z.infer<typeof MihomoEmbeddedSchema>;
 
-/** 盘上一份 mihomo 二进制的事实。 */
+/** 盘上一份**别人的** mihomo 二进制的事实(只读报告:内核既不改它也不复用它)。 */
 export const MihomoBinarySchema = z.object({
   path: z.string().min(1),
   version: z.string().optional(),
@@ -742,97 +742,83 @@ export const MihomoBinarySchema = z.object({
 export type MihomoBinary = z.infer<typeof MihomoBinarySchema>;
 
 /**
- * a2 自管二进制的形态:
- *   * `absent` —— 还没就位;
- *   * `downloaded` —— 按锁定版下载校验落位的真文件;
- *   * `reused` —— 指向既有二进制的**符号链接**(只读复用:内核从不写那个真身)。
+ * 别人那个实例的事实。**全部来自只读探测**:配置里读到的回环地址 + 一次 `GET /version`。
+ * `reachable=false` 也要如实报(「配置里写着但连不上」本身就是事实,observe 模式的态 D 靠它)。
  */
-export const MihomoBinaryKindSchema = z.enum(["absent", "downloaded", "reused"]);
-export type MihomoBinaryKind = z.infer<typeof MihomoBinaryKindSchema>;
-
-/** a2 自管那一份(`com.a2.mihomo`)的落点与状态。未就位时路径照样给出:那是就位会写的位置。 */
-export const MihomoManagedSchema = z.object({
-  /** unit 名(恒为 `com.a2.mihomo`;它与 `com.a2.kernel` 各自独立 —— 数据面不随控制面起落)。 */
-  label: z.string().min(1),
-  supervisor: SupervisorKindSchema,
-  unitPath: z.string().min(1),
-  unitInstalled: z.boolean(),
-  /** 与 `a2 service status` 同一套三态,取 supervisor 视角。 */
-  state: ServiceStateSchema,
-  pid: z.number().int().positive().optional(),
-  binaryKind: MihomoBinaryKindSchema,
-  binaryPath: z.string().min(1),
-  /** `reused` 时符号链接指向的真身路径。 */
-  binaryTarget: z.string().optional(),
-  version: z.string().optional(),
-  configPath: z.string().min(1),
-  dataDir: z.string().min(1),
+export const MihomoForeignInstanceSchema = z.object({
+  /** 归一后的连接目标(恒 `127.0.0.1:<port>`)。 */
   controller: z.string().min(1),
+  /** 配置里原样写的地址(可能是 `0.0.0.0:9090` 之类)。 */
+  address: z.string().min(1),
+  /** 那个端点是否配了 secret。 */
+  secretConfigured: z.boolean(),
+  /** 这个地址是从哪份配置里读到的(显式指定时缺省)。**那是别人的文件,内核只读那两行**。 */
+  configFile: z.string().optional(),
+  reachable: z.boolean(),
+  version: z.string().optional(),
+  capabilities: z.array(MihomoCapabilitySchema),
 });
-export type MihomoManaged = z.infer<typeof MihomoManagedSchema>;
+export type MihomoForeignInstance = z.infer<typeof MihomoForeignInstanceSchema>;
 
-/** `a2 mihomo status` 的 result:现状 + 将采用的阶梯档位 + 兼容地板 + 双方各自的事实。 */
-export const MihomoStatusResultSchema = z.object({
-  presence: MihomoPresenceSchema,
-  rung: MihomoRungSchema,
-  /** a2 这边是否已就位(判据 = `com.a2.mihomo` 的 unit 文件在不在)。 */
-  provisioned: z.boolean(),
-  /** 脚本安装档会装的锁定版;`a2 mihomo upgrade` 也只升到它。 */
-  lockedVersion: z.string().min(1),
-  /** 当前可达的实例(a2 自管优先;都没有则缺省)。 */
-  instance: MihomoInstanceSchema.optional(),
-  /** 盘上找到的**别人的**二进制(复用档的复用对象)。 */
-  foreignBinary: MihomoBinarySchema.optional(),
-  managed: MihomoManagedSchema,
-  compatibility: MihomoCompatibilitySchema,
-  /**
-   * 档位是**回退**来的时候的原委(spec「兼容性不达标回退隔离安装」)。
-   * 只在"本来要复用、但那份不达地板"时出现。
-   */
-  fallback: z
-    .object({
-      from: MihomoRungSchema,
-      shortfalls: z.array(MihomoShortfallSchema),
-      reason: z.string().min(1),
-    })
-    .optional(),
-  /** 配置里写着、但不是回环地址因而**内核有意没去探**的 external-controller(如实报告,不静默丢弃)。 */
+/**
+ * 「本机上不归 a2 管的那些 mihomo 事实」。**在场即报告,永不动手** —— observe 模式读它、
+ * embedded 模式用它出并跑提醒,两条路都止于文字。
+ */
+export const MihomoForeignSchema = z.object({
+  binary: MihomoBinarySchema.optional(),
+  instance: MihomoForeignInstanceSchema.optional(),
+  /** 配置里写着、但不是回环因而**内核有意没去探**的 external-controller(如实报告,不静默丢弃)。 */
   skippedController: z.string().optional(),
+});
+export type MihomoForeign = z.infer<typeof MihomoForeignSchema>;
+
+/**
+ * `a2 mihomo status` 的 result:模式 + 自己那份的实况 + 别人那些的事实 + 给 agent 的下一步指引。
+ *
+ * `guidance` 在这里**不是错误载荷**(这条命令永远成功),而是「第一读者是 agent」的落点:
+ * 六种典型处境各有一段定稿文本,agent 读它就知道该跟用户说什么、该执行哪条命令。
+ */
+export const MihomoStatusResultSchema = z.object({
+  mode: MihomoManagedModeSchema,
+  embedded: MihomoEmbeddedSchema,
+  /** 三样外来事实一样都没有时缺省(不是空对象 —— 「什么都没检测到」该是一眼可见的形状)。 */
+  foreign: MihomoForeignSchema.optional(),
+  /**
+   * 检出了**旧版 a2 自己装的** `com.a2.mihomo` unit(14 票起内核不再写它)。
+   * 只有 true 才出现;`enable --mode=embedded` 会顺手把它 bootout + 删 plist(自己的遗产自己收)。
+   * **别人的 unit 永远不在这个字段的射程内**。
+   */
+  legacyUnit: z.boolean().optional(),
+  guidance: GuidanceSchema.optional(),
   home: z.string().min(1),
 });
 export type MihomoStatusResult = z.infer<typeof MihomoStatusResultSchema>;
 
 /**
- * mihomo 面的收敛动作(审计素材,词表封闭)。unit 那几个与服务面同名同义;
- * 二进制/配置那几个是本面独有。**每一个动作都只作用在 a2 自管的那份上** —— 那是设计,不是遗漏。
- *
- * (收编档废除后 `adoption_recorded` / `adoption_released` 一并退场:a2 不再往盘上写任何
- * 「我盯着别人哪个实例」的记录,别人的实例只在 `status` 里被读、被报告。)
+ * mihomo 面的收敛动作(审计素材,词表封闭)。**每一个动作都只作用在 a2 自己那份上** —— 那是设计,不是遗漏:
+ * 词表里压根没有一个动词能施加于别人的实例。
  */
 export const MihomoActionSchema = z.enum([
+  /** 托管模式落盘了(`<A2_HOME>/mihomo/settings.json`)。 */
+  "mode_set",
   /** 建了 a2 自管的数据目录。 */
   "data_dir_created",
   /** 写(或收敛)了 a2 自管的配置文件。 */
   "config_written",
-  /** 按锁定版下载 + 校验 + 落位了二进制。 */
+  /** 按锁定版下载 + 校验 + 落位了二进制(本来没有)。 */
   "binary_downloaded",
-  /** 建了指向既有二进制的符号链接(只读复用)。 */
-  "binary_linked",
-  /** 显式升级把自管二进制换成了锁定版。 */
+  /** 盘上那份不是锁定版 → 换成了锁定版(升级随 a2 走,不再有独立的 upgrade 命令)。 */
   "binary_upgraded",
-  "unit_written",
-  "unit_removed",
-  "supervisor_loaded",
-  "supervisor_unloaded",
-  "supervisor_reloaded",
-  /** 拉起了 a2 自管的 mihomo 进程。 */
-  "mihomo_started",
-  /** 重启了 a2 自管的 mihomo 进程(unit 漂移收敛 / 升级换版之后)。 */
-  "mihomo_restarted",
+  /** 拉起了内嵌子进程。 */
+  "child_started",
+  /** 停掉了内嵌子进程(SIGTERM → 超时 SIGKILL)。 */
+  "child_stopped",
+  /** 拆掉了**旧版 a2 自己装的** `com.a2.mihomo` unit(bootout + 删 plist)。自己的遗产自己收。 */
+  "legacy_unit_removed",
 ]);
 export type MihomoAction = z.infer<typeof MihomoActionSchema>;
 
-/** `a2 mihomo install|uninstall|upgrade` 的 result:收敛后的状态 + 本次真改了什么(空数组 = 本来就这样)。 */
+/** `a2 mihomo enable|disable|restart` 的 result:收敛后的状态 + 本次真改了什么(空数组 = 本来就这样)。 */
 export const MihomoChangeResultSchema = z.object({
   status: MihomoStatusResultSchema,
   actions: z.array(MihomoActionSchema),
@@ -996,7 +982,13 @@ export const ProxyLatencyResultSchema = z.object({
 });
 export type ProxyLatencyResult = z.infer<typeof ProxyLatencyResultSchema>;
 
-/** a2 自管配置里的可调项(**只有这几项可调** —— 其余由内核渲染,手改会在下次收敛时被改回)。 */
+/**
+ * a2 自管配置里的可调项(**只有这几项可调** —— 其余由内核渲染,手改会在下次收敛时被改回),
+ * 外加 14 票的**托管模式**:落点同为 `<A2_HOME>/mihomo/settings.json`。
+ *
+ * 为什么模式住在这里而不是另起一份状态文件:它与端口/日志级别是同一类东西 ——
+ * **人显式设过一次、之后每次启动照着办的设置**。多一份文件就多一处会漂的事实源。
+ */
 export const ProxySettingsSchema = z.object({
   /** 混合入站端口(HTTP + SOCKS 同一个;系统代理接管指向的就是它)。 */
   mixedPort: z.number().int().positive(),
@@ -1004,6 +996,12 @@ export const ProxySettingsSchema = z.object({
   logLevel: z.enum(["silent", "error", "warning", "info", "debug"]),
   /** 写进配置文件的默认模式(运行时改 mode 走 `proxy.mode.set`,不落盘)。 */
   mode: ProxyModeSchema,
+  /**
+   * mihomo 托管模式(14 票)。**缺省 `off`** —— 而且这个缺省写在 schema 上,
+   * 于是 14 票之前落盘的那份 settings.json(没有这个键)照样解析得动,不会因为"少一个键"
+   * 被整份判为不合契约、把用户设过的端口一起丢掉。
+   */
+  managedMode: MihomoManagedModeSchema.default("off"),
 });
 export type ProxySettings = z.infer<typeof ProxySettingsSchema>;
 

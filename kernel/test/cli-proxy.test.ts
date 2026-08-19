@@ -298,15 +298,14 @@ whenEnabled("proxy.config.set")("proxy config set:内核不认新配置 → 回�
   expect(await readFile(box.managedConfig, "utf8")).toBe(before);
 }, 30000);
 
-// MARK: - 收编档的边界(写面到配置为止)
+// MARK: - observe 模式的边界(只读到底)
 
-test("别人的实例在跑:proxy status **读得到**它(只读),但 a2 既不接管它、也没有任何写面能碰它", async () => {
+test("别人的实例在跑(observe):proxy status **读得到**它(只读),但 a2 既不接管它、也没有任何写面能碰它", async () => {
   const box = (sandbox = await makeProxySandbox());
   const foreign = await startForeignInstance(box, { groups: "PROXY=F1,F2" });
-  // 2026-08-12 起 `mihomo install` 撞见别人在跑的实例会**结构化拒绝、零改动** —— 收编档已废除。
-  const install = await runCli(["mihomo", "install", "--json"], { home: box.home, env: box.env });
-  expect(install.exitCode).toBe(5);
-  expect(JSON.parse(install.stdout).error.code).toBe("mihomo_foreign_instance_running");
+  // 14 票:拒绝闸退场,双模式取而代之 —— observe = 显式启用的只读旁观。
+  const enable = await runCli(["mihomo", "enable", "--mode=observe", "--json"], { home: box.home, env: box.env });
+  expect(enable.exitCode).toBe(0);
   await startProxyDaemon(box);
 
   // 「只读状态就够了」那一半仍然成立:端点解析照旧指向它,状态照旧读得出来。
@@ -336,7 +335,7 @@ test("别人的实例在跑:proxy status **读得到**它(只读),但 a2 既不�
 
 // MARK: - 没有对象时
 
-test("没有可控制的实例 → mihomo_unreachable + 退出码 5 + 指引给出 a2 mihomo install", async () => {
+test("没有可控制的实例 → mihomo_unreachable + 退出码 5 + 指引给出 a2 mihomo enable", async () => {
   const box = (sandbox = await makeProxySandbox());
   await startProxyDaemon(box);
 
@@ -346,7 +345,7 @@ test("没有可控制的实例 → mihomo_unreachable + 退出码 5 + 指引给�
   const parsed = body(result);
   expect(parsed.error.code).toBe("mihomo_unreachable");
   const commands = parsed.error.guidance.steps.map((s: { command?: string }) => s.command);
-  expect(commands).toContain("a2 mihomo install --json");
+  expect(commands).toContain("a2 mihomo enable --mode=embedded --json");
 });
 
 // MARK: - 用法面

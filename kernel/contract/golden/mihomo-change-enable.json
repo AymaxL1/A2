@@ -1,0 +1,44 @@
+{
+  "status": {
+    "mode": "embedded",
+    "embedded": {
+      "state": "stopped",
+      "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+      "lockedVersion": "v1.19.28",
+      "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+      "dataDir": "/Users/alice/.a2/mihomo",
+      "controller": "127.0.0.1:9097",
+      "controllerReachable": false,
+      "restartCount": 0,
+      "binaryVersion": "v1.19.28"
+    },
+    "guidance": {
+      "summary": "已启用内置代理内核,但它此刻没在运行 —— 内嵌 mihomo 由 A2 内核服务托管,服务在跑它才会被拉起。",
+      "steps": [
+        {
+          "description": "看内核服务在不在跑",
+          "command": "a2 service status --json"
+        },
+        {
+          "description": "服务没装则先安装(含开机自启)",
+          "command": "a2 service install --json"
+        },
+        {
+          "description": "服务在跑的话,重启内置内核",
+          "command": "a2 mihomo restart --json"
+        }
+      ],
+      "context": {
+        "controller": "127.0.0.1:9097"
+      }
+    },
+    "home": "/Users/alice/.a2"
+  },
+  "actions": [
+    "mode_set",
+    "data_dir_created",
+    "config_written",
+    "binary_downloaded",
+    "legacy_unit_removed"
+  ]
+}

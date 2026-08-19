@@ -1,15 +1,15 @@
 // 就位的那几件实事:建数据目录、写配置、把二进制弄到 a2 自己的落点上。
 //
-// 「脚本化安装」在这里是**内核自己做**,而不是再出一个 shell 安装脚本 —— 摘要校验、失败指引与错误码
-// 必须与内核同源,在 shell 里重写一遍就是第二份会漂移的事实源。对外的形态不变:一条显式命令
-// (`a2 mihomo install`)从官方渠道拉锁定版、校验、落位。
+// 下载在这里是**内核自己做**,而不是再出一个 shell 安装脚本 —— 摘要校验、失败指引与错误码
+// 必须与内核同源,在 shell 里重写一遍就是第二份会漂移的事实源。14 票起入口是
+// `a2 mihomo enable --mode=embedded`(启用即授权下载,升级随 a2 走)。
 //
 // 三条硬性质,顺序即安全语义:
 //   1. **先验后落**:摘要对不上时磁盘上一个字节都没写过(不留半成品二进制);
 //   2. **没有可信摘要就不装**(fail-closed):本平台没登记摘要 → 结构化拒绝 + 指引,不"先装了再说";
-//   3. **只读复用别人的二进制** = 建一个指向它的符号链接,内核从不写、不改、不移动那个真身。
+//   3. 复用档随 14 票退场:embedded 一律跑内核自己下载的锁定版(确定性 > 省 15MiB)。
 
-import { chmod, lstat, mkdir, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ErrorCode, type Guidance, type WireError } from "../contract/wire.ts";
 import { MihomoEnv, readControllerFromConfig, type MihomoLayout } from "./paths.ts";
@@ -86,20 +86,6 @@ export async function currentSecret(layout: MihomoLayout): Promise<string> {
 }
 
 /**
- * 只读复用:在 a2 落点上建一个指向既有二进制的符号链接。
- * 已经指对了就什么都不做;指错了(或那儿是别的东西)就换掉 —— 换的永远是链接,不是它指向的真身。
- */
-export async function linkForeignBinary(layout: MihomoLayout, target: string): Promise<boolean> {
-  const resolved = path.resolve(target);
-  const current = await currentLinkTarget(layout.binaryPath);
-  if (current === resolved) return false;
-  await mkdir(layout.binDir, { recursive: true, mode: DATA_DIR_MODE });
-  await removeIfPresent(layout.binaryPath);
-  await symlink(resolved, layout.binaryPath);
-  return true;
-}
-
-/**
  * 按锁定版下载 + 校验 + 落位。**校验通过之前不往落点写任何东西。**
  * `A2_MIHOMO_RELEASE_BASE` 覆写发布渠道(镜像源 / 测试夹具),
  * `A2_MIHOMO_EXPECT_SHA256` 覆写期望摘要(仅测试与诊断 —— 生产走 `pin.ts` 的摘要表)。
@@ -116,16 +102,11 @@ export async function downloadLockedBinary(
       ErrorCode.mihomoOperationFailed,
       `内核只安装能验的东西:${MIHOMO_LOCKED_VERSION} 的摘要表里没有 ${key} 这一项。`,
       {
-        summary: "没有可信摘要就没有可信安装。要么复用一份你自己验过的二进制,要么让内核补上这一项。",
+        summary:
+          "没有可信摘要就没有可信安装(fail-closed)。本平台暂不支持 embedded;你可以自装 mihomo 后用 observe 模式只读它。",
         steps: [
-          {
-            description: "自己下载并核对官方摘要后,把它放到 PATH 上,再让 a2 只读复用它",
-            command: `a2 mihomo status --json`,
-          },
-          {
-            description: "或指定一份已有二进制所在目录后重跑安装(只读复用,内核不会改它)",
-            command: `${MihomoEnv.binDirs}=/your/bin/dir a2 mihomo install --json`,
-          },
+          { description: "自己安装并运行 mihomo(它的生命周期归你),然后启用只读旁观", command: "a2 mihomo enable --mode=observe --json" },
+          { description: "看本机现状", command: "a2 mihomo status --json" },
         ],
         context: { platform: key, lockedVersion: MIHOMO_LOCKED_VERSION },
       },
@@ -195,11 +176,7 @@ function downloadGuidance(url: string): Guidance {
     summary: "内核只从锁定版渠道取二进制,不会退而求其次。先确认网络/渠道可达,再重跑(幂等)。",
     steps: [
       { description: "手动确认这个资产能取到", command: `curl -fsSLI ${url}` },
-      { description: "确认后重跑安装(幂等)", command: "a2 mihomo install --json" },
-      {
-        description: "或复用一份已有二进制(只读复用,内核不会改它)",
-        command: "a2 mihomo status --json",
-      },
+      { description: "确认后重跑启用(幂等)", command: "a2 mihomo enable --mode=embedded --json" },
     ],
     context: { url, lockedVersion: MIHOMO_LOCKED_VERSION },
   };
@@ -207,16 +184,6 @@ function downloadGuidance(url: string): Guidance {
 
 function newSecret(): string {
   return crypto.randomUUID().replaceAll("-", "");
-}
-
-async function currentLinkTarget(link: string): Promise<string | undefined> {
-  try {
-    const info = await lstat(link);
-    if (!info.isSymbolicLink()) return undefined;
-    return path.resolve(path.dirname(link), await readlink(link));
-  } catch {
-    return undefined;
-  }
 }
 
 async function removeIfPresent(file: string): Promise<void> {

@@ -6,8 +6,6 @@
 //
 // mihomo **不随任何分发物打包**(ADR 0007 修订版 / spec):这里只有元数据,仓库里没有那 42MiB 的二进制。
 
-import type { MihomoShortfall } from "../contract/wire.ts";
-
 /**
  * 锁定版本。
  *
@@ -19,14 +17,9 @@ import type { MihomoShortfall } from "../contract/wire.ts";
  */
 export const MIHOMO_LOCKED_VERSION = "v1.19.28";
 
-/**
- * 兼容地板。低于它的实例/二进制内核**不接管、不复用**,只出结构化降级报告 —— 而不是擅自升级别人的东西。
- *
- * **凭什么是 1.19**:07 票要用的控制面端点(`PATCH /configs` 运行时改 mode、`PUT /configs` 从路径重载、
- * `GET /group/<n>/delay` 整组测速)在 1.19.x 上是我们唯一实测过的组合(旧仓 `MihomoRESTClient` +
- * `Scripts/check/mihomo-real-e2e.sh` 跑的就是 v1.19.28)。再往下没有实测背书,不承诺。
- */
-export const MIHOMO_COMPAT_FLOOR = "1.19.0";
+// 兼容地板(`MIHOMO_COMPAT_FLOOR` / `versionShortfall`)随 14 票退场:embedded 一律跑内核自己下的
+// 锁定版(版本由 `MIHOMO_LOCKED_VERSION` 说了算),而别人那份的版本内核只如实报告、不做达标裁定 ——
+// 「不接管、不复用」之后,一条"你那份太旧"的判词既无处施加也无人负责。
 
 /** 官方发布渠道(`A2_MIHOMO_RELEASE_BASE` 可覆写 —— 镜像源与测试都靠它)。 */
 export const MIHOMO_RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases";
@@ -87,10 +80,4 @@ export function compareVersions(a: string, b: string): number {
     if (diff !== 0) return diff;
   }
   return 0;
-}
-
-/** 版本够不够地板。问不出版本时**不当作达标**(未知不等于没问题)。 */
-export function versionShortfall(version: string | undefined): MihomoShortfall | undefined {
-  if (!version) return "version_unknown";
-  return compareVersions(version, MIHOMO_COMPAT_FLOOR) < 0 ? "version_below_floor" : undefined;
 }

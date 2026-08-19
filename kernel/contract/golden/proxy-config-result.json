@@ -3,11 +3,16 @@
     "mixedPort": 7897,
     "allowLan": false,
     "logLevel": "info",
-    "mode": "rule"
+    "mode": "rule",
+    "managedMode": "off"
   },
   "configPath": "/Users/alice/.a2/mihomo/config.yaml",
   "controller": "127.0.0.1:9097",
   "activeSubscription": "jichang-jia-1a2b3c4d",
   "inSync": true,
-  "actions": ["settings_written", "config_written", "config_reloaded"]
+  "actions": [
+    "settings_written",
+    "config_written",
+    "config_reloaded"
+  ]
 }

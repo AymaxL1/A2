@@ -177,58 +177,58 @@
       "why": "服务面拒绝之五(18 票,用户裁定):--purge 只对缺省 ~/.a2 生效,自定义 A2_HOME 一律拒(退出码 6,`context.reason=non_default_home`),指引给出自助清理那条路 —— 数据的处置权在人手里"
     },
     {
-      "file": "mihomo-status-absent.json",
+      "file": "mihomo-status-off.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "现状三态之一(全无):档位=脚本安装,未就位时也要给出 unit/二进制/配置将落到哪儿"
+      "why": "出厂态:mode=off、内嵌子进程 stopped、无外来事实;guidance 态 A(推荐 embedded,下载授权明写版本与体积)——status 永远成功,指引不是错误载荷"
     },
     {
-      "file": "mihomo-status-foreign-running.json",
+      "file": "mihomo-status-off-foreign.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "别人的实例在跑:如实报出 instance.owner=foreign 与它的能力位,但 provisioned=false、档位仍按「a2 自己要就位的话走哪条」算 —— 看得见 ≠ 已接管(收编档 2026-08-12 废除)"
+      "why": "off + 检测到外来实例 + 旧版 com.a2.mihomo:guidance 态 B(双模式讲给用户、由用户选,agent 不代选)+ 迁移告知步;foreign 全部是只读探测的事实"
     },
     {
-      "file": "mihomo-status-reused.json",
+      "file": "mihomo-status-embedded-running.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "只读复用档:binaryKind=reused + binaryTarget 指向真身(内核从不写它),自管实例在跑"
+      "why": "embedded 运行中:pid 必在、controllerReachable=true、restartCount=0;没有要指引的事就没有 guidance(不唠叨)"
     },
     {
-      "file": "mihomo-status-fallback.json",
+      "file": "mihomo-status-embedded-failed.json",
       "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "复用对象不达地板 → 回退隔离安装(fallback 说明原因);另含被跳过的非回环控制端点"
+      "why": "故障态:连续 3 次启动失败已暂停重拉,lastError=mihomo stderr 尾部原文;guidance 态 C(配置路径 + restart 是唯一出路)"
     },
     {
-      "file": "response-mihomo-foreign-running.json",
-      "schema": "ResponseEnvelope",
+      "file": "mihomo-status-observe-nocontroller.json",
+      "schema": "MihomoStatusResult",
       "kind": "valid",
-      "why": "别人的实例在跑而 a2 未就位:install 结构化拒绝 + **零改动**,指引给出「只读着用」与「显式 --isolated 并存」两条路(退出码 5)"
+      "why": "observe 读不到 controller:非回环端点如实报 skippedController 而不探(红线);guidance 态 D(系统代理要 --port 显式带参,不猜端口)"
     },
     {
-      "file": "mihomo-change-install.json",
+      "file": "mihomo-change-enable.json",
       "schema": "MihomoChangeResult",
       "kind": "valid",
-      "why": "脚本安装档 install 的 result:数据目录 + 配置 + 下载校验落位 + unit + 装载"
+      "why": "enable --mode=embedded 的全动作样本:模式落盘/建目录/钉头部/下载校验/拆旧 unit;status 携 guidance 态 G(等 daemon 拉起)——一次显式启用把五件事收敛完"
     },
     {
       "file": "response-mihomo-unreachable.json",
       "schema": "ResponseEnvelope",
       "kind": "valid",
-      "why": "别人托管的那个实例此刻不应答:代理域命令没有对象 → 报警 + 指路,内核不越权重拉(退出码 5)"
+      "why": "observe 下外来实例不应答:mihomo_unreachable + 指引(它的生死归原托管方,内核只报警指路)"
     },
     {
-      "file": "invalid-mihomo-status-retired-rung.json",
+      "file": "invalid-mihomo-status-retired-mode.json",
       "schema": "MihomoStatusResult",
       "kind": "invalid",
-      "why": "已废除的档位名 adopt_instance 必须被拒 —— 档位是 agent 的分支依据,退场的那一档不许再从任何地方冒出来"
+      "why": "共存阶梯词表(managed_install/reuse_binary)已随 14 票退场,进不了托管模式枚举 —— 旧客户端的报文在新契约上必须当场红"
     },
     {
       "file": "invalid-mihomo-change-unknown-action.json",
       "schema": "MihomoChangeResult",
       "kind": "invalid",
-      "why": "动作不在已登记词表内(这里故意写成 foreign_instance_restarted —— 内核永远不会做的那件事)"
+      "why": "actions 词表封闭:未登记的动作(含旧世界的 mihomo_started/unit_written 一族)必须被拒 —— 审计词表不许静默扩张"
     },
     {
       "file": "invalid-request-missing-op.json",

@@ -1,0 +1,14 @@
+{
+  "mode": "managed_install",
+  "embedded": {
+    "state": "stopped",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": false,
+    "restartCount": 0
+  },
+  "home": "/Users/alice/.a2"
+}

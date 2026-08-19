@@ -45,8 +45,8 @@ import {
   type UnitAction,
 } from "./supervisor.ts";
 import {
+  legacyMihomoRemovalPlan,
   MIHOMO_SERVICE_LABEL,
-  mihomoServicePlan,
   resolveSupervisorKind,
   servicePlan,
   STDERR_LOG_NAME,
@@ -310,12 +310,12 @@ function unitRecordedHome(plan: ServicePlan): HomeMismatch | undefined {
 }
 
 /**
- * `com.a2.mihomo` 的 plan。**唯一目的是拆它**,所以三个路径参数取自 `mihomoLayout`
- * (与 `a2 mihomo install` 同一个来源),unit 内容本身在移除路径上不参与任何判断。
+ * 旧版 `com.a2.mihomo` 的 plan。**唯一目的是拆它**(14 票起内核不再写这个 unit),
+ * 三个路径参数取自 `mihomoLayout`(与内嵌子进程同一个来源),unit 内容在移除路径上不参与任何判断。
  */
 function mihomoPlanFor(plan: ServicePlan, paths: KernelPaths): ServicePlan {
   const layout = mihomoLayout(paths, process.env);
-  return mihomoServicePlan(
+  return legacyMihomoRemovalPlan(
     plan.kind,
     paths,
     { binaryPath: layout.binaryPath, dataDir: layout.dataDir, configPath: layout.configPath },
