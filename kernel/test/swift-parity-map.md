@@ -718,3 +718,20 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 **新增红线断言**:daemon 主动停止路径 exit 0(`harness.stopDaemon` 恒断言);认尸三对齐「验不明不动手」活体(`mihomo-child.test.ts` 红线测试);KeepAlive 双键逐键(`cli-service.test.ts`)。
 
 **已知未覆盖(如实)**:launchd 真活体上的「SIGKILL daemon → SuccessfulExit:false 约 30s 重拉 → 子进程重建」需要真 launchctl 冒烟(03 研究票在一次性 label 上实测过语义;`service-live-smoke.sh` 的 mihomo 段落顺延人工项,与 5 条人工项同批)。
+
+
+## 08 票(临时闸:检测停用 + `a2 guide` + 面板安装入口,2026-08-21)——改判与保留记账
+
+**背景**:真机验收暴露检测设计的可见性天花板(无 `external-controller` 的实例天然不可见,红线不许扫进程表),用户裁定检测面临时停用、代码保留待修,小白主流程优先。底账:`.scratch/mihomo-embedded/issues/08-novice-mainline-gate.md`。
+
+**改判(旧断言 → 新语义,全部保留用例改期望)**:
+- 「status 报 foreign / 态 B 双选 / 态 E 并跑 / skippedController」族 → **foreign 恒空、off 态恒落态 A**(`cli-mihomo.test.ts`,B/E 分支代码保留休眠)。
+- 「enable --mode=observe 落盘成功」→ **参数层拒绝并指路 embedded**;凡还要验「盘上 observe 态」行为的用例(supervision 不进观测循环、proxy 读面),改为**直写 settings.json**——盘上的 observe 仍是合法态,契约词表一个字没改。
+- 「observe 下 proxy status 读得到别人那份」→ **诚实的瞎子**:status 退出 0 但无 endpoint,真要对话的读面结构化报 `mihomo_unreachable`(`cli-proxy.test.ts`)。
+- 平台无摘要的指引退路 `enable --mode=observe` → **人类自装自用、A2 只读**(`install.ts`:指引不许指向死路)。
+
+**新增**:
+- `a2 guide`(无 op、不经 daemon):`GuideResult` 进登记契约与金标(`guide-result.json`),**有意不进 Swift 镜像**——壳只复制一句指向它的指针,不请求不解析(豁免理由在 `A2UnmirroredContract.guideResult`)。`cli-guide.test.ts` 8 条。
+- 面板两条本地动作:`copyInstallMihomoPrompt` 新增;「尚未配置节点」改判为复制同一段指令。装置 ⑫⑬ + 快照 golden 12/13 + `A2BootstrapMenuTests` 5 条(含「断连不出安装入口」的反证)。
+
+**保留不动**:`detect.ts` / `controller.ts` 及其单测照常全绿(测函数不经 status);金标 `off-foreign` / `observe*` / `coexist` 样本保留——它们验契约形状,不验活体行为。解闸 = 解开 `manager.ts` `statusResult` 里那一行注释。

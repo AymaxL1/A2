@@ -6,7 +6,8 @@
 //   3. **杀掉内核 daemon,内嵌 mihomo 随之停下(随 a2 生死);系统代理不变;内核回来后子进程与监督恢复**。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { ProxySupervisionResultSchema } from "../src/contract/wire.ts";
 import { connectFakeClient } from "./support/fake-client.ts";
 import { runCli, stopDaemon } from "./support/harness.ts";
@@ -126,8 +127,13 @@ test("supervision:别人的实例在跑也**不进观测循环** —— 没有�
   const box = (sandbox = await makeProxySandbox());
   await startForeignInstance(box, { groups: "PROXY=F1" });
   // 14 票:双模式取代拒绝闸。observe = 只读旁观,**有意不进观测循环**(不对别人的进程做常驻监督)。
-  const enable = await runCli(["mihomo", "enable", "--mode=observe", "--json"], { home: box.home, env: box.env });
-  expect(enable.exitCode).toBe(0);
+  // 08 票改判(2026-08-21):`enable --mode=observe` 的入口随检测面一并临时关闭,于是模式**直接落盘**
+  // ——盘上的 observe 仍是合法态(契约词表一个字没改),本用例验的那件事(不进观测循环)也一字未改。
+  await mkdir(path.join(box.home, "mihomo"), { recursive: true });
+  await writeFile(
+    path.join(box.home, "mihomo", "settings.json"),
+    `${JSON.stringify({ managedMode: "observe" })}\n`,
+  );
   await startProxyDaemon(box);
 
   // 等够几个观测周期,确认它一直没认领任何目标。

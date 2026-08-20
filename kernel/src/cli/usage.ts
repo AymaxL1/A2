@@ -26,6 +26,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   mihomo …             内嵌代理内核:status / enable / disable / restart(见 a2 mihomo --help)
   plugin …             插件装载:add <路径> / list / remove <名字>(见 a2 plugin --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
+  guide                给 AI 助手的 A2 使用说明全文(贴给你的 agent 就能上手;不经 daemon)
   about                版本、许可与外部程序声明(GPL 义务落点;不经 daemon)
   help                 打印本帮助
   version              打印版本
@@ -136,14 +137,20 @@ export const MIHOMO_USAGE = `a2 mihomo —— 内嵌代理内核的托管面(mih
 用法:
   a2 [--json] mihomo status                     本机现状 + 给 agent 的下一步指引(只读;daemon 没跑也能答)
   a2 [--json] mihomo enable --mode=embedded     启用内置代理内核(下载锁定版并由 a2 内核服务托管其生死)
-  a2 [--json] mihomo enable --mode=observe      只读旁观本机已有的 mihomo(a2 不改动、不接管、不重启它)
+  a2 [--json] mihomo enable --mode=observe      **暂不开放**(检测面临时停用,修复后回归;当前请用 --mode=embedded)
   a2 [--json] mihomo disable                    停用 mihomo 功能(落盘 off;内置子进程随之停下)
   a2 [--json] mihomo restart                    重启内置子进程(改完配置让它生效;故障态计数清零。需 daemon 在跑)
 
 托管模式(用户显式裁定、一次性落盘;检测结果只进报告面,永不自动切换):
   off        出厂缺省 —— 不管
-  observe    只读旁观本机已有的那份(它的配置与生死都归它的主人)
+  observe    只读旁观本机已有的那份(它的配置与生死都归它的主人)。**当前暂不开放**,见下
   embedded   a2 自己拉起一个子进程:锁定版二进制、配置头部由 a2 钉住、**正文归你与你的 agent 直接改**
+
+**当前停用**(2026-08-21 用户裁定):**外来 mihomo 的检测面**与依赖它的 observe 模式。
+status 的 result.foreign 从此恒空(不再报告别人的二进制/实例),enable --mode=observe 在参数层拒绝。
+原因:a2 判断"本机有没有别的 mihomo"唯一的证据源是**配置里写了 external-controller**
+(红线:不扫进程表、不翻 launchd),而没开控制端点的实例天然不可见 —— 报不出来比报错更该修,
+所以入口先关掉、代码留着。下面那几个 A2_MIHOMO_CONTROLLER* / A2_MIHOMO_*_DIRS 旋钮随之一并休眠。
 
 配置怎么改(embedded):直接编辑 <A2_HOME>/mihomo/config.yaml(a2 只钉自己的七个头部键,
 其余每一个字节都归你),改完 a2 mihomo restart 生效。
@@ -318,6 +325,22 @@ dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(�
 
 退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 5 装载或调用没成 / 6 插件说的话不合协议`;
 
+export const GUIDE_USAGE = `a2 guide —— 给 AI 助手的 A2 使用说明全文(08 票)
+
+用法:
+  a2 [--json] guide                打印说明全文(--json 时 result 形如 { "text": "<全文>" })
+
+不接受任何参数,**不经 daemon、不碰网络**:一个还没把内核服务装起来的 agent,恰恰最需要读到它。
+
+它说了什么:CLI 完整路径与 --json 纪律、开工前先跑哪三条 status、常用命令、
+mihomo 的配置归 agent 直接读改(含订阅节点怎么并)、以及两条边界(dangerous 只转告不绕过;
+别人的 mihomo 只读不碰)。
+
+面板菜单「复制 AI 助手使用说明」复制的是**指向本命令的一句话**,不是全文的副本 ——
+说明随内核一起升级,只有这一份是当下这台机器上真正生效的那份。
+
+退出码:0 成功 / 1 用法错 / 6 输出不合契约(内部错,正常永不出现)`;
+
 export const ABOUT_USAGE = `a2 about —— 版本、许可与外部程序声明(GPL 义务的必有落点)
 
 用法:
@@ -437,6 +460,17 @@ export function aboutUsageOutcome(message: string): CommandOutcome {
     steps: [
       { description: "打印版本、许可与外部程序声明", command: "a2 about" },
       { description: "同一份声明的机读形态", command: "a2 about --json" },
+    ],
+  });
+}
+
+/** guide 面的用法错:指引指向那条不带参数的正确写法(人类面与机读面各一条)。 */
+export function guideUsageOutcome(message: string): CommandOutcome {
+  return usageOutcome(message, {
+    usage: GUIDE_USAGE,
+    steps: [
+      { description: "打印给 AI 助手的使用说明全文", command: "a2 guide" },
+      { description: "同一份说明的机读形态", command: "a2 guide --json" },
     ],
   });
 }

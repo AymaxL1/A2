@@ -269,33 +269,38 @@ test("mihomo status 出厂态:mode=off、内嵌 stopped、退出码 0 且只读;
   expect(existsSync(box.home)).toBe(false);
 });
 
-test("mihomo status 检测到外来实例:foreign 全是只读事实;guidance 态 B 把双模式讲给用户、由用户选", async () => {
+// **08 票改判**(2026-08-21 用户裁定:检测面临时停用,代码保留待修)。
+// 原断言验的是「检测到外来实例 → foreign 报事实 + guidance 态 B 双模式由用户选」。
+// 现在 status 里那次 collectForeignFacts 调用被注释掉了,于是**同一个活体场景**(真的有一份
+// 外来 mihomo 在跑、控制端点真的答话)得到的是:foreign 恒空、off 态恒落态 A。
+// 用例保留、期望改判 —— 它守的东西反而更要紧了:检测关掉之后,红线(不碰别人的进程)一样不许破。
+test("**08 票改判**·外来实例在跑:检测面停用 → foreign 恒空、off 态恒落态 A;别人的进程照样一根汗毛不少", async () => {
   const box = (sandbox = await makeSandbox());
-  const foreign = await startForeignInstance(box);
+  await startForeignInstance(box);
 
   const status = await statusOf(box);
   expect(status.mode).toBe("off");
-  expect(status.foreign.instance.controller).toBe(foreign.controller);
-  expect(status.foreign.instance.reachable).toBe(true);
-  expect(status.foreign.instance.secretConfigured).toBe(true);
-  expect(status.foreign.instance.capabilities).toContain("rest_api");
-  // 态 B:两条命令各对应一个用户选择;**agent 不代选**是写进 summary 的行为指令。
-  expect(status.guidance.summary).toContain("由用户选择");
+  // 检测停用:报文里连 foreign 这个键都不出现(契约里它本就是 optional,形状没变)。
+  expect(status.foreign).toBeUndefined();
+  // 态 B 休眠 → 恒落态 A:推荐 embedded,且**没有**指向 observe 的那条死路。
+  expect(status.guidance.summary).toContain("推荐 embedded");
   const commands = status.guidance.steps.map((s: { command?: string }) => s.command);
-  expect(commands).toContain("a2 mihomo enable --mode=observe --json");
   expect(commands).toContain("a2 mihomo enable --mode=embedded --json");
+  expect(commands).not.toContain("a2 mihomo enable --mode=observe --json");
 
-  // 别人的进程一根汗毛都没少。
+  // 别人的进程一根汗毛都没少(这条与检测开关无关 —— 任何时候都不许破)。
   expect(box.foreignProc && !box.foreignProc.killed).toBe(true);
 });
 
-test("mihomo status:配置里的 external-controller 不是回环 → 有意不探,如实报 skippedController", async () => {
+// **08 票改判**:非回环端点「有意不探、如实报 skippedController」是检测面的行为,随检测面一并休眠。
+// 那条红线(不对非本机端点发请求)本身没退场 —— 它现在由 `detect.ts` 的单测直接守着,
+// 而这里验的是**更强的一条**:检测关掉之后,status 连一次探测都不会发生。
+test("**08 票改判**·配置里的 external-controller 不是回环:检测面停用 → 一个 foreign 字段都不报", async () => {
   const box = (sandbox = await makeSandbox());
   await writeFile(box.foreignConfig, ["external-controller: 192.168.1.10:9090", ""].join("\n"));
 
   const status = await statusOf(box);
-  expect(status.foreign.skippedController).toBe("192.168.1.10:9090");
-  expect(status.foreign.instance).toBeUndefined();
+  expect(status.foreign).toBeUndefined();
 });
 
 // MARK: - enable / disable(模式落盘 + 就位)
@@ -351,7 +356,7 @@ test("enable 下载 fail-closed:摘要不符 → 退出码 5,落点上一个字�
   }
 });
 
-test("enable:本平台没登记摘要 → 拒绝下载(连一次 GET 都不发),指引给出 observe 那条退路", async () => {
+test("enable:本平台没登记摘要 → 拒绝下载(连一次 GET 都不发),指引给出**人类走得通**的那条退路", async () => {
   const box = (sandbox = await makeSandbox());
   let hits = 0;
   const channel = Bun.serve({
@@ -370,22 +375,39 @@ test("enable:本平台没登记摘要 → 拒绝下载(连一次 GET 都不发),
     expect(result.exitCode).toBe(5);
     const error = parseJsonStdout(result).error;
     expect(error.guidance.summary).toContain("fail-closed");
+    // **08 票改判**:原先这条退路是 `enable --mode=observe`,而它现在会被参数层拒 ——
+    // 指引不许指向死路,于是换成"转告用户自装自用"(A2 对它只读不碰)。
     const commands = error.guidance.steps.map((s: { command?: string }) => s.command);
-    expect(commands).toContain("a2 mihomo enable --mode=observe --json");
+    expect(commands).not.toContain("a2 mihomo enable --mode=observe --json");
+    const texts = error.guidance.steps.map((s: { description: string }) => s.description).join("");
+    expect(texts).toContain("转告用户");
+    expect(texts).toContain("只读不碰");
     expect(hits).toBe(0);
   } finally {
     channel.stop(true);
   }
 });
 
-test("enable --mode=observe / disable:只落盘模式,不建不下载;disable 幂等", async () => {
+// **08 票改判**:observe 的眼睛就是检测面,检测面停用之后留着入口等于发瞎子的眼镜 ——
+// 于是 enable --mode=observe **在参数层拒绝**(退出码 1 + 指向唯一走得通的那条路)。
+// 词表与落盘态仍保留 observe(契约一个字节没改),修复后把这条改回"只落盘模式"即可。
+test("**08 票改判**·enable --mode=observe:参数层拒绝并指路;disable 只落盘、幂等", async () => {
   const box = (sandbox = await makeSandbox());
 
   const enable = await mihomo(box, ["enable", "--mode=observe"]);
-  expect(enable.exitCode).toBe(0);
-  expect(parseJsonStdout(enable).result.actions).toEqual(["mode_set"]);
+  expect(enable.exitCode).toBe(1);
+  const error = parseJsonStdout(enable).error;
+  expect(error.code).toBe("usage");
+  expect(error.message).toContain("暂不开放");
+  expect(error.message).toContain("--mode=embedded");
+  // 拒绝要**什么都不做**:模式没落盘、二进制没下、目录没建。
   expect(existsSync(box.managedBinary)).toBe(false);
+  expect(existsSync(path.join(box.home, "mihomo", "settings.json"))).toBe(false);
 
+  // disable 那一半原样保留:从**非 off** 落回 off 是一次真落盘,再来一次就什么都不改。
+  // (拿 embedded 造出那个"非 off"—— observe 这条路暂时不通了,但 disable 本身与模式无关。)
+  await placeManagedBinary(box);
+  await mihomo(box, ["enable", "--mode=embedded"]);
   const disable = await mihomo(box, ["disable"]);
   expect(parseJsonStdout(disable).result.actions).toEqual(["mode_set"]);
   const again = await mihomo(box, ["disable"]);
@@ -566,7 +588,7 @@ test("restart 的两道闸:daemon 不在 → 退出码 4;模式不是 embedded �
   expect(commands).toContain("a2 mihomo enable --mode=embedded --json");
 });
 
-test("guidance 态 F/E:没节点先教配置(agent 直接改 YAML,无专用命令);有节点才提并跑", async () => {
+test("guidance 态 F:没节点先教配置(agent 直接改 YAML,无专用命令);态 E 随检测面休眠(08 票改判)", async () => {
   const box = (sandbox = await makeSandbox());
   await placeManagedBinary(box);
   await mihomo(box, ["enable", "--mode=embedded"]);
@@ -581,7 +603,9 @@ test("guidance 态 F/E:没节点先教配置(agent 直接改 YAML,无专用命�
   const commands = empty.guidance.steps.map((s: { command?: string }) => s.command);
   expect(commands).toContain("a2 mihomo restart --json");
 
-  // agent 把节点写进配置 + 外来实例也在跑 → 态 E:并跑提醒,「未经用户同意不要执行」。
+  // **08 票改判**:配好节点 + 外来实例也在跑,原本是态 E(并跑提醒)。检测面停用之后
+  // foreign 恒空 → 态 E 休眠,而态 F 的前提(没节点)也已不成立 → **一条 guidance 都不该有**。
+  // 「没有要指引的事就不给 guidance」是既有口径(见金标 mihomo-status-observe),这里照它验。
   const config = await readFile(box.managedConfig, "utf8");
   // 替换骨架里的空 proxies(追加会造出重复键,而 hasProxies 只认第一个)。
   await writeFile(
@@ -589,20 +613,23 @@ test("guidance 态 F/E:没节点先教配置(agent 直接改 YAML,无专用命�
     config.replace("proxies: []", "proxies:\n  - {name: n1, type: socks5, server: 1.2.3.4, port: 1080}"),
   );
   await startForeignInstance(box);
-  await waitFor("并跑提醒出现", async () => {
+  await waitFor("配置里的节点被认出来(态 F 退场)", async () => {
     const status = await statusOf(box);
-    return status.guidance?.summary?.includes("非 A2 管理") === true;
+    return status.embedded.hasProxies === true;
   });
   const coexist = await statusOf(box);
-  expect(coexist.guidance.summary).toContain("同一时间只能指向一家");
-  expect(coexist.guidance.steps[0].description).toContain("未经用户同意不要执行");
+  expect(coexist.foreign).toBeUndefined();
+  expect(coexist.guidance).toBeUndefined();
+  // 并跑的那份仍然活得好好的:提醒消失了,红线没有。
+  expect(box.foreignProc && !box.foreignProc.killed).toBe(true);
 }, 30000);
 
 // MARK: - 用法与元数据
 
 test("mihomo 用法错:缺动作 / 未知动作 / 多余参数 / --mode 用错地方或取值非法,一律退出码 1", async () => {
   const box = (sandbox = await makeSandbox());
-  for (const args of [[], ["nonsense"], ["status", "extra"], ["status", "--mode=off"], ["enable"], ["enable", "--mode=bogus"]]) {
+  // `enable --mode=observe` 自 08 票起也在这张表上(临时闸:检测面停用期间它在参数层被拒)。
+  for (const args of [[], ["nonsense"], ["status", "extra"], ["status", "--mode=off"], ["enable"], ["enable", "--mode=bogus"], ["enable", "--mode=observe"]]) {
     const result = await mihomo(box, args as string[]);
     expect(result.exitCode).toBe(1);
     expect(parseJsonStdout(result).error.code).toBe("usage");
@@ -614,7 +641,8 @@ test("mihomo --help --json:写明托管模式三值、正文归 agent、升级�
   const result = await mihomo(box, ["--help"]);
   expect(result.exitCode).toBe(0);
   const usage = parseJsonStdout(result).result.usage as string;
-  for (const needle of ["--mode=embedded", "--mode=observe", "disable", "restart", "正文归你与你的 agent", "升级随 a2 走", "只读不碰"]) {
+  // 08 票起帮助里还必须写明检测面与 observe **当前停用**(口径变了而帮助没跟 = 帮助在撒谎)。
+  for (const needle of ["--mode=embedded", "--mode=observe", "disable", "restart", "正文归你与你的 agent", "升级随 a2 走", "只读不碰", "暂不开放", "当前停用"]) {
     expect(usage).toContain(needle);
   }
 });

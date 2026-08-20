@@ -11,6 +11,7 @@ import { aboutCommand } from "./about.ts";
 import { capabilitiesCommand } from "./capabilities.ts";
 import { daemonRunCommand } from "./daemon.ts";
 import { domainCommand } from "./domain.ts";
+import { guideCommand } from "./guide.ts";
 import { mihomoCommand } from "./mihomo.ts";
 import { emitOutcome, type CommandOutcome } from "./outcome.ts";
 import { pluginCommand } from "./plugin.ts";
@@ -42,6 +43,11 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   // 声明必须在 daemon 没装、没跑的时候一样读得到。
   if (command === "about") {
     return aboutCommand(args);
+  }
+  // 给 AI 助手的使用说明(08 票)。与 version/help/about 同类:**不经 daemon、不碰网络** ——
+  // 面板只给一句「先跑 a2 guide」的指针,全文永远来自当下这份 bin(说明随内核一起升级)。
+  if (command === "guide") {
+    return guideCommand(args);
   }
   if (command === "status") {
     if (args.length > 0) return usageOutcome(`status 不接受多余参数:${args.join(" ")}`);

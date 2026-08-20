@@ -93,6 +93,12 @@
       "why": "a2 help --json 的 result:帮助文本本身(机读面也不留散文空洞)"
     },
     {
+      "file": "guide-result.json",
+      "schema": "GuideResult",
+      "kind": "valid",
+      "why": "a2 guide --json 的 result:给 AI 助手的使用说明全文(08 票;与 help 分成两条 —— 读者与更新节奏都不同)"
+    },
+    {
       "file": "service-status-not-installed.json",
       "schema": "ServiceStatusResult",
       "kind": "valid",

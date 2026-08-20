@@ -10,6 +10,10 @@
 //
 // 三值托管模式是**用户显式裁定、一次性落盘**的配置(`settings.json` 的 `managedMode`):
 // daemon 每次启动照它办事,检测结果只进报告面、**永不**自动改模式。
+//
+// **08 票临时闸(2026-08-21 用户裁定)**:检测面临时停用 —— `statusResult` 里 `collectForeignFacts`
+// 的调用点被注释,`foreign` 恒空,`observe` 的入口在 CLI 参数层拒绝。代码全部保留待修,
+// 上面那几条红线的措辞因此暂时描述的是一条**没在跑**的路径(理由与解闸办法见调用点的注释)。
 
 import { stat } from "node:fs/promises";
 import {
@@ -35,6 +39,8 @@ import path from "node:path";
 import { childSnapshot, type ChildSnapshot } from "./child.ts";
 import { configHasProxies, DEFAULT_BODY, ensureOwnedHeader } from "./config.ts";
 import { probeCapabilities, probeController } from "./controller.ts";
+// `collectForeignFacts` 目前只被 statusResult 里那行**注释掉的**调用点引用(08 票临时闸:
+// 检测面停用、代码保留待修)。留着这条 import 是有意的 —— 解闸只需解开那一行注释。
 import { binaryVersion, collectForeignFacts, type ForeignFacts } from "./detect.ts";
 import { currentSecret, downloadLockedBinary, ensureDataDir, MihomoOperationError } from "./install.ts";
 import { mihomoLayout, readSecretOf, resolveScanInputs, type MihomoLayout } from "./paths.ts";
@@ -215,9 +221,15 @@ async function statusResult(ctx: MihomoContext): Promise<MihomoStatusResult> {
   const settings = await readSettings(ctx.layout, ctx.env);
   const mode = settings.managedMode;
 
-  const [snapshot, foreignFacts, configText] = await Promise.all([
+  const [snapshot, configText] = await Promise.all([
     childSnapshot(ctx.layout),
-    collectForeignFacts(resolveScanInputs(ctx.env), ctx.layout.binDir),
+    // 08 票临时闸(2026-08-21 用户裁定):**检测面停用,代码保留待修** —— 下面这行是唯一的入口,
+    // 注释掉它,`foreign` 从此恒为 undefined。真因不是实现 bug,是检测设计的可见性天花板:
+    // a2 唯一的证据源是「配置里写了 external-controller」(红线不许扫进程表/launchd),
+    // 于是一个没开控制端点的实例**天然不可见** —— 真机上用户明明跑着 mihomo,却只能得到场景 A。
+    // 修它要改设计,而小白主流程等不起。detect.ts / controller.ts 与它们的单测原样保留、照常绿;
+    // guidance 的 B/E 两支自然休眠(见下)。修好之后解开这行即可(详见 .scratch/mihomo-embedded/issues/08)。
+    // collectForeignFacts(resolveScanInputs(ctx.env), ctx.layout.binDir),
     Bun.file(ctx.layout.configPath)
       .text()
       .catch(() => undefined),
@@ -245,7 +257,9 @@ async function statusResult(ctx: MihomoContext): Promise<MihomoStatusResult> {
     ...(snapshot.lastError ? { lastError: snapshot.lastError } : {}),
   };
 
-  const foreign = foreignResult(foreignFacts);
+  // 检测停用期间恒空(08 票临时闸)。字段在契约里仍是 optional,报文形状一个字节没改 ——
+  // 变的只是「本内核此刻答不答得出外来实例」,而它现在诚实地答"不知道"。
+  const foreign: MihomoForeign | undefined = undefined; // = foreignResult(foreignFacts);
   const legacy = await legacyUnitPresent(ctx);
 
   const guidance = guidanceFor({ mode, embedded, foreign, legacy, hasProxies: embedded.hasProxies });
@@ -259,6 +273,7 @@ async function statusResult(ctx: MihomoContext): Promise<MihomoStatusResult> {
   };
 }
 
+/** 检测事实 → 报文的外来实例面。**08 票起休眠**(唯一调用点在 statusResult 里被注释掉),解闸即复用。 */
 function foreignResult(facts: ForeignFacts): MihomoForeign | undefined {
   const instance = facts.instance
     ? {
@@ -299,6 +314,9 @@ interface GuidanceInput {
  * C(embedded 故障)> G(embedded 没在跑)> B(off·有外来)> A(off·无外来)>
  * D(observe 读不到 controller)> F(embedded 跑着但没节点)> E(并跑提醒)。
  * G 不在 05 票的六态里 —— 它是「enable 落了盘但 daemon 还没把孩子拉起来」这个真实处境的补位。
+ *
+ * **08 票临时闸**:`foreign` 恒空之后,B(off·有外来)与 E(并跑提醒)两支**永不再命中** ——
+ * 代码原样留着(它们本身没错,错的是喂给它们的检测),off 态从此恒落 A,并跑提醒暂时消失。
  */
 function guidanceFor(input: GuidanceInput): Guidance | undefined {
   const { mode, embedded, foreign, legacy, hasProxies } = input;

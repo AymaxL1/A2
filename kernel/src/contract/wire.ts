@@ -382,6 +382,19 @@ export const HelpResultSchema = z.object({
 });
 export type HelpResult = z.infer<typeof HelpResultSchema>;
 
+/**
+ * `a2 guide --json` 的 result:**给 AI 助手的 A2 使用说明全文**(08 票)。
+ *
+ * 与 `help` 分成两条而不是复用它:`help` 是命令表(给人和 agent 查参数),`guide` 是**上手说明**
+ * (agent 读完就知道先跑什么、配置归谁改、哪些事不许干)。两者的读者与更新节奏都不同,
+ * 挤进同一个 `usage` 字段只会让「面板复制一段说明」与「打印帮助」互相牵制。
+ * 同样无 op、不经 daemon —— 说明必须在内核没跑的时候也读得到。
+ */
+export const GuideResultSchema = z.object({
+  text: z.string().min(1),
+});
+export type GuideResult = z.infer<typeof GuideResultSchema>;
+
 // MARK: - `a2 about`:GPL 义务的必有落点(13 票,ADR 0007 修订版)
 //
 // 裁决序里**法律义务在 agent-first 之上**,而义务的**落点必须 CLI 化**(ADR 0008 第 4 条):

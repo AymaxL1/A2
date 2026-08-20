@@ -34,6 +34,7 @@ import {
   ConfirmationResolveParamsSchema,
   ConfirmationResolveResultSchema,
   GuidanceSchema,
+  GuideResultSchema,
   HelpResultSchema,
   KernelEventSchema,
   KernelSnapshotSchema,
@@ -72,6 +73,9 @@ export const CONTRACT_SCHEMAS = {
   StatusResult: StatusResultSchema,
   VersionResult: VersionResultSchema,
   HelpResult: HelpResultSchema,
+  // 08 票:`a2 guide` 的机读面(给 AI 助手的使用说明全文)。与 version/help 同类 —— 无 op、
+  // 不经 daemon,但**照样是登记契约**(`--json` 时 stdout 只有一条 JSON 包封,无一例外)。
+  GuideResult: GuideResultSchema,
   // 13 票:GPL 义务的必有落点。登记成契约有两个用处 —— agent 能机读地拿到「调用了哪些外部程序、
   // 各是什么许可、源码在哪」,而 `bundled: false` 这条承诺有了 schema 层的守卫。
   // (`ExternalProgram` / `NoticeFile` 是它的嵌套形状,随 `AboutResult` 一起导出,不另登记一条 ——

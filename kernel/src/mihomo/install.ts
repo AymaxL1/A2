@@ -103,9 +103,16 @@ export async function downloadLockedBinary(
       `内核只安装能验的东西:${MIHOMO_LOCKED_VERSION} 的摘要表里没有 ${key} 这一项。`,
       {
         summary:
-          "没有可信摘要就没有可信安装(fail-closed)。本平台暂不支持 embedded;你可以自装 mihomo 后用 observe 模式只读它。",
+          "没有可信摘要就没有可信安装(fail-closed)。本平台暂不支持 embedded,而 observe 模式当前也不开放" +
+          "(08 票临时闸)—— A2 这边此刻没有可走的托管路径,请如实转告用户,不要绕道。",
         steps: [
-          { description: "自己安装并运行 mihomo(它的生命周期归你),然后启用只读旁观", command: "a2 mihomo enable --mode=observe --json" },
+          // 08 票之前这里给的是 `enable --mode=observe`。那条路现在会被参数层拒 —— 指引不许指向死路,
+          // 于是换成**人类自己走得通**的那一条(自装自用;A2 对它只读不碰),agent 只负责转告。
+          {
+            description:
+              "转告用户:本平台没有登记摘要,A2 装不了 mihomo;想用代理请由用户自行安装并运行一份" +
+              "(它的生命周期归用户,A2 只读不碰,也不会替它接管系统代理)",
+          },
           { description: "看本机现状", command: "a2 mihomo status --json" },
         ],
         context: { platform: key, lockedVersion: MIHOMO_LOCKED_VERSION },

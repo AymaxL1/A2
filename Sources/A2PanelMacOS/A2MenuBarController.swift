@@ -48,7 +48,8 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
     /// 第二个参数 = 用户在确认框里勾没勾那个「同时删除 ~/.a2」(17 票)。
     /// 没有确认框、或那个框没有勾选框时恒 false。
     private let onBootstrap: (A2BootstrapMenuAction, Bool) -> Void
-    /// 面板本地动作(14 票):不出面板进程的第三条出口(目前只有「复制 AI 助手使用说明」)。
+    /// 面板本地动作(14 票):不出面板进程的第三条出口
+    /// (两条:「复制 AI 助手使用说明」与 08 票的「安装 mihomo(复制指令给 AI 助手)」)。
     private let onLocal: (A2PanelLocalAction) -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void

@@ -61,9 +61,17 @@ export async function mihomoCommand(args: string[], paths: KernelPaths): Promise
   }
 
   if (action === "enable") {
-    if (modeArg !== "observe" && modeArg !== "embedded") {
+    // 08 票临时闸(2026-08-21 用户裁定):observe 的眼睛就是检测面,而检测面此刻停用了 ——
+    // 留着这个入口等于发一副瞎子的眼镜:模式落了盘,却看不见任何外来实例,proxy 域也解析不出对象。
+    // 于是**在参数层就拒**,并把唯一走得通的那条路写进指引(词表与落盘态仍保留 observe,修复后回归)。
+    if (modeArg === "observe") {
       return mihomoUsageOutcome(
-        `enable 需要 --mode=observe 或 --mode=embedded(收到:${modeArg ?? "(缺省)"})`,
+        "observe 模式暂不开放(检测面临时停用,修复后回归),当前请用 --mode=embedded",
+      );
+    }
+    if (modeArg !== "embedded") {
+      return mihomoUsageOutcome(
+        `enable 需要 --mode=embedded(收到:${modeArg ?? "(缺省)"})`,
       );
     }
     return outcomeFromOpOutcome(

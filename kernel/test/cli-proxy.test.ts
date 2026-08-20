@@ -9,7 +9,8 @@
 // CLI → UDS → 注册表仲裁 → REST 写 → 再读回来。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { DISABLED_CAPABILITY_IDS } from "../src/capability/proxy.ts";
 import { ProxyGroupsResultSchema, ProxyStatusResultSchema } from "../src/contract/wire.ts";
 import { runCli } from "./support/harness.ts";
@@ -300,22 +301,33 @@ whenEnabled("proxy.config.set")("proxy config set:内核不认新配置 → 回�
 
 // MARK: - observe 模式的边界(只读到底)
 
-test("别人的实例在跑(observe):proxy status **读得到**它(只读),但 a2 既不接管它、也没有任何写面能碰它", async () => {
+// **08 票改判**(2026-08-21 用户裁定:检测面临时停用)。原断言验的是「observe 下 proxy status
+// 读得到别人那份」——而代理域的端点解析只有一个事实来源(`mihomo status` 的 `foreign.instance`),
+// 检测一关,observe 就成了一副瞎子的眼镜:模式还在盘上,却解析不出任何对象。
+// 用例保留、期望改判成**这条链的诚实后果**:读面报 mihomo_unreachable,写面照旧连子命令都不存在。
+// (`enable --mode=observe` 的入口也随之关了,所以这里直接把模式落进 settings.json ——
+//  盘上的 observe 仍是合法态,契约词表一个字没改。)
+test("**08 票改判**·别人的实例在跑(observe):检测停用 → 读面 mihomo_unreachable;写面照旧一条都不存在", async () => {
   const box = (sandbox = await makeProxySandbox());
-  const foreign = await startForeignInstance(box, { groups: "PROXY=F1,F2" });
-  // 14 票:拒绝闸退场,双模式取而代之 —— observe = 显式启用的只读旁观。
-  const enable = await runCli(["mihomo", "enable", "--mode=observe", "--json"], { home: box.home, env: box.env });
-  expect(enable.exitCode).toBe(0);
+  await startForeignInstance(box, { groups: "PROXY=F1,F2" });
+  await mkdir(path.join(box.home, "mihomo"), { recursive: true });
+  await writeFile(
+    path.join(box.home, "mihomo", "settings.json"),
+    `${JSON.stringify({ managedMode: "observe" })}\n`,
+  );
   await startProxyDaemon(box);
 
-  // 「只读状态就够了」那一半仍然成立:端点解析照旧指向它,状态照旧读得出来。
+  // 读面:解析不出对象了。`proxy status` 照旧退出 0(「没有实例不是错误」那条口径没变),
+  // 但它现在如实报「没在跑」且**不再给出任何 endpoint** —— 不拿一个猜出来的端点充数。
   const status = out(await proxy(box, ["status"]));
-  expect(status.endpoint.owner).toBe("foreign");
-  expect(status.endpoint.managed).toBe(false);
-  expect(status.endpoint.controller).toBe(`127.0.0.1:${foreign.port}`);
-  expect(status.endpoint.configPath).toBeUndefined();
-  expect(out(await proxy(box, ["mode", "get"])).mode).toBeDefined();
-  expect(out(await proxy(box, ["groups"])).groups.length).toBeGreaterThan(0);
+  expect(status.running).toBe(false);
+  expect(status.apiReachable).toBe(false);
+  expect(status.endpoint).toBeUndefined();
+
+  // 真要跟实例说话的那几条(如读模式)则结构化失败 + 指引 —— 这就是"瞎子的眼镜"的样子。
+  const mode = await proxy(box, ["mode", "get"]);
+  expect(mode.exitCode).toBe(5);
+  expect(body(mode).error.code).toBe("mihomo_unreachable");
 
   // 另一半:写面**在别名层就不存在了** —— 能力没注册,子命令也就无从谈起(退出码 1 = 用法错)。
   for (const args of [

@@ -373,11 +373,43 @@ public enum A2PanelFixtures {
                                        command: "a2 service uninstall"),
                     ]))))
 
+    // ============ mihomo 区段装置(08 票:安装入口 + 尚未配置节点)============
+    //
+    // 前十一份装置的 `mihomoFacts` 全是 nil(= 面板还没问到 / 问失败),于是 mihomo 区段只出
+    // 「复制 AI 助手使用说明」一项。这两份是**第一次**把那份事实喂进来的装置 ——
+    // 08 票新增/改判的两个可点项,各由一张 golden 画着。
+
+    /// ⑫ 已连 + mihomo 未启用 → 「安装 mihomo(复制指令给 AI 助手)」(08 票的小白入口)。
+    ///
+    /// 断连时**有意没有**对位装置:那一态该出的是「安装并启动内核」,而不是让人去装 mihomo
+    /// (判据在构造器里,`A2BootstrapMenuTests` 有断言钉着)。
+    public static let mihomoOffInstallPrompt = Fixture(
+        name: "12-mihomo-off-install-prompt",
+        title: "已连 · mihomo 未启用(出「安装 mihomo(复制指令给 AI 助手)」)",
+        state: mihomoDown.state,
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .running,
+                                    mihomoFacts: A2BootstrapMihomoFacts(
+                                        mode: .off, embeddedState: .stopped, hasProxies: false)))
+
+    /// ⑬ 已连 + embedded 跑着但配置里没节点 → 状态行 + 「⚠ 尚未配置节点」(**复制的是同一段指令**)。
+    public static let mihomoEmbeddedNoProxies = Fixture(
+        name: "13-mihomo-embedded-noproxies",
+        title: "已连 · 内置代理内核运行中但没节点(「⚠ 尚未配置节点」复制同一段指令)",
+        state: mihomoRunning.state,
+        bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                    embeddedKernelVersion: "0.1.0",
+                                    serviceState: .running,
+                                    mihomoFacts: A2BootstrapMihomoFacts(
+                                        mode: .embedded, embeddedState: .running, hasProxies: false)))
+
     /// 快照与状态反映断言共用的全部状态(顺序即产物编号顺序)。
     public static let fixtures: [Fixture] = [
         mihomoDown, mihomoRunning, activeSubscription, disconnected,
         bootstrapNotInstalled, bootstrapInstalledNotRunning, bootstrapInstalling,
         bootstrapFailed, bootstrapUpgrade, bootstrapAdvanced, bootstrapPurgeBlocked,
+        mihomoOffInstallPrompt, mihomoEmbeddedNoProxies,
     ]
 
     // ============ 确认器装置 ============

@@ -140,8 +140,8 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
         menuBar?.render(A2MenuModelBuilder.build(state: panelState, bootstrap: bootstrapState))
     }
 
-    /// 面板本地动作(14 票)。目前只有一条:把「AI 助手使用说明」拷进剪贴板。
-    /// 文本由纯函数生成(`A2AssistantGuide`,内容随状态自适应);这里只负责取状态、上剪贴板、给反馈。
+    /// 面板本地动作(14 票 / 08 票加了第二条)。两条都只做一件事:把一段文本拷进剪贴板。
+    /// 文本由纯函数生成(`A2AssistantGuide`);这里只负责取状态、上剪贴板、给反馈。
     private func performLocal(_ action: A2PanelLocalAction) {
         switch action {
         case .copyAssistantGuide:
@@ -149,25 +149,27 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
                 if case .connected = panelState.connection { return true }
                 return false
             }()
+            // 服务态问不到时按"连上了就算装了"退一步:连得上内核,CLI 当然存在。
             let serviceInstalled = bootstrapState.serviceState.map { $0 != .notInstalled } ?? connected
-            let text = A2AssistantGuide.text(
-                serviceInstalled: serviceInstalled,
-                connected: connected,
-                kernelVersion: panelState.kernelStatus?.version,
-                mihomo: bootstrapState.mihomoFacts,
-                systemProxyOn: connected ? panelState.proxy.systemProxyTakenOver : nil,
-                home: panelState.kernelStatus?.home)
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-            // 反馈一句(04 票定稿):告诉人下一步是"贴给助手",而不是让这次点击悄无声息。
-            let alert = NSAlert()
-            alert.messageText = "已复制"
-            alert.informativeText = "使用说明已复制,粘贴给你的 AI 助手即可。"
-            alert.addButton(withTitle: "好")
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
+            copyForAssistant(A2AssistantGuide.text(serviceInstalled: serviceInstalled),
+                             note: "使用说明已复制,粘贴给你的 AI 助手即可。")
+        case .copyInstallMihomoPrompt:
+            copyForAssistant(A2AssistantGuide.installMihomoPrompt,
+                             note: "指令已复制,粘贴给你的 AI 助手即可。")
         }
+    }
+
+    /// 上剪贴板 + 反馈一句(04 票定稿):告诉人下一步是"贴给助手",而不是让这次点击悄无声息。
+    private func copyForAssistant(_ text: String, note: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        let alert = NSAlert()
+        alert.messageText = "已复制"
+        alert.informativeText = note
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

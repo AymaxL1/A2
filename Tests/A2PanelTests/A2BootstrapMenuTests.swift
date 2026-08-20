@@ -9,7 +9,7 @@ import A2Contract
 import A2Panel
 import A2PanelFixtures
 
-@Suite("16 引导区段进菜单(六条分支 + 两条红线)")
+@Suite("16 引导区段进菜单(六条分支 + 两条红线)+ 08 票 mihomo 区段的两个 agent 入口")
 struct A2BootstrapMenuTests {
 
     private func model(_ fixture: A2PanelFixtures.Fixture) -> A2MenuModel {
@@ -154,6 +154,77 @@ struct A2BootstrapMenuTests {
             $0.kind == .info && $0.title.contains("只拆服务") && $0.title.contains("~/.a2")
                 && $0.title.contains("勾选")
         })
+    }
+
+    // ========================================================================
+    // 08 票:mihomo 区段的两个「把人接回 agent」的入口
+    // ========================================================================
+
+    @Test("08 已连 + mihomo 未启用:出「安装 mihomo(复制指令给 AI 助手)」,走本地出口(不经 UDS、不起子进程)")
+    func mihomoOffOffersInstallPrompt() throws {
+        let m = model(A2PanelFixtures.mihomoOffInstallPrompt)
+        let install = try #require(item(m, titled: "安装 mihomo(复制指令给 AI 助手)"))
+        #expect(install.kind == .local)
+        #expect(install.enabled)
+        #expect(install.localAction == .copyInstallMihomoPrompt)
+        // 面板不劝装、也不替人装:这一项既不绑能力,也不绑引导命令 —— 它只复制一段话。
+        #expect(install.capabilityID == nil)
+        #expect(install.bootstrapAction == nil)
+        // 未启用仍然不出状态行(07 票口径没变:面板不替 agent 讲 mihomo 是什么)。
+        #expect(!items(m).contains { $0.title.hasPrefix("代理内核:") || $0.title.hasPrefix("内置代理内核:") })
+    }
+
+    @Test("08 断连时不出安装 mihomo:那一态该出的是「安装并启动内核」(旧事实不许拿来劝人装第二样东西)")
+    func mihomoInstallPromptHiddenWhileDisconnected() {
+        let m = A2MenuModelBuilder.build(
+            state: A2PanelFixtures.disconnected.state,
+            bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                        embeddedKernelVersion: "0.1.0",
+                                        serviceState: .installedNotRunning,
+                                        mihomoFacts: A2BootstrapMihomoFacts(
+                                            mode: .off, embeddedState: .stopped, hasProxies: false)))
+        #expect(item(m, titled: "安装 mihomo(复制指令给 AI 助手)") == nil)
+        #expect(item(m, titled: "启动内核") != nil)
+    }
+
+    @Test("08 改判:「⚠ 尚未配置节点」复制的是**指令**而不是使用说明(那一刻该走的是配置流)")
+    func noProxiesItemCopiesTheInstallPrompt() throws {
+        let m = model(A2PanelFixtures.mihomoEmbeddedNoProxies)
+        let hint = try #require(item(m, titled: "⚠ 尚未配置节点 — 让你的 AI 助手帮你配置"))
+        #expect(hint.kind == .local)
+        #expect(hint.enabled)
+        #expect(hint.localAction == .copyInstallMihomoPrompt)
+        // 说明入口照旧常驻(两条本地动作各司其职,没有一条被另一条顶掉)。
+        #expect(item(m, titled: "复制 AI 助手使用说明")?.localAction == .copyAssistantGuide)
+    }
+
+    @Test("08 两条本地动作都真有文本可复制,且各说各的事(空文本 = 点了个寂寞)")
+    func localActionsHaveDistinctPayloads() {
+        let guideEntry = A2AssistantGuide.text(serviceInstalled: true)
+        let prompt = A2AssistantGuide.installMihomoPrompt
+        #expect(!guideEntry.isEmpty)
+        #expect(!prompt.isEmpty)
+        #expect(guideEntry != prompt)
+        // 已装版是**一句指针**:它必须把那条命令原样写出来,否则指针指向空处。
+        #expect(guideEntry.contains("~/.a2/bin/a2 guide"))
+        // 指令那一段的第一步同样是 `a2 guide`,第二步才是照 mihomo status 的 guidance 办。
+        #expect(prompt.contains("~/.a2/bin/a2 guide"))
+        #expect(prompt.contains("~/.a2/bin/a2 mihomo status --json"))
+        #expect(prompt.contains("先征得我的同意"))
+    }
+
+    @Test("08 已装版不再拼当前状态:全文归 `a2 guide`,壳这边不留第二份会漂的长文")
+    func installedGuideIsAPointerNotACopy() {
+        let text = A2AssistantGuide.text(serviceInstalled: true)
+        #expect(text.contains("【给 AI 助手的 A2 使用说明 · 入口】"))
+        // 05 票那版里的状态块与命令清单都不该再出现(它们此刻只会是复制那一刻的旧快照)。
+        #expect(!text.contains("■ 当前状态"))
+        #expect(!text.contains("■ 常用命令"))
+        #expect(!text.contains("内核服务:"))
+        // 未装版仍是 05 票那段(装之前 CLI 压根不存在,指针无处可指)。
+        let notInstalled = A2AssistantGuide.text(serviceInstalled: false)
+        #expect(notInstalled.contains("尚未安装"))
+        #expect(notInstalled.contains("不要尝试直接调用 .app 包内的二进制"))
     }
 
     // ========================================================================

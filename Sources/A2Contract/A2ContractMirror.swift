@@ -107,6 +107,7 @@ public enum A2MirroredContract: String, Sendable, CaseIterable {
 public enum A2UnmirroredContract: String, Sendable, CaseIterable {
     case versionResult = "VersionResult"
     case helpResult = "HelpResult"
+    case guideResult = "GuideResult"
     case capabilityListResult = "CapabilityListResult"
     case capabilityDescribeResult = "CapabilityDescribeResult"
     case capabilityCallResult = "CapabilityCallResult"
@@ -149,6 +150,11 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             return "bin 自报的本地事实(无 op),CLI 输出面专用。16 票起壳会对**内嵌的那份 bin** 跑一次 `version --json`(白名单五条之一)来问它自己的版本 —— 只取一个 `version` 字符串,经 A2JSON 取值即可;线上内核那一份仍从快照的 status 里拿(已是 typed)。"
         case .helpResult:
             return "bin 自报的本地事实(无 op),CLI 输出面专用;帮助文本是给人和 agent 读的,壳压根不会请求。"
+        case .guideResult:
+            // 08 票把「AI 助手使用说明」的全文从壳搬进了内核(`a2 guide`),壳这边**反而少了一份文本**:
+            // 菜单复制的是一句指向该命令的指针(`A2AssistantGuide.installedText`),壳既不请求这条命令、
+            // 也不解析它的报文 —— 全文的读者是用户的 agent,不是面板。
+            return "`a2 guide` 的 CLI 输出面(无 op,不经 daemon)。壳有意**不**请求它:菜单给的是一句「先跑 ~/.a2/bin/a2 guide」的指针,全文由 agent 自己去内核取 —— 壳这边没有可解的报文,镜像它只会多一处会漂的类型。"
         case .capabilityListResult, .capabilityDescribeResult:
             return "能力清单壳经**快照** capabilities 拿(注册那一次往返就带全量,已是 typed),不必再走这两条查询面。"
         case .capabilityCallResult:

@@ -391,7 +391,8 @@ public enum A2MenuModelBuilder {
         return items
     }
 
-    /// mihomo 区段(14 票 / 04·05 票定稿):状态行、「尚未配置节点」提示、重启项、AI 助手说明入口。
+    /// mihomo 区段(14 票 / 04·05 票定稿,08 票加装入口):状态行、「尚未配置节点」提示、
+    /// 「安装 mihomo」入口、重启项、AI 助手说明入口。
     ///
     /// 与引导区段同一条隐藏纪律:没有内嵌 bin 就一项都不出(dev / 测试态菜单与 10 票逐字相同)。
     /// 「复制 AI 助手使用说明」**未装也出现**(04 票裁定):内容随状态自适应 ——
@@ -400,12 +401,27 @@ public enum A2MenuModelBuilder {
         guard bootstrap.embeddedBinAvailable else { return [] }
         var items: [A2MenuItemModel] = []
         let busy = bootstrap.inFlight != nil
+        let connected: Bool = {
+            if case .connected = state.connection { return true }
+            return false
+        }()
 
         if let facts = bootstrap.mihomoFacts {
             switch facts.mode {
             case .off:
-                // 未启用不出状态行:引导启用是 agent 对话流的事(07 票),面板不劝装。
-                break
+                // 未启用**仍不出状态行**(引导启用是 agent 对话流的事,07 票:面板不劝装),
+                // 但 08 票给了一条**入口**:一次点击复制一段给 agent 的指令,由对话流接手。
+                // 这不是"面板替你装 mihomo" —— 面板一个字节都不下载,它只负责把人接回 agent 那边。
+                //
+                // 要求已连上内核:断连时 `mihomoFacts` 多半是断开前问到的旧答案,而这段指令的
+                // 第一步就是让 agent 去跑 CLI —— 内核都没跑的时候,该出的是「安装并启动内核」。
+                if connected {
+                    items.append(A2MenuItemModel(
+                        kind: .local,
+                        title: "安装 mihomo(复制指令给 AI 助手)",
+                        enabled: true,
+                        localAction: .copyInstallMihomoPrompt))
+                }
             case .observe:
                 items.append(.info("代理内核:observe(只读旁观本机已有 mihomo)"))
             case .embedded:
@@ -417,12 +433,14 @@ public enum A2MenuModelBuilder {
                 }
                 items.append(.info(stateLine))
                 if facts.embeddedState == .running && !facts.hasProxies {
-                    // 可点 = 复制 AI 助手说明(04 票:把人引向 agent,面板不做配置 UI)。
+                    // 可点 = 复制指令给 agent(04 票:把人引向 agent,面板不做配置 UI)。
+                    // **08 票改判**:复制的从"使用说明"换成「请帮我把代理用起来」那段指令 ——
+                    // 这一刻用户缺的不是"A2 是什么",而是"谁来把节点配上",对症的是指令。
                     items.append(A2MenuItemModel(
                         kind: .local,
                         title: "⚠ 尚未配置节点 — 让你的 AI 助手帮你配置",
                         enabled: true,
-                        localAction: .copyAssistantGuide))
+                        localAction: .copyInstallMihomoPrompt))
                 }
                 let restartReason: String? = {
                     if busy { return "有引导操作在途" }

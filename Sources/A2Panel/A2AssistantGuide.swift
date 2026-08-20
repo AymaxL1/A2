@@ -1,30 +1,44 @@
-// A2Panel ——「给 AI 助手的使用说明」的**文本生成**(14 票 / 05 票逐字定稿)。纯函数,零 AppKit。
+// A2Panel ——「给 AI 助手的使用说明」的**文本生成**(14 票 / 05 票定稿,08 票改判已装版)。
+// 纯函数,零 AppKit。
 //
 // 这段文本是 a2 面向 agent 的入口:小白把它贴给自己的 AI 助手,助手从此知道 CLI 在哪、
 // 怎么调、边界是什么。**第一读者是 agent**,人以第三人称出现。
 //
-// 两版随状态自适应(05 票裁定):
-//   * 服务未装 → 「未安装版」:只教 agent 引导用户点菜单装,**明文禁止绕后调 .app 内嵌 bin**;
-//   * 服务已装 → 「已安装版」:调用方式 + 当前状态块 + 常用命令 + 配置归 agent + 边界两条。
-// 文案与 `.scratch/mihomo-embedded/assets/agent-guidance-copy-mock.html`(标签页①②)同源;
-// 那份 mock 是**定稿**,这里改一个字都要回去对一次。
+// 三段文本,各有各的处境:
+//   * 服务未装 → 「未安装版」(05 票原样):只教 agent 引导用户点菜单装,**明文禁止绕后调 .app 内嵌 bin**;
+//   * 服务已装 → 「入口版」(**08 票改判**):从"全文副本"缩成**一句指针** —— 全文改由内核自报
+//     (`a2 guide`)。理由:说明要随内核一起升级,而剪贴板里那份是复制那一刻的快照;两处各写一份
+//     的口径迟早会分家,贴出去的还未必是本机这版内核的说法。壳这边少一份会漂的长文,
+//     agent 则永远读到当下这台机器上真正生效的那一份;
+//   * 「安装 mihomo」入口 → `installMihomoPrompt`(08 票新增):用户点一下,复制一段**给 agent 的
+//     指令**(先读说明、再按 mihomo status 的 guidance 走),把小白主流程从菜单接回对话里。
+// 未安装版的文案仍与 `.scratch/mihomo-embedded/assets/agent-guidance-copy-mock.html`(标签页①)同源。
 
 import Foundation
 
 public enum A2AssistantGuide {
 
-    /// 生成说明全文。`home` 取内核自报的那一个(`StatusResult.home`),连不上内核时退回缺省 `~/.a2`。
-    public static func text(serviceInstalled: Bool,
-                            connected: Bool,
-                            kernelVersion: String?,
-                            mihomo: A2BootstrapMihomoFacts?,
-                            systemProxyOn: Bool?,
-                            home: String?) -> String {
-        serviceInstalled
-            ? installedText(connected: connected, kernelVersion: kernelVersion,
-                            mihomo: mihomo, systemProxyOn: systemProxyOn, home: home)
-            : notInstalledText()
+    /// 生成要复制的那段文本。
+    ///
+    /// **08 票起只剩一个入参**:已装版不再拼当前状态(内核态 / mihomo 态 / 系统代理态),
+    /// 因为那些事实 agent 自己跑一条 `status` 就问得到,而且问到的是**此刻**的,不是复制那一刻的。
+    /// 留着一堆只为拼快照而存在的参数,只会让人以为这段文本还在反映什么。
+    public static func text(serviceInstalled: Bool) -> String {
+        serviceInstalled ? installedText() : notInstalledText()
     }
+
+    /// 「安装 mihomo(复制指令给 AI 助手)」那一项复制的东西(08 票逐字定稿)。
+    ///
+    /// 与上面两段的分野:那两段是**说明**(我是什么、怎么调),这一段是**指令**(请你替我做这件事)。
+    /// 它有意不写具体命令的参数,只把 agent 引到 `a2 guide` 与 `mihomo status` 的 guidance 上 ——
+    /// 下一步该敲什么,以内核当下说的为准;要下载、要改动的地方,先回来问用户。
+    public static let installMihomoPrompt = [
+        "【请帮我把代理用起来】",
+        "1. 先运行 ~/.a2/bin/a2 guide,阅读本机 A2 的使用说明(给 AI 助手的)。",
+        "2. 然后运行 ~/.a2/bin/a2 mihomo status --json,按输出里 guidance 的步骤一步步来:",
+        "   需要做选择(如启用哪种模式)或要下载/改动时,先征得我的同意;",
+        "   配好节点后重启并验证代理可用,最后把结果告诉我。",
+    ].joined(separator: "\n")
 
     static func notInstalledText() -> String {
         [
@@ -36,74 +50,19 @@ public enum A2AssistantGuide {
             "1. 请用户点击菜单栏的 A² 图标 →「安装并启动内核」,一次点击即完成",
             "   (含开机自启;若首启欢迎弹窗还开着,点「安装并启动」即可)。",
             "2. 安装完成后,请用户再点一次「复制 AI 助手使用说明」,把新的说明粘贴给你——",
-            "   那份说明含 CLI 路径与当前状态,你就可以开始工作了。",
+            "   那份说明会告诉你 CLI 在哪、以及怎么读到完整用法,你就可以开始工作了。",
             "",
             "注意:不要尝试直接调用 .app 包内的二进制替用户安装——安装 A2 是用户本人的一次显式点击。",
         ].joined(separator: "\n")
     }
 
-    static func installedText(connected: Bool,
-                              kernelVersion: String?,
-                              mihomo: A2BootstrapMihomoFacts?,
-                              systemProxyOn: Bool?,
-                              home: String?) -> String {
-        let root = home ?? "~/.a2"
-        let bin = "\(root)/bin/a2"
-        let kernelLine: String = {
-            guard connected else { return "内核服务:未连接(装了但可能没在跑——让 agent 先跑 status 看看)" }
-            return "内核服务:运行中" + (kernelVersion.map { "(v\($0))" } ?? "")
-        }()
-        let mihomoLine: String = {
-            guard let mihomo else { return "代理内核 mihomo:状态未知(跑一次 mihomo status 即知)" }
-            switch mihomo.mode {
-            case .off:      return "代理内核 mihomo:未启用"
-            case .observe:  return "代理内核 mihomo:observe(只读旁观本机已有 mihomo)"
-            case .embedded:
-                let state: String
-                switch mihomo.embeddedState {
-                case .running: state = mihomo.hasProxies ? "运行中" : "运行中 · 尚未配置节点"
-                case .stopped: state = "未在运行"
-                case .failed:  state = "故障(已暂停重拉)"
-                }
-                return "代理内核 mihomo:embedded · \(state)"
-            }
-        }()
-        let proxyLine: String = {
-            guard let systemProxyOn else { return "系统代理:状态未知" }
-            return systemProxyOn ? "系统代理:已接管" : "系统代理:未接管"
-        }()
-
-        return [
-            "【给 AI 助手的 A2 使用说明】(A2 Panel 生成)",
-            "",
-            "本机装有 A2——agent-first 的代理管理工具。用户期望你通过它了解并管理本机代理。",
-            "",
-            "■ 调用方式",
-            "· CLI 完整路径:\(bin)(刻意不在 PATH 上,请始终用完整路径调用)",
-            "· 每条命令都加 --json:stdout 上只有一条 JSON 包封,成功失败同一形状;",
-            "  失败时读 error.code 与 error.guidance——guidance 里有修复步骤与命令原文,照做即可。",
-            "· 全貌以本机为准:\(bin) help;\(bin) capabilities list --json",
-            "",
-            "■ 当前状态(复制那一刻由面板拼入)",
-            "· \(kernelLine)",
-            "· \(mihomoLine)",
-            "· \(proxyLine)",
-            "",
-            "■ 常用命令",
-            "\(bin) status --json                 # 内核状态",
-            "\(bin) mihomo status --json          # 代理内核状态(含配置路径与下一步指引)",
-            "\(bin) mihomo restart --json         # 改完配置后重启生效",
-            "\(bin) proxy status --json           # 代理运行面",
-            "\(bin) proxy system enable --json    # 接管系统代理(disable 对称)",
-            "",
-            "■ 配置归你(agent)管",
-            "mihomo 的配置是一份 YAML,路径以 mihomo status 的输出为准。你可以直接读改它;",
-            "改完执行 mihomo restart 生效。把机场订阅的节点合并进配置也是你的活:直接读订阅 YAML、",
-            "把 proxies 段并进配置——只搬节点,别把订阅里的 rules 整份搬来覆盖用户已有策略。",
-            "",
-            "■ 边界(务必遵守)",
-            "· dangerous 档操作会被内核默拒并附「人类如何完成」的指引:转告用户,不要试图绕过。",
-            "· 本机若有用户自己装的 mihomo(非 A2 管理):不要动它——A2 对它只读,你也应当只读。",
+    /// 已装版 = **一句指针**(08 票逐字定稿)。全文在内核里(`a2 guide`),这里不再抄第二份。
+    static func installedText() -> String {
+        [
+            "【给 AI 助手的 A2 使用说明 · 入口】",
+            "本机装有 A2(agent-first 的代理管理工具)。完整使用说明内置在 CLI 里,请先运行:",
+            "  ~/.a2/bin/a2 guide",
+            "照说明操作即可。(CLI 完整路径 ~/.a2/bin/a2,刻意不在 PATH 上。)",
         ].joined(separator: "\n")
     }
 }
