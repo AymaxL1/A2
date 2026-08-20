@@ -21,7 +21,7 @@
 | `LICENSE-mihomo-GPL-3.0.txt` | GPL-3.0 全文离线副本 | **法律义务，必带** |
 | `a2-release.json` | 发布元数据：版本、各工件 SHA-256、**mihomo 锁定版** | 安装脚本、以及想手动核对摘要的人 |
 
-**不在分发物里的东西**：mihomo 二进制（ADR 0007 修订版：不随任何分发物打包，由 `a2 mihomo install`
+**不在分发物里的东西**：mihomo 二进制（ADR 0007 修订版：不随任何分发物打包，由 `a2 mihomo enable --mode=embedded`
 从官方渠道取）、launchd/systemd 单元（内核自己写，见 §5）、任何 shell 配置修改。
 
 **两条渠道各走各的**（[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md)）：`.app` 里那份内核 bin
@@ -192,7 +192,7 @@ a2 service install  # 装成系统托管的常驻服务（**CLI 渠道**的口�
 | 东西 | 大小 | 落在哪 |
 |---|---|---|
 | `a2` 单文件 | 60–95MiB（内置完整 Bun 运行时） | 你指定的 PATH 目录 |
-| mihomo（**装了才有**） | 约 42MiB | `<A2_HOME>/mihomo/`，由 `a2 mihomo install` 下载 |
+| mihomo（**启用了才有**） | 约 42MiB | `<A2_HOME>/mihomo/`，由 `a2 mihomo enable --mode=embedded` 下载（14 票起为 daemon 子进程，升级随 a2 走） |
 | 插件工件 | 每个几 KB~几百 KB | `<A2_HOME>/plugins/`（单文件工件 + `plugins.json`，**没有 node_modules**） |
 | 日志、订阅、系统代理快照 | 小 | `<A2_HOME>/` 下 |
 
@@ -263,7 +263,7 @@ a2 service uninstall --purge --json    # 拒绝时退出码 1（先 a2 proxy off
 
 （面板本身除 TCC 授权外不写任何系统状态；它装出来的那个 launchd 服务 `com.a2.kernel` 是**你点出来的**，
 按上面卸。`com.a2.mihomo` **不是面板装的**——面板的执行器白名单里没有 `mihomo` 那一族，
-它只可能来自你自己在终端跑的 `a2 mihomo install`；勾了那一格时 `--purge` 会连它一起拆掉。）
+它只可能来自你自己启用过 `a2 mihomo enable --mode=embedded`；勾了那一格时 `--purge` 会连它一起删掉（14 票起没有独立 unit，只有数据目录）。）
 
 ---
 
@@ -288,7 +288,7 @@ a2 service install   # 幂等，会把 unit 收敛到新位置
 - **菜单栏壳的关于页**是同一份声明的**可选呈现面**，不是义务落点。14 票起 `.app` 里还嵌着内核 bin
   本身，也就是说那份声明的**产出者**就在包里（`Contents/Resources/a2 about`）——但义务落点的口径不变，
   仍是命令行那条。**没有新增任何 GPL 二进制**：mihomo 依旧不随任何分发物打包。
-- **我们不分发 GPL 二进制**：mihomo 由 `a2 mihomo install` 从官方渠道取，锁定版写在发布元数据里。
+- **我们不分发 GPL 二进制**：mihomo 由 `a2 mihomo enable --mode=embedded` 从官方渠道取，锁定版写在发布元数据里。
   「内核重签校验」整条已废除（前提随不随包分发一并消失）。
 
 ---
@@ -317,7 +317,7 @@ a2 service install   # 幂等，会把 unit 收敛到新位置
 | # | 事情 | 缺什么条件 / 谁来做 | 原始落点 |
 |---|---|---|---|
 | 1 | **确定发布渠道**，把 `RELEASE_CHANNEL_PLACEHOLDER`（TS）与 `DEFAULT_RELEASE_BASE`（`install.sh`）两处占位符改掉 | 一个真实的托管位置（remote / 对象存储 / Releases）。两处有对账断言逼着同时改 | 本文 §3.1 |
-| 2 | **Linux 实机跑一遍**：装、`a2 service install`（systemd user）、`a2 mihomo install`、旗舰链 | 一台 Linux 机器。交叉编译产物已能产出且 ELF 文件头正确，但**本机跑不了它** | 本文 §1.1；路线图「Linux 口径」 |
+| 2 | **Linux 实机跑一遍**：装、`a2 service install`（systemd user）、`a2 mihomo enable --mode=embedded`、旗舰链 | 一台 Linux 机器。交叉编译产物已能产出且 ELF 文件头正确，但**本机跑不了它** | 本文 §1.1；路线图「Linux 口径」 |
 | 3 | 真开发者证书签 `A2 Panel.app` + 公证 | 付费 Developer ID；换身份只改 `AA_CODESIGN_IDENTITY` 一个 env | [签名 runbook](signing-and-authorization.md) §3；路线图 5 条之第 1、2 条 |
 | 4 | 首次 TCC / 通知授权（**对 `com.a2.panel`**） | 真人双击 `.app` 点弹窗 | [签名 runbook](signing-and-authorization.md) §5；路线图 5 条之第 3 条 |
 | 5 | 在干净机器上装一次**真 mihomo** 跑旗舰链 | 一台没跑着用户自己 mihomo 的机器（本机那份是施工红线，绝不触碰） | `kernel/test/swift-parity-map.md` 10 票 G 组；路线图 Phase 1 判据 3 的「缺口」 |

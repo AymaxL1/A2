@@ -142,9 +142,11 @@ cp "$BOX/netfake-state.json" "$BOX/netfake-before.json"
 : > "$BOX/netfake-calls.log"
 : > "$BOX/supervisor-calls.log"
 
-# 假 mihomo 进"别人的 bin 目录"→ `a2 mihomo install` 走**复用档**(落点是符号链接,真身零改动)。
-cp "$FAKE_MIHOMO_SH" "$BOX/foreignbin/mihomo"
-chmod 755 "$BOX/foreignbin/mihomo"
+# 假 mihomo 直接放到 a2 自管落点(14 票:embedded 一律锁定版;版本=锁定版 → enable 不走下载)。
+# "别人的 bin 目录"留空 —— 外来检测面在本场景里不该有戏份。
+mkdir -p "$A2HOME/mihomo/bin"
+cp "$FAKE_MIHOMO_SH" "$A2HOME/mihomo/bin/mihomo"
+chmod 755 "$A2HOME/mihomo/bin/mihomo"
 
 # 订阅源:**回环文件源**(file://),不出网。正文里的 `# fake-groups:` 决定假 mihomo 重载后的分组。
 cat > "$BOX/subs/airline-a.yaml" <<'YAML'
@@ -210,11 +212,11 @@ else: print(d)' "$1"; }
 
 # ---- ④ mihomo 就位 + daemon 起来 --------------------------------------------------------
 echo
-echo "-- 幕 0:mihomo 就位(复用档)与 daemon 起来"
-INSTALL_OUT="$(a2 mihomo install --json 2>&1)"
-INSTALL_RC=$?
-assert_eq "$INSTALL_RC" "0" "0-1 a2 mihomo install 成功(复用档:落点是符号链接,别人的二进制零改动)"
-[ "$INSTALL_RC" -eq 0 ] || { echo "$INSTALL_OUT" | head -20; }
+echo "-- 幕 0:mihomo 就位(embedded)与 daemon 起来"
+ENABLE_OUT="$(a2 mihomo enable --mode=embedded --json 2>&1)"
+ENABLE_RC=$?
+assert_eq "$ENABLE_RC" "0" "0-1 a2 mihomo enable --mode=embedded 成功(模式落盘;二进制已就位故零下载)"
+[ "$ENABLE_RC" -eq 0 ] || { echo "$ENABLE_OUT" | head -20; }
 
 env "${BOX_ENV[@]}" "${A2_CMD[@]}" daemon run >"$BOX/daemon.log" 2>&1 &
 DAEMON_PID=$!
@@ -224,13 +226,22 @@ if [ ! -S "$SOCK" ]; then
 fi
 ok "0-2 daemon 起来了(临时 A2_HOME,socket=$SOCK)"
 
-# 假 supervisor 按 label 分开记状态:`<label>.pid` 存 pid(`<label>.args` 存 ProgramArguments,别拿错)。
-MIHOMO_PIDFILE="$BOX/state/com.a2.mihomo.pid"
-MIHOMO_PID_BEFORE="$(tr -dc '0-9' < "$MIHOMO_PIDFILE" 2>/dev/null)"
+# 14 票:mihomo 是 daemon 的**子进程**,唯一真相源是认尸文件 `<home>/mihomo/child.json`。
+# daemon 启动后异步拉起,等到 status 报 running 为止。
+CHILD_JSON="$A2HOME/mihomo/child.json"
+MIHOMO_PID_BEFORE=""
+for _ in $(seq 1 150); do
+  ST="$(a2 mihomo status --json 2>/dev/null)"
+  if [ "$(printf '%s' "$ST" | json_get result.embedded.state)" = "running" ] &&      [ "$(printf '%s' "$ST" | json_get result.embedded.controllerReachable)" = "true" ]; then
+    MIHOMO_PID_BEFORE="$(printf '%s' "$ST" | json_get result.embedded.pid)"
+    break
+  fi
+  sleep 0.1
+done
 if [ -n "$MIHOMO_PID_BEFORE" ]; then
-  ok "0-3 mihomo 由 com.a2.mihomo 这个**自己的** unit 托管(pid=$MIHOMO_PID_BEFORE)"
+  ok "0-3 内嵌 mihomo 由 daemon 拉起为**子进程**(pid=$MIHOMO_PID_BEFORE,认尸文件 $CHILD_JSON)"
 else
-  bad "0-3 取不到 mihomo 的 pid($MIHOMO_PIDFILE)"
+  bad "0-3 内嵌 mihomo 没在 15 秒内 running(status: $(printf '%s' "$ST" | head -c 300))"
 fi
 
 # ---- ⑤ 幕①:旗舰链零打断 ----------------------------------------------------------------
@@ -373,9 +384,9 @@ STATUS_JSON="$(a2 proxy status --json 2>&1)"
 assert_eq "$?" "0" "4-5 壳缺席后 a2 proxy status 照常答话(代理照跑)"
 assert_eq "$(printf '%s' "$STATUS_JSON" | json_get result.output.running)" "true" \
   "4-6 mihomo 仍在运行(壳退出 ≠ 关服务)"
-MIHOMO_PID_AFTER="$(tr -dc '0-9' < "$MIHOMO_PIDFILE" 2>/dev/null)"
+MIHOMO_PID_AFTER="$(a2 mihomo status --json 2>/dev/null | json_get result.embedded.pid)"
 assert_eq "${MIHOMO_PID_AFTER:-取不到}" "${MIHOMO_PID_BEFORE:-取不到}" \
-  "4-7 mihomo 的 pid 全程没变(数据面不随壳起落)"
+  "4-7 mihomo 的 pid 全程没变(壳退出只是断连 —— 孩子是 daemon 的,不是壳的)"
 if [ -n "$MIHOMO_PID_AFTER" ] && kill -0 "$MIHOMO_PID_AFTER" 2>/dev/null; then
   ok "4-7b 那个 pid 此刻真的还活着(不是只有记录还在)"
 else

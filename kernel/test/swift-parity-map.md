@@ -705,3 +705,16 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 `ServiceAction.kernel_restarted` 此前的契约注释写着「只在 systemd 那条路上出现」。15 票起它有了
 **第二个产出面**:拷贝换了而 unit 一个字没动(显式升级)—— 那一路**两端都走得到**(launchd 上是
 `launchctl kickstart -k`)。注释已改写,两个产出面各有一条 CLI 缝断言。
+
+
+## 14 票(mihomo 内嵌子进程化,2026-08-20)——改判与新增记账
+
+**改判(旧断言 → 新语义)**:
+- 「杀掉 daemon,mihomo 照跑」族(07 票第 4 条)→ **「随 a2 生死」**:杀 daemon 子进程同死,daemon 回来按落盘模式重建(`cli-supervision.test.ts` 同名测试改判,新旧语义都有活体断言)。
+- 「内核不越权重拉」→ **「保活归内核亲管」**:节流重拉/三连败故障态/restart 清零(`mihomo-child.test.ts` 8 条 + supervision 改判)。
+- `mihomo install/uninstall/upgrade` 三命令与共存阶梯(reuse_binary/adopt)整族退场 → `enable/disable/restart/status`;`mihomo_foreign_instance_running` 拒绝闸 → 首启双选流 + 并跑口径。
+- 「数据面不随控制面起落」在 mihomo 域废除;**壳退出 ≠ 停代理**仍成立(孩子是 daemon 的,不是壳的;旗舰 e2e 4-6/4-7 改判后仍验)。
+
+**新增红线断言**:daemon 主动停止路径 exit 0(`harness.stopDaemon` 恒断言);认尸三对齐「验不明不动手」活体(`mihomo-child.test.ts` 红线测试);KeepAlive 双键逐键(`cli-service.test.ts`)。
+
+**已知未覆盖(如实)**:launchd 真活体上的「SIGKILL daemon → SuccessfulExit:false 约 30s 重拉 → 子进程重建」需要真 launchctl 冒烟(03 研究票在一次性 label 上实测过语义;`service-live-smoke.sh` 的 mihomo 段落顺延人工项,与 5 条人工项同批)。
