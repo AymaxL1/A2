@@ -731,7 +731,7 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 - 平台无摘要的指引退路 `enable --mode=observe` → **人类自装自用、A2 只读**(`install.ts`:指引不许指向死路)。
 
 **新增**:
-- `a2 guide`(无 op、不经 daemon):`GuideResult` 进登记契约与金标(`guide-result.json`),**有意不进 Swift 镜像**——壳只复制一句指向它的指针,不请求不解析(豁免理由在 `A2UnmirroredContract.guideResult`)。`cli-guide.test.ts` 8 条。
+- `a2 guide`(无 op、不经 daemon):`GuideResult` 进登记契约与金标(`guide-result.json`),**有意不进 Swift 镜像**——壳只复制一句指向它的指针,不请求不解析(豁免理由在 `A2UnmirroredContract.guideResult`)。`cli-guide.test.ts` 7 条。
 - 面板两条本地动作:`copyInstallMihomoPrompt` 新增;「尚未配置节点」改判为复制同一段指令。装置 ⑫⑬ + 快照 golden 12/13 + `A2BootstrapMenuTests` 5 条(含「断连不出安装入口」的反证)。
 
 **保留不动**:`detect.ts` / `controller.ts` 及其单测照常全绿(测函数不经 status);金标 `off-foreign` / `observe*` / `coexist` 样本保留——它们验契约形状,不验活体行为。解闸 = 解开 `manager.ts` `statusResult` 里那一行注释。

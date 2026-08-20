@@ -23,6 +23,7 @@ export const GUIDE_TEXT = `【给 AI 助手的 A2 使用说明】(A2 内核 ${KE
 
 ■ 调用方式
 · CLI 完整路径:~/.a2/bin/a2(刻意不在 PATH 上,请始终用完整路径调用)
+· 用户若想在终端直接敲 a2:请转告 ta 自行加一行 export PATH="$HOME/.a2/bin:$PATH"(A2 刻意不改 shell 配置、不建 symlink——零 sudo、卸载才删得净;这是可选项,你自己始终用完整路径)
 · 每条命令都加 --json:stdout 只有一条 JSON 包封,成功失败同一形状;失败时读 error.code 与 error.guidance——guidance 里有修复步骤与命令原文,照做即可。
 · 全貌以本机为准:~/.a2/bin/a2 help;~/.a2/bin/a2 capabilities list --json
 
