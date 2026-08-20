@@ -5,7 +5,8 @@
 // ============================================================================
 // `applicationWillTerminate` 只做一件事:`session.stop()`。
 //   * **不**还原系统代理(那是 `a2 proxy off` 这条显式命令的事);
-//   * **不**停 mihomo(它挂自己的 `com.a2.mihomo` unit,数据面不随控制面起落);
+//   * **不**碰 mihomo(14 票起内嵌 mihomo 是**内核 daemon** 的子进程 —— 退面板只是断连,
+//     内核照跑、mihomo 照跑;真停 mihomo 的是「停内核服务」那条显式路径,不是退面板);
 //   * **不**通知内核「我要走了」—— 断连本身就是信号:内核收到断线立即把 dangerous 降回默拒
 //     (08 票已实现,壳这侧只要真的断掉即可)。
 // 旧宿主在这里有一整套「退出前还原 + 持久化标记 + 下次启动自愈」的编排,新架构把它整族拆掉了
@@ -75,6 +76,7 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
                 self?.session?.call(capability: capability, input: input)
             },
             onBootstrap: { [weak self] action, purge in self?.bootstrap?.perform(action, purge: purge) },
+            onLocal: { [weak self] action in self?.performLocal(action) },
             onAbout: { [weak self] in self?.about.show() },
             onQuit: { NSApp.terminate(nil) })
         self.menuBar = menuBar
@@ -136,6 +138,36 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
 
     private func render() {
         menuBar?.render(A2MenuModelBuilder.build(state: panelState, bootstrap: bootstrapState))
+    }
+
+    /// 面板本地动作(14 票)。目前只有一条:把「AI 助手使用说明」拷进剪贴板。
+    /// 文本由纯函数生成(`A2AssistantGuide`,内容随状态自适应);这里只负责取状态、上剪贴板、给反馈。
+    private func performLocal(_ action: A2PanelLocalAction) {
+        switch action {
+        case .copyAssistantGuide:
+            let connected: Bool = {
+                if case .connected = panelState.connection { return true }
+                return false
+            }()
+            let serviceInstalled = bootstrapState.serviceState.map { $0 != .notInstalled } ?? connected
+            let text = A2AssistantGuide.text(
+                serviceInstalled: serviceInstalled,
+                connected: connected,
+                kernelVersion: panelState.kernelStatus?.version,
+                mihomo: bootstrapState.mihomoFacts,
+                systemProxyOn: connected ? panelState.proxy.systemProxyTakenOver : nil,
+                home: panelState.kernelStatus?.home)
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            // 反馈一句(04 票定稿):告诉人下一步是"贴给助手",而不是让这次点击悄无声息。
+            let alert = NSAlert()
+            alert.messageText = "已复制"
+            alert.informativeText = "使用说明已复制,粘贴给你的 AI 助手即可。"
+            alert.addButton(withTitle: "好")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

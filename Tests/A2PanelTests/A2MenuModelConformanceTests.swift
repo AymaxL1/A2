@@ -180,13 +180,15 @@ struct A2MenuModelConformanceTests {
         #expect(item(m, titled: "开启系统代理")?.checked == false)
     }
 
-    @Test("10 状态④(与内核断连):菜单说清「代理不受影响」,不把断连说成断网")
+    @Test("10/14 状态④(与内核断连):面板失联与内置内核随服务起落,两件事都如实说")
     func stateDisconnected() {
         let m = A2MenuModelBuilder.build(state: A2PanelFixtures.disconnected.state)
         let line = items(m).first { $0.kind == .info && $0.title.hasPrefix("内核:未连接") }
         #expect(line != nil, "断连时应有一行明说未连接")
-        #expect(line?.title.contains("代理不受影响") == true,
-                "断连 ≠ 断网:数据面不随控制面起落,菜单必须把这两件事分清")
+        // 14 票改判:「数据面不随控制面起落」废除 —— 内嵌 mihomo 随内核服务生死,
+        // 断连行不能再承诺「代理不受影响」;但「退出面板 ≠ 停代理」仍成立(仅本面板失联)。
+        #expect(line?.title.contains("仅本面板失联") == true)
+        #expect(line?.title.contains("内置代理内核随内核服务起落") == true)
         // 断连时仲裁面未知 → 不该出现「确认器在场」这种没有依据的断言。
         #expect(!items(m).contains { $0.title.hasPrefix("确认器:") })
     }

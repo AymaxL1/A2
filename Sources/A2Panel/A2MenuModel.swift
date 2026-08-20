@@ -29,6 +29,17 @@
 import A2Contract
 
 // ============================================================================
+// 面板本地动作(14 票)—— 第三条出口:不经 UDS、不起子进程
+// ============================================================================
+
+/// 菜单里「动作整个发生在面板进程里」的那几项。目前只有一条;将来加一条就多一个 case,
+/// 与白名单命令同一种纪律:**封闭枚举,逐字可对照**。
+public enum A2PanelLocalAction: String, Sendable, Equatable, CaseIterable {
+    /// 把「AI 助手使用说明」拷进剪贴板(05 票定稿;内容随状态自适应,见 `A2AssistantGuide`)。
+    case copyAssistantGuide
+}
+
+// ============================================================================
 // 用户操作分类(04 票「In(V1)」清单的机读表示 —— 14 票立的,本票原样继承)
 // ============================================================================
 
@@ -105,6 +116,9 @@ public struct A2MenuItemModel: Sendable, Equatable {
         ///   `.action` 经 UDS 调能力,`.bootstrap` 经内嵌内核 bin 起子进程发白名单命令。
         ///   两者绝不混用一个字段 —— 混了就再也说不清"这一项到底会走哪条路"。
         case bootstrap
+        /// 可点的**面板本地动作**(14 票):不经 UDS、不起子进程,动作整个发生在面板进程里
+        ///   (目前唯一一条:把「AI 助手使用说明」拷进剪贴板)。第三条出口,与前两条同样不混用字段。
+        case local
         /// 带子菜单的父项(本身不发起调用)。
         case group
         /// 「关于 A2 Panel」。
@@ -129,6 +143,8 @@ public struct A2MenuItemModel: Sendable, Equatable {
     /// 与 `capabilityID` **互斥**:一项要么是能力调用、要么是引导命令,不可能两者都是
     /// (有一条纯逻辑断言钉着这件事)。渲染器据此决定把点击交给哪个出口。
     public let bootstrapAction: A2BootstrapMenuAction?
+    /// 本项要发起的**面板本地动作**(14 票)。`nil` = 本项不是本地项。与上面两条同样互斥。
+    public let localAction: A2PanelLocalAction?
     /// 调用该能力时要带的入参(已能从当前状态确定的那部分)。
     public let params: [String: A2JSON]
     /// 还须当场向用户索取的入参(见 `A2MenuPrompt`)。
@@ -146,6 +162,7 @@ public struct A2MenuItemModel: Sendable, Equatable {
                 checked: Bool = false,
                 capabilityID: String? = nil,
                 bootstrapAction: A2BootstrapMenuAction? = nil,
+                localAction: A2PanelLocalAction? = nil,
                 params: [String: A2JSON] = [:],
                 prompts: [A2MenuPrompt] = [],
                 userAction: A2MenuUserAction? = nil,
@@ -157,6 +174,7 @@ public struct A2MenuItemModel: Sendable, Equatable {
         self.checked = checked
         self.capabilityID = capabilityID
         self.bootstrapAction = bootstrapAction
+        self.localAction = localAction
         self.params = params
         self.prompts = prompts
         self.userAction = userAction
@@ -168,6 +186,7 @@ public struct A2MenuItemModel: Sendable, Equatable {
     public func withChildren(_ children: [A2MenuItemModel]) -> A2MenuItemModel {
         A2MenuItemModel(kind: kind, title: title, enabled: enabled, checked: checked,
                         capabilityID: capabilityID, bootstrapAction: bootstrapAction,
+                        localAction: localAction,
                         params: params, prompts: prompts, userAction: userAction,
                         children: children, disabledReason: disabledReason)
     }
@@ -245,6 +264,8 @@ public struct A2MenuModel: Sendable, Equatable {
                 }
                 // 引导项的角标用**另一个箭头**(`⇒`):一眼可见它走的不是能力出口,而是内嵌 bin。
                 if let bootstrap = item.bootstrapAction { line += "  ⇒ \(bootstrap.badge)" }
+                // 本地项用第三种箭头(`⇢`):不出面板进程的那条出口。
+                if let local = item.localAction { line += "  ⇢ local:\(local.rawValue)" }
                 if let action = item.userAction { line += "  @\(action.rawValue)" }
                 if let reason = item.disabledReason { line += "  (\(reason))" }
                 lines.append(line)

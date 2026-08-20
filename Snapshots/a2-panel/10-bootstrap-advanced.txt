@@ -2,6 +2,7 @@
 [separator]
 [info disabled] 内核:已连接 v0.1.0
 [info disabled] 确认器:在场(dangerous 会弹到这里)
+[local enabled] 复制 AI 助手使用说明  ⇢ local:copyAssistantGuide
 [separator]
 [info disabled] mihomo:未运行  → proxy.status  @basicStatus
 [separator]

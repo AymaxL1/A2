@@ -228,15 +228,15 @@ async function statusResult(ctx: MihomoContext): Promise<MihomoStatusResult> {
     dataDir: ctx.layout.dataDir,
     controller: ctx.layout.controller,
     controllerReachable: probe?.reachable ?? false,
+    hasProxies: configText !== undefined && configHasProxies(configText),
     restartCount: snapshot.restartCount,
     ...(snapshot.lastError ? { lastError: snapshot.lastError } : {}),
   };
 
   const foreign = foreignResult(foreignFacts);
   const legacy = await legacyUnitPresent(ctx);
-  const hasProxies = configText !== undefined && configHasProxies(configText);
 
-  const guidance = guidanceFor({ mode, embedded, foreign, legacy, hasProxies });
+  const guidance = guidanceFor({ mode, embedded, foreign, legacy, hasProxies: embedded.hasProxies });
   return {
     mode,
     embedded,

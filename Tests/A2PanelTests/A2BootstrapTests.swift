@@ -69,11 +69,11 @@ enum BootstrapGolden {
 // ① 白名单
 // ============================================================================
 
-@Suite("16/17 引导白名单(ADR 0012 第 3 条:五条,一条不多)")
+@Suite("16/17/14 引导白名单(ADR 0012 第 3 条:七条,一条不多)")
 struct A2BootstrapWhitelistTests {
 
-    @Test("17 白名单逐字对照 ADR 0012 —— 多一条少一条都要在这里当场红")
-    func argumentsAreExactlyTheFive() {
+    @Test("17/14 白名单逐字对照 ADR 0012 —— 多一条少一条都要在这里当场红")
+    func argumentsAreExactlyTheSeven() {
         let table = A2BootstrapCommand.allCases.map { $0.arguments }
         #expect(table == [
             ["service", "install", "--copy-to-home", "--json"],
@@ -81,12 +81,14 @@ struct A2BootstrapWhitelistTests {
             ["service", "uninstall", "--purge", "--json"],
             ["service", "status", "--json"],
             ["version", "--json"],
+            ["mihomo", "status", "--json"],
+            ["mihomo", "restart", "--json"],
         ])
     }
 
-    @Test("17 白名单只有五条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
-    func whitelistHasFiveEntries() {
-        #expect(A2BootstrapCommand.allCases.count == 5)
+    @Test("17/14 白名单只有七条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
+    func whitelistHasSevenEntries() {
+        #expect(A2BootstrapCommand.allCases.count == 7)
     }
 
     @Test("17 --purge 只出现在卸载那一条上(它是唯一会删数据的形态)")
@@ -106,13 +108,16 @@ struct A2BootstrapWhitelistTests {
         }
     }
 
-    @Test("17 白名单里没有任何越界的那一条(只碰 service 四条 + version)")
+    @Test("17/14 白名单里没有任何越界的那一条(只碰 service 四条 + version + mihomo 两条)")
     func noCommandOutsideTheServiceSurface() {
         for command in A2BootstrapCommand.allCases {
             let head = command.arguments[0]
-            #expect(head == "service" || head == "version",
-                    "白名单里混进了 `\(head)` —— 要加命令得先改 ADR 0012")
+            #expect(head == "service" || head == "version" || head == "mihomo",
+                    "白名单里混进了 `\(head)` —— 要加命令得先改 ADR 0012/0014")
         }
+        // mihomo 域恰两条:status(只读)与 restart —— enable/disable 不进面板(07 票:初始化归 agent)。
+        let mihomo = A2BootstrapCommand.allCases.filter { $0.arguments[0] == "mihomo" }
+        #expect(mihomo == [.mihomoStatus, .mihomoRestart])
     }
 
     @Test("16 菜单角标 = 会跑的那条命令(去掉 --json)")
@@ -480,7 +485,7 @@ struct A2BootstrapCoordinatorTests {
         #expect(box.states.isEmpty, "什么都没做就不该有状态变更")
     }
 
-    @Test("16 启动时各问一次:version + service status,**就这两条**(不轮询)")
+    @Test("16/14 启动时各问一次:version + service status + mihomo status,**就这三条**(不轮询)")
     func probeAsksOnce() throws {
         let runner = RecordingRunner()
         runner.responses[.version] = try BootstrapGolden.success("version-result.json")
@@ -490,7 +495,7 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.probe()
 
-        #expect(runner.issued == [.version, .serviceStatus])
+        #expect(runner.issued == [.version, .serviceStatus, .mihomoStatus])
         #expect(coordinator.state.embeddedKernelVersion == "0.1.0")
         #expect(coordinator.state.serviceState == .notInstalled)
     }
@@ -535,7 +540,7 @@ struct A2BootstrapCoordinatorTests {
 
         #expect(coordinator.perform(.install) == true)
 
-        #expect(runner.issued == [.serviceInstall, .serviceStatus])
+        #expect(runner.issued == [.serviceInstall, .serviceStatus, .mihomoStatus])
         #expect(coordinator.state.serviceState == .running)
         #expect(coordinator.state.inFlight == nil)
         #expect(coordinator.state.lastFailure == nil)
@@ -551,7 +556,7 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.perform(.uninstall)
 
-        #expect(runner.issued == [.serviceUninstall, .serviceStatus])
+        #expect(runner.issued == [.serviceUninstall, .serviceStatus, .mihomoStatus])
         #expect(coordinator.state.serviceState == .notInstalled)
     }
 
@@ -566,7 +571,7 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.perform(.uninstall, purge: true)
 
-        #expect(runner.issued == [.serviceUninstallPurge, .serviceStatus])
+        #expect(runner.issued == [.serviceUninstallPurge, .serviceStatus, .mihomoStatus])
         #expect(runner.issued.contains(.serviceUninstall) == false, "勾了那一格就不该再发默认那条")
         #expect(coordinator.state.serviceState == .notInstalled)
         #expect(coordinator.state.lastFailure == nil)
@@ -645,7 +650,7 @@ struct A2BootstrapCoordinatorTests {
 
         while !pending.isEmpty { pending.removeFirst()() }
         #expect(coordinator.state.inFlight == nil)
-        #expect(runner.issued == [.serviceInstall, .serviceStatus])
+        #expect(runner.issued == [.serviceInstall, .serviceStatus, .mihomoStatus])
         // 收场之后又能点了。
         #expect(coordinator.perform(.install) == true)
     }
@@ -664,8 +669,9 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.refreshServiceStatus()
 
-        #expect(executed == 1)
-        #expect(delivered == 1)
+        // 14 票起服务态刷新顺带问一次 mihomo 托管事实:两条命令、两次投递,仍全在注入的两侧。
+        #expect(executed == 2)
+        #expect(delivered == 2)
         #expect(coordinator.state.serviceState == .running)
     }
 

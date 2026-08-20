@@ -109,6 +109,21 @@ public final class A2BootstrapCoordinator {
             self.state.socketPresent = A2BootstrapCoordinator.socketExists(self.socketPath)
             self.publish()
         }
+        refreshMihomoStatus()
+    }
+
+    /// 重问一次 mihomo 托管事实(14 票)。时机与服务态同一套:事件驱动、无定时器。
+    /// 问不出来就 `nil` —— 保留旧答案会让「尚未配置节点」这类提示说一句已经不成立的话。
+    public func refreshMihomoStatus() {
+        guard let runner else { return }
+        run { runner.run(.mihomoStatus) } then: { [weak self] output in
+            guard let self else { return }
+            switch A2BootstrapReading.mihomoStatus(output) {
+            case let .success(facts): self.state.mihomoFacts = facts
+            case .failure:            self.state.mihomoFacts = nil
+            }
+            self.publish()
+        }
     }
 
     // MARK: - 用户点了
@@ -134,12 +149,24 @@ public final class A2BootstrapCoordinator {
 
         run { runner.run(action.command(purge: purge)) } then: { [weak self] output in
             guard let self else { return }
-            switch A2BootstrapReading.serviceChange(output) {
-            case let .success(facts):
-                self.state.serviceState = facts.status.state
-                self.state.lastFailure = nil
-            case let .failure(failure):
-                self.state.lastFailure = failure
+            // 两族命令的 result 形状不同,按动作分读:服务面读 `ServiceChange`,mihomo 面读 `MihomoChange`。
+            switch action {
+            case .install, .uninstall:
+                switch A2BootstrapReading.serviceChange(output) {
+                case let .success(facts):
+                    self.state.serviceState = facts.status.state
+                    self.state.lastFailure = nil
+                case let .failure(failure):
+                    self.state.lastFailure = failure
+                }
+            case .restartMihomo:
+                switch A2BootstrapReading.mihomoChange(output) {
+                case let .success(facts):
+                    self.state.mihomoFacts = facts
+                    self.state.lastFailure = nil
+                case let .failure(failure):
+                    self.state.lastFailure = failure
+                }
             }
             self.state.inFlight = nil
             self.publish()

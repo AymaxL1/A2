@@ -38,11 +38,12 @@ struct A2BootstrapMenuTests {
         #expect(m.textSnapshot == A2MenuModelBuilder.build(state: fixture.state).textSnapshot)
     }
 
-    @Test("16 没有内嵌 bin 时,断连那一行仍是 10 票的原文(不改现状文案)")
-    func disconnectedLineIsUnchanged() {
+    @Test("14 断连那一行如实分辨两件事:面板失联 ≠ 代理没了,但内置代理内核随内核服务起落")
+    func disconnectedLineIsHonest() {
         let m = model(A2PanelFixtures.disconnected)
         let line = items(m).first { $0.kind == .info && $0.title.hasPrefix("内核:未连接") }
-        #expect(line?.title.contains("代理不受影响,仅本面板失联") == true)
+        #expect(line?.title.contains("仅本面板失联") == true)
+        #expect(line?.title.contains("内置代理内核随内核服务起落") == true)
     }
 
     // ========================================================================
@@ -128,10 +129,10 @@ struct A2BootstrapMenuTests {
                 || !all[failureIndex + 1].title.hasPrefix("↳ "))
     }
 
-    @Test("16 分支⑤已连 + 版本失配:出「升级内核 vX→vY(重启服务,不断网)」,同一条 install")
+    @Test("16/14 分支⑤已连 + 版本失配:出「升级内核 vX→vY(重启服务,代理短暂中断)」,同一条 install")
     func branchUpgrade() throws {
         let m = model(A2PanelFixtures.bootstrapUpgrade)
-        let upgrade = try #require(item(m, titled: "升级内核 v0.1.0→v0.2.0(重启服务,不断网)"))
+        let upgrade = try #require(item(m, titled: "升级内核 v0.1.0→v0.2.0(重启服务,代理短暂中断)"))
         #expect(upgrade.kind == .bootstrap)
         #expect(upgrade.bootstrapAction == .install)
         #expect(upgrade.enabled)

@@ -8,6 +8,7 @@
     "dataDir": "/Users/alice/.a2/mihomo",
     "controller": "127.0.0.1:9097",
     "controllerReachable": false,
+    "hasProxies": false,
     "restartCount": 0
   },
   "guidance": {

@@ -53,6 +53,9 @@
         "controllerReachable": {
           "type": "boolean"
         },
+        "hasProxies": {
+          "type": "boolean"
+        },
         "restartCount": {
           "type": "integer",
           "minimum": 0,
@@ -70,6 +73,7 @@
         "dataDir",
         "controller",
         "controllerReachable",
+        "hasProxies",
         "restartCount"
       ],
       "additionalProperties": false

@@ -1,6 +1,6 @@
 [header disabled] A2 Panel · 代理
 [separator]
-[info disabled] 内核:未连接(与内核断开,正在重连)— 代理不受影响,仅本面板失联
+[info disabled] 内核:未连接(与内核断开,正在重连)— 仅本面板失联;内置代理内核随内核服务起落
 [separator]
 [info disabled] mihomo:运行中 v1.19.28  → proxy.status  @basicStatus
 [info disabled] 模式:规则 · 节点:HK-01 · 端口:7890  → proxy.status  @basicStatus

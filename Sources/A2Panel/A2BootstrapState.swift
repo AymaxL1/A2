@@ -26,7 +26,7 @@ import Foundation
 // 引导菜单动作(**不是**能力调用 —— 它不经 UDS,也没有 capability id)
 // ============================================================================
 
-/// 菜单里那两个引导项各自会发起的动作。
+/// 菜单里那几个引导项各自会发起的动作。
 ///
 /// 与能力项的分野必须一眼可见:能力项落到 `capabilityID` + `params`,经 `A2PanelSession` 走 UDS;
 /// 引导项落到本枚举,经内嵌 bin 起子进程。**两条路互不相通**,菜单模型里也是两个字段。
@@ -35,6 +35,8 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
     case install
     /// 「停止并卸载内核服务」。
     case uninstall
+    /// 「重启代理内核」(14 票):改完配置让它生效、故障态清零复活。经 daemon(子进程是它的孩子)。
+    case restartMihomo
 
     /// 本动作发的那条白名单命令。
     ///
@@ -42,8 +44,9 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
     /// (17 票:默认不勾)——菜单项本身永远是不勾的那条,角标也照不勾的那条画。
     public func command(purge: Bool) -> A2BootstrapCommand {
         switch self {
-        case .install:   return .serviceInstall
-        case .uninstall: return purge ? .serviceUninstallPurge : .serviceUninstall
+        case .install:       return .serviceInstall
+        case .uninstall:     return purge ? .serviceUninstallPurge : .serviceUninstall
+        case .restartMihomo: return .mihomoRestart
         }
     }
 
@@ -60,6 +63,9 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
         case .install:
             // 装:首启那次已经有说明框了,菜单项本身是用户主动去点的,不再多一道。
             return nil
+        case .restartMihomo:
+            // 重启:秒级瞬断、随时可再点,弹框只会把一次点击变成两次。
+            return nil
         case .uninstall:
             return A2BootstrapConfirmation(
                 title: "停止并卸载 a2 内核服务?",
@@ -67,13 +73,13 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
                 //   (那要给 NSButton 挂 action 去改 informativeText,而那段逻辑没人验得了)。
                 //   于是"不勾会怎样"与"勾了会怎样"都摆在这儿,用户点之前两边都看得见。
                 body: [
-                    "这会停掉常驻内核并移除 launchd 用户服务 com.a2.kernel。",
+                    "这会停掉常驻内核并移除 launchd 用户服务 com.a2.kernel(内置代理内核随内核一起停下)。",
                     "",
                     "不勾下面那个勾选框:只拆服务 —— ~/.a2 里的数据(订阅、插件、日志)与",
                     "~/.a2/bin/a2 那份内核拷贝都留下,随时可以从菜单再装回来。",
                     "",
-                    "勾上「同时删除 ~/.a2」:除了拆服务,还会拆掉 a2 托管的 mihomo 服务 com.a2.mihomo,",
-                    "并删掉整个 ~/.a2(内核拷贝、订阅、插件、日志,以及 a2 自己下载的那份 mihomo)。",
+                    "勾上「同时删除 ~/.a2」:还会删掉整个 ~/.a2(内核拷贝、订阅、插件、日志,",
+                    "以及 a2 自己下载的那份内嵌 mihomo;旧版遗留的 com.a2.mihomo 服务若在也一并拆掉)。",
                     "这一步不可撤销。",
                     "你自己装的 mihomo(io.metacubex.mihomo)与它的配置「不在」清理范围内,一个字节都不动。",
                     "",
@@ -179,6 +185,8 @@ public struct A2BootstrapState: Sendable, Equatable {
     public var embeddedKernelVersion: String?
     /// 最近一次 `service status` 读到的服务态。`nil` = 还没问到(或问失败了)。
     public var serviceState: A2BootstrapServiceFacts.State?
+    /// 最近一次 `mihomo status` 读到的托管事实(14 票)。`nil` = 还没问到(或问失败了)。
+    public var mihomoFacts: A2BootstrapMihomoFacts?
     /// 在途操作。非 nil 时菜单项一律禁用,并出一条「安装中…」的 info 行。
     public var inFlight: A2BootstrapMenuAction?
     /// 最近一次引导失败(成功一次就清空)。如实进菜单,含退出码语义。
@@ -198,6 +206,7 @@ public struct A2BootstrapState: Sendable, Equatable {
     public init(embeddedBinAvailable: Bool = false,
                 embeddedKernelVersion: String? = nil,
                 serviceState: A2BootstrapServiceFacts.State? = nil,
+                mihomoFacts: A2BootstrapMihomoFacts? = nil,
                 inFlight: A2BootstrapMenuAction? = nil,
                 lastFailure: A2BootstrapFailure? = nil,
                 firstRunPromptDismissed: Bool = false,
@@ -206,6 +215,7 @@ public struct A2BootstrapState: Sendable, Equatable {
         self.embeddedBinAvailable = embeddedBinAvailable
         self.embeddedKernelVersion = embeddedKernelVersion
         self.serviceState = serviceState
+        self.mihomoFacts = mihomoFacts
         self.inFlight = inFlight
         self.lastFailure = lastFailure
         self.firstRunPromptDismissed = firstRunPromptDismissed

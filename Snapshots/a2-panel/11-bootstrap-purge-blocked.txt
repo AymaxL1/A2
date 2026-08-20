@@ -8,6 +8,7 @@
 [info disabled] ↳ 或在面板里点:菜单「关闭系统代理(还原)」
 [info disabled] ↳ 还原之后再来一次:a2 service uninstall --purge --json
 [info disabled] ↳ 或者这次就只拆服务(数据与 $A2_HOME 原样留下):a2 service uninstall
+[local enabled] 复制 AI 助手使用说明  ⇢ local:copyAssistantGuide
 [separator]
 [info disabled] mihomo:未运行  → proxy.status  @basicStatus
 [separator]

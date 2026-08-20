@@ -8,6 +8,7 @@
     "dataDir": "/Users/alice/.a2/mihomo",
     "controller": "127.0.0.1:9097",
     "controllerReachable": true,
+    "hasProxies": true,
     "restartCount": 0,
     "pid": 4242,
     "binaryVersion": "v1.19.28"

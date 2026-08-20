@@ -66,9 +66,10 @@ public enum A2MenuModelBuilder {
             if let v = state.kernelStatus?.version { line += " v\(v)" }
             items.append(.info(line))
         case let .disconnected(reason):
-            // 断连**不是**「代理停了」:数据面不随控制面起落(ADR 0007 修订版)。措辞必须分清这两件事,
-            //   否则用户会以为关掉壳就断网了 —— 那正是「退出即还原」废除之后最容易产生的误解。
-            items.append(.info("内核:未连接(\(reason))— 代理不受影响,仅本面板失联"))
+            // 措辞的边界(14 票改判):**面板断连**仍只是本面板失联(退出仅断连不变);
+            //   但「代理不受影响」不能再说 —— 内嵌 mihomo 随内核服务生死,内核真停了代理就是停了。
+            //   两种情形面板分不清(它连不上),所以两句都如实说、不替内核猜。
+            items.append(.info("内核:未连接(\(reason))— 仅本面板失联;内置代理内核随内核服务起落"))
         }
         if let arbitration = state.arbitration {
             // 壳自己就是那个确认器。这一行是「内核认到我了没有」的**运行时证据**,
@@ -83,6 +84,7 @@ public enum A2MenuModelBuilder {
         // ---- ⓪′ 引导区段(16 票 / ADR 0012)——**紧跟连接行**,因为它回答的正是那一行提出的问题:
         //      「没连上,那我该怎么办?」10 票时这个问题的答案只能是"自己去敲 a2 service install"。
         items.append(contentsOf: bootstrapItems(state: state, bootstrap: bootstrap))
+        items.append(contentsOf: mihomoItems(state: state, bootstrap: bootstrap))
         items.append(.separator())
 
         // ---- ① 基础状态(04 In:内核运行状态 / 监听端口 / 当前模式与节点)----
@@ -330,7 +332,13 @@ public enum A2MenuModelBuilder {
         // 在途:项**留着但禁用**,另给一条 info 说清在干什么。
         //   为什么不整块换成一条 info:那样菜单会在两帧之间"少一项",用户刚点下去就看见自己点的东西没了。
         let busy = bootstrap.inFlight != nil
-        let busyReason = bootstrap.inFlight.map { $0 == .install ? "安装中,请稍候" : "卸载中,请稍候" }
+        let busyReason = bootstrap.inFlight.map { inFlight -> String in
+            switch inFlight {
+            case .install:       return "安装中,请稍候"
+            case .uninstall:     return "卸载中,请稍候"
+            case .restartMihomo: return "重启代理内核中,请稍候"
+            }
+        }
 
         switch state.connection {
         case .disconnected:
@@ -354,22 +362,24 @@ public enum A2MenuModelBuilder {
                embedded != live {
                 items.append(A2MenuItemModel(
                     kind: .bootstrap,
-                    // 「不断网」写进标题:mihomo 挂自己的 unit,换内核不动数据面 —— 用户点之前就该知道。
-                    title: "升级内核 v\(live)→v\(embedded)(重启服务,不断网)",
+                    // 「短暂中断」写进标题(14 票):内嵌 mihomo 随内核重启带下再拉起 —— 用户点之前就该知道。
+                    title: "升级内核 v\(live)→v\(embedded)(重启服务,代理短暂中断)",
                     enabled: !busy,
                     bootstrapAction: .install,
                     disabledReason: busyReason))
                 // 标题只放得下一句,而这一次点击的后果不止一句 —— 剩下的**摆在点之前**,
                 //   而不是等它发生了再让用户去猜(升级会重启内核 → 面板断连重连 →
                 //   在途的 dangerous 确认随之收场,那是 08 票定的降级行为,如实说出来)。
-                items.append(.info("↳ 重启只动内核:代理不断;面板会短暂断开重连,在途确认按默认拒绝收场"))
+                items.append(.info("↳ 重启会把内置代理内核一并带下再拉起(秒级瞬断);面板短暂断开重连,在途确认按默认拒绝收场"))
             }
         }
 
         if let inFlight = bootstrap.inFlight {
-            items.append(.info(inFlight == .install
-                               ? "⏳ 安装中…(经包内内核 bin;装完面板会自动重连)"
-                               : "⏳ 卸载中…"))
+            switch inFlight {
+            case .install:       items.append(.info("⏳ 安装中…(经包内内核 bin;装完面板会自动重连)"))
+            case .uninstall:     items.append(.info("⏳ 卸载中…"))
+            case .restartMihomo: items.append(.info("⏳ 重启代理内核中…(秒级瞬断)"))
+            }
         }
         // 失败**如实一行**,含退出码语义。不重试、不掩饰:点了没成,用户有权知道内核说了什么。
         if let failure = bootstrap.lastFailure {
@@ -378,6 +388,61 @@ public enum A2MenuModelBuilder {
             //   "先 a2 proxy off 再来"。壳一个字不改写,也不替它挑哪条更重要)。
             for line in failure.guidanceLines { items.append(.info(line)) }
         }
+        return items
+    }
+
+    /// mihomo 区段(14 票 / 04·05 票定稿):状态行、「尚未配置节点」提示、重启项、AI 助手说明入口。
+    ///
+    /// 与引导区段同一条隐藏纪律:没有内嵌 bin 就一项都不出(dev / 测试态菜单与 10 票逐字相同)。
+    /// 「复制 AI 助手使用说明」**未装也出现**(04 票裁定):内容随状态自适应 ——
+    /// 未装版教 agent 引导用户点菜单安装,而不是让一个装了面板的人自己去猜下一步。
+    static func mihomoItems(state: A2PanelState, bootstrap: A2BootstrapState) -> [A2MenuItemModel] {
+        guard bootstrap.embeddedBinAvailable else { return [] }
+        var items: [A2MenuItemModel] = []
+        let busy = bootstrap.inFlight != nil
+
+        if let facts = bootstrap.mihomoFacts {
+            switch facts.mode {
+            case .off:
+                // 未启用不出状态行:引导启用是 agent 对话流的事(07 票),面板不劝装。
+                break
+            case .observe:
+                items.append(.info("代理内核:observe(只读旁观本机已有 mihomo)"))
+            case .embedded:
+                let stateLine: String
+                switch facts.embeddedState {
+                case .running: stateLine = "内置代理内核:运行中"
+                case .stopped: stateLine = "内置代理内核:未在运行"
+                case .failed:  stateLine = "内置代理内核:故障(已暂停重拉)"
+                }
+                items.append(.info(stateLine))
+                if facts.embeddedState == .running && !facts.hasProxies {
+                    // 可点 = 复制 AI 助手说明(04 票:把人引向 agent,面板不做配置 UI)。
+                    items.append(A2MenuItemModel(
+                        kind: .local,
+                        title: "⚠ 尚未配置节点 — 让你的 AI 助手帮你配置",
+                        enabled: true,
+                        localAction: .copyAssistantGuide))
+                }
+                let restartReason: String? = {
+                    if busy { return "有引导操作在途" }
+                    if case .disconnected = state.connection { return "内核未连接(重启经内核服务)" }
+                    return nil
+                }()
+                items.append(A2MenuItemModel(
+                    kind: .bootstrap,
+                    title: "重启代理内核",
+                    enabled: restartReason == nil,
+                    bootstrapAction: .restartMihomo,
+                    disabledReason: restartReason))
+            }
+        }
+
+        items.append(A2MenuItemModel(
+            kind: .local,
+            title: "复制 AI 助手使用说明",
+            enabled: true,
+            localAction: .copyAssistantGuide))
         return items
     }
 

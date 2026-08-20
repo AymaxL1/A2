@@ -37,7 +37,7 @@ import A2Contract
 // ① 白名单:五条,一条不多
 // ============================================================================
 
-/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条,17 票起五条)。
+/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条;17 票起五条,14 票恰增两条成七条)。
 ///
 /// 每一条都带 `--json`:壳只看机读面,人类面的散文一个字都不解析
 /// (散文会为了好读而改,机读包封改一次就要动契约与金标)。
@@ -58,6 +58,12 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     case serviceStatus
     /// 问内嵌 bin 自己的版本(启动时问一次并缓存,不轮询 —— ADR 0012 第 5 条)。
     case version
+    /// 问内嵌 mihomo 的托管现状(14 票;只读,不经 daemon 也能答)。
+    /// 状态行、「尚未配置节点」提示行与 AI 助手说明里的状态块都吃它。
+    case mihomoStatus
+    /// 重启内嵌 mihomo 子进程(14 票;经 daemon —— 子进程是 daemon 的孩子)。
+    /// 菜单「重启代理内核」那一项;改完配置让它生效、故障态清零复活,走的都是这条。
+    case mihomoRestart
 
     /// 传给内嵌 bin 的 argv。**全仓唯一构造引导 argv 的地方**。
     public var arguments: [String] {
@@ -67,6 +73,8 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
         case .serviceUninstallPurge: return ["service", "uninstall", "--purge", "--json"]
         case .serviceStatus:         return ["service", "status", "--json"]
         case .version:               return ["version", "--json"]
+        case .mihomoStatus:          return ["mihomo", "status", "--json"]
+        case .mihomoRestart:         return ["mihomo", "restart", "--json"]
         }
     }
 
@@ -174,6 +182,35 @@ public struct A2BootstrapServiceFacts: Sendable, Equatable {
     public init(state: State, binPath: String) {
         self.state = state
         self.binPath = binPath
+    }
+}
+
+/// `mihomo status --json` 里面板要的那几个字段(14 票)。
+///
+/// ⚠️ 与服务面同一条口径:这**不是** `MihomoStatusResult` 的镜像(那条契约有意豁免,
+///   见 `A2ContractMirror`)。这里只承载面板真的会用的部分:托管模式(出不出 mihomo 区段)、
+///   内嵌子进程三态(状态行)、有没有节点(「尚未配置节点」提示行的**机读判据**,壳不解析散文)。
+public struct A2BootstrapMihomoFacts: Sendable, Equatable {
+
+    /// 托管模式三值(与 `MihomoManagedModeSchema` 的封闭词表逐字一致)。未知取值不猜,当解析失败。
+    public enum Mode: String, Sendable, Equatable, CaseIterable {
+        case off, observe, embedded
+    }
+
+    /// 内嵌子进程三态(与 `MihomoEmbeddedStateSchema` 逐字一致)。
+    public enum EmbeddedState: String, Sendable, Equatable, CaseIterable {
+        case running, stopped, failed
+    }
+
+    public let mode: Mode
+    public let embeddedState: EmbeddedState
+    /// 配置里有没有代理节点(内核算好的机读判据)。
+    public let hasProxies: Bool
+
+    public init(mode: Mode, embeddedState: EmbeddedState, hasProxies: Bool) {
+        self.mode = mode
+        self.embeddedState = embeddedState
+        self.hasProxies = hasProxies
     }
 }
 
@@ -357,6 +394,23 @@ public enum A2BootstrapReading {
         }
     }
 
+    /// `mihomo status --json` → 托管事实(14 票)。
+    public static func mihomoStatus(_ run: A2BootstrapRun)
+        -> Result<A2BootstrapMihomoFacts, A2BootstrapFailure> {
+        result(run).flatMap { mihomoFacts(from: $0, exitCode: run.exitCode) }
+    }
+
+    /// `mihomo restart --json` → 重启后的托管事实(result 形状是 `{status, actions}`,面板只要 status)。
+    public static func mihomoChange(_ run: A2BootstrapRun)
+        -> Result<A2BootstrapMihomoFacts, A2BootstrapFailure> {
+        result(run).flatMap { object in
+            guard let statusObject = object["status"]?.objectValue else {
+                return .failure(missing("status", run.exitCode))
+            }
+            return mihomoFacts(from: statusObject, exitCode: run.exitCode)
+        }
+    }
+
     /// `version --json` → 版本号。
     public static func version(_ run: A2BootstrapRun) -> Result<String, A2BootstrapFailure> {
         result(run).flatMap { object in
@@ -380,6 +434,25 @@ public enum A2BootstrapReading {
             return .failure(missing("binPath", exitCode))
         }
         return .success(A2BootstrapServiceFacts(state: state, binPath: binPath))
+    }
+
+    private static func mihomoFacts(from object: [String: A2JSON], exitCode: Int32)
+        -> Result<A2BootstrapMihomoFacts, A2BootstrapFailure> {
+        guard let rawMode = object["mode"]?.stringValue else { return .failure(missing("mode", exitCode)) }
+        guard let mode = A2BootstrapMihomoFacts.Mode(rawValue: rawMode) else {
+            return .failure(A2BootstrapFailure(code: nil, message: "未知的托管模式:\(rawMode)", exitCode: exitCode))
+        }
+        guard let embedded = object["embedded"]?.objectValue else {
+            return .failure(missing("embedded", exitCode))
+        }
+        guard let rawState = embedded["state"]?.stringValue else { return .failure(missing("embedded.state", exitCode)) }
+        guard let state = A2BootstrapMihomoFacts.EmbeddedState(rawValue: rawState) else {
+            return .failure(A2BootstrapFailure(code: nil, message: "未知的内嵌子进程态:\(rawState)", exitCode: exitCode))
+        }
+        guard case let .bool(hasProxies)? = embedded["hasProxies"] else {
+            return .failure(missing("embedded.hasProxies", exitCode))
+        }
+        return .success(A2BootstrapMihomoFacts(mode: mode, embeddedState: state, hasProxies: hasProxies))
     }
 
     private static func missing(_ field: String, _ exitCode: Int32) -> A2BootstrapFailure {

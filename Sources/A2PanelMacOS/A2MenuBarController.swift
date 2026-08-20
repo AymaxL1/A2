@@ -48,6 +48,8 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
     /// 第二个参数 = 用户在确认框里勾没勾那个「同时删除 ~/.a2」(17 票)。
     /// 没有确认框、或那个框没有勾选框时恒 false。
     private let onBootstrap: (A2BootstrapMenuAction, Bool) -> Void
+    /// 面板本地动作(14 票):不出面板进程的第三条出口(目前只有「复制 AI 助手使用说明」)。
+    private let onLocal: (A2PanelLocalAction) -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void
 
@@ -57,12 +59,14 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
 
     public init(onInvoke: @escaping (String, [String: A2JSON]) -> Void,
                 onBootstrap: @escaping (A2BootstrapMenuAction, Bool) -> Void,
+                onLocal: @escaping (A2PanelLocalAction) -> Void = { _ in },
                 onAbout: @escaping () -> Void,
                 onQuit: @escaping () -> Void,
                 icon: NSImage? = A2MenuBarIcon.load()) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.onInvoke = onInvoke
         self.onBootstrap = onBootstrap
+        self.onLocal = onLocal
         self.onAbout = onAbout
         self.onQuit = onQuit
         self.model = A2MenuModel(items: [])
@@ -130,6 +134,14 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
             if let reason = model.disabledReason, !model.enabled { item.toolTip = reason }
             return item
 
+        case .local:
+            let item = NSMenuItem(title: model.title, action: #selector(localTapped(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.isEnabled = model.enabled
+            item.representedObject = model
+            return item
+
         case .bootstrap:
             let item = NSMenuItem(title: model.title, action: #selector(bootstrapTapped(_:)),
                                   keyEquivalent: "")
@@ -192,6 +204,12 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let value = field.stringValue
         return value.isEmpty ? nil : value
+    }
+
+    @objc private func localTapped(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? A2MenuItemModel,
+              let action = model.localAction else { return }
+        onLocal(action)
     }
 
     @objc private func aboutTapped() { onAbout() }

@@ -8,6 +8,7 @@
     "dataDir": "/Users/alice/.a2/mihomo",
     "controller": "127.0.0.1:9097",
     "controllerReachable": false,
+    "hasProxies": false,
     "restartCount": 3,
     "binaryVersion": "v1.19.28",
     "lastError": "FATA[0000] Parse config error: yaml: line 12: mapping values are not allowed in this context"

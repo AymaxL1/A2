@@ -727,6 +727,8 @@ export const MihomoEmbeddedSchema = z.object({
   controller: z.string().min(1),
   /** 那个控制端点此刻答不答话(有 pid ≠ 能用)。 */
   controllerReachable: z.boolean(),
+  /** 配置里有没有代理节点(面板「尚未配置节点」提示行的**机读判据** —— 壳不解析散文)。 */
+  hasProxies: z.boolean(),
   /** 连续启动失败次数(达到上限即转 `failed`)。 */
   restartCount: z.number().int().nonnegative(),
   /** `failed` 必带:最近一次失败时 mihomo 自己在 stderr 上说的话(**原文**,不转述)。 */
