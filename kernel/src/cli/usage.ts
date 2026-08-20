@@ -23,7 +23,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
                        subscription … / supervision(见 a2 proxy --help)
   arbitration status   dangerous 三层仲裁面:确认器在不在场、在途确认、审计事件(见 a2 arbitration --help)
   service …            常驻服务:install / uninstall / status(见 a2 service --help)
-  mihomo …             mihomo 共存:status / install / uninstall / upgrade(见 a2 mihomo --help)
+  mihomo …             内嵌代理内核:status / enable / disable / restart(见 a2 mihomo --help)
   plugin …             插件装载:add <路径> / list / remove <名字>(见 a2 plugin --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
   about                版本、许可与外部程序声明(GPL 义务落点;不经 daemon)
@@ -190,8 +190,9 @@ export const PROXY_USAGE = `a2 proxy —— 代理控制面(域子命令 = 能�
   a2 proxy on   ≡   a2 capabilities call proxy.system.enable
 两者走的是**同一个** registry.invoke —— 仲裁、参数校验、dangerous 默拒完全一致(有断言把守)。
 
-跟哪个 mihomo 说话:与 a2 mihomo status 报的 result.instance 是同一个答案 —— a2 自管那份优先,
-它不在时就读你自己那个实例。对别人那份内核**只读**:既不接管它,也不替它改配置、改模式、选节点。
+跟哪个 mihomo 说话:按托管模式分派 —— embedded 恒对自己那份(a2 mihomo status 的 result.embedded);
+observe 读你自己那个实例(result.foreign.instance)。对别人那份内核**只读**:既不接管它,
+也不替它改配置、改模式、选节点。
 
 系统代理:接管与还原都是**显式命令**,不挂任何客户端的生命周期。接管前的完整状态(逐网络服务 ×
 逐类型 × 逐字段)落在 <A2_HOME>/system-proxy.json;有它在,a2 proxy off 永远能精确还原
@@ -446,7 +447,7 @@ export function mihomoUsageOutcome(message: string): CommandOutcome {
     usage: MIHOMO_USAGE,
     steps: [
       { description: "打印 mihomo 面用法", command: "a2 mihomo --help" },
-      { description: "查本机现状与将采用的阶梯档位", command: "a2 mihomo status --json" },
+      { description: "查本机现状与下一步指引", command: "a2 mihomo status --json" },
     ],
   });
 }

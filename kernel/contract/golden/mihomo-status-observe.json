@@ -1,0 +1,30 @@
+{
+  "mode": "observe",
+  "embedded": {
+    "state": "stopped",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": false,
+    "hasProxies": false,
+    "restartCount": 0
+  },
+  "foreign": {
+    "instance": {
+      "controller": "127.0.0.1:9090",
+      "address": "127.0.0.1:9090",
+      "secretConfigured": true,
+      "configFile": "/Users/alice/.config/mihomo/config.yaml",
+      "reachable": true,
+      "version": "v1.19.28",
+      "capabilities": [
+        "rest_api",
+        "meta_core",
+        "configs_read"
+      ]
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

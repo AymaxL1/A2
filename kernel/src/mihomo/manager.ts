@@ -102,6 +102,10 @@ export async function mihomoApplyOp(
     const actions: MihomoAction[] = [];
     const settings = await readSettings(ctx.layout, ctx.env);
     if (settings.managedMode === "embedded") {
+      // **拉起前对表**(spec §2 / ADR 0014 D6,CR 补):「升级随 a2 走」的另一半在这里 ——
+      // a2 升级后锁定版变了,daemon 首次 apply 就把二进制换到锁定版,不等人重跑 enable。
+      // 无二进制同样在此补齐(enable 落盘后下载失败的半启用态,自愈的唯一机会就是 apply)。
+      actions.push(...(await ensureBinaryCurrent(ctx)));
       if (await child.start()) actions.push("child_started");
     } else if (await child.stop()) {
       actions.push("child_stopped");
@@ -160,19 +164,27 @@ async function provisionEmbedded(ctx: MihomoContext, settings: ProxySettings): P
     await Bun.write(ctx.layout.configPath, converged.text.endsWith("\n") ? converged.text : `${converged.text}\n`);
     actions.push("config_written");
   }
+  actions.push(...(await ensureBinaryCurrent(ctx)));
+  return actions;
+}
 
+/**
+ * 二进制对表:无 → 下载;版本 ≠ 锁定版(或问不出来)→ 换成锁定版。
+ * enable 与 daemon 的 apply **共用这一条**(spec §2:embedded 拉起前对表),
+ * 「升级随 a2 走」才不至于停在"重跑 enable 的人才享有"。
+ */
+async function ensureBinaryCurrent(ctx: MihomoContext): Promise<MihomoAction[]> {
   const onDisk = await fileExists(ctx.layout.binaryPath);
   if (!onDisk) {
     await downloadLockedBinary(ctx.layout, ctx.env);
-    actions.push("binary_downloaded");
-  } else {
-    const version = await binaryVersion(ctx.layout.binaryPath);
-    if (!version || compareVersions(version, MIHOMO_LOCKED_VERSION) !== 0) {
-      await downloadLockedBinary(ctx.layout, ctx.env);
-      actions.push("binary_upgraded");
-    }
+    return ["binary_downloaded"];
   }
-  return actions;
+  const version = await binaryVersion(ctx.layout.binaryPath);
+  if (!version || compareVersions(version, MIHOMO_LOCKED_VERSION) !== 0) {
+    await downloadLockedBinary(ctx.layout, ctx.env);
+    return ["binary_upgraded"];
+  }
+  return [];
 }
 
 /**
@@ -314,6 +326,19 @@ function guidanceFor(input: GuidanceInput): Guidance | undefined {
     };
   }
 
+  if (mode === "embedded" && embedded.state === "stopped" && embedded.binaryVersion === undefined) {
+    // 半启用态(enable 落盘后下载失败/二进制被删):真因是二进制缺位,别把人支去查 service。
+    return {
+      summary:
+        "已启用内置代理内核,但它的二进制尚未就位(下载未完成或被移走)。重跑启用即可补齐(幂等);内核服务在跑时也会在启动时自动补。",
+      steps: [
+        { description: "重跑启用补齐二进制(幂等)", command: "a2 mihomo enable --mode=embedded --json" },
+        { description: "看本机现状", command: "a2 mihomo status --json" },
+      ],
+      context: { binaryPath: embedded.binaryPath, lockedVersion: embedded.lockedVersion },
+    };
+  }
+
   if (mode === "embedded" && embedded.state === "stopped") {
     return {
       summary:
@@ -371,7 +396,7 @@ function guidanceFor(input: GuidanceInput): Guidance | undefined {
       steps: [
         {
           description: "如需接管系统代理,先向用户问到 mihomo 的混入端口,再显式带参执行",
-          command: "a2 proxy system enable --port <端口> --json",
+          command: "a2 proxy on --port <端口> --json",
         },
       ],
       context: {

@@ -153,7 +153,12 @@ export async function startDaemon(
 export async function stopDaemon(handle: DaemonHandle): Promise<void> {
   if (handle.proc.killed) return;
   handle.proc.kill("SIGTERM");
-  await handle.proc.exited;
+  const exitCode = await handle.proc.exited;
+  // **exit-0 红线**(14 票 / CR M8):KeepAlive 双键(SuccessfulExit:false)下,主动停止路径
+  // 必须以 0 收尾,否则 launchd 会把刚停的服务顶回来。每一次测试停 daemon 都是一次断言。
+  if (exitCode !== 0) {
+    throw new Error(`daemon 对 SIGTERM 的退出码是 ${exitCode},不是 0 —— KeepAlive.SuccessfulExit=false 会把它顶回来`);
+  }
 }
 
 /** 轮询到 socket 真能连上为止(存在 ≠ 能连,stale socket 文件也存在)。 */

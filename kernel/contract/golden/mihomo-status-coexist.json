@@ -1,0 +1,41 @@
+{
+  "mode": "embedded",
+  "embedded": {
+    "state": "running",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": true,
+    "hasProxies": true,
+    "restartCount": 0,
+    "pid": 4242,
+    "binaryVersion": "v1.19.28"
+  },
+  "foreign": {
+    "instance": {
+      "controller": "127.0.0.1:9090",
+      "address": "0.0.0.0:9090",
+      "secretConfigured": false,
+      "reachable": true,
+      "version": "v1.18.6",
+      "capabilities": [
+        "rest_api",
+        "meta_core"
+      ]
+    }
+  },
+  "guidance": {
+    "summary": "内置 mihomo 运行中。另检测到一份非 A2 管理的 mihomo 也在跑(127.0.0.1:9090)。系统代理同一时间只能指向一家,两边的开关会互相覆盖——建议与用户确认后停掉那一份。",
+    "steps": [
+      {
+        "description": "经用户同意后停掉外来 mihomo(命令取决于它怎么装的:brew 装的用 \"brew services stop mihomo\";launchd 装的用 \"launchctl bootout gui/$UID/<它的 label>\")。未经用户同意不要执行。"
+      }
+    ],
+    "context": {
+      "foreignController": "127.0.0.1:9090"
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

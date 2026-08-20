@@ -1,27 +1,22 @@
 {
   "status": {
-    "presence": "absent",
-    "rung": "managed_install",
-    "provisioned": false,
-    "lockedVersion": "v1.19.28",
-    "managed": {
-      "label": "com.a2.mihomo",
-      "supervisor": "launchd",
-      "unitPath": "/Users/alice/Library/LaunchAgents/com.a2.mihomo.plist",
-      "unitInstalled": false,
-      "state": "not_installed",
-      "binaryKind": "absent",
+    "mode": "embedded",
+    "embedded": {
+      "state": "running",
+      "pid": 4242,
       "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+      "binaryVersion": "v1.19.28",
+      "lockedVersion": "v1.19.28",
       "configPath": "/Users/alice/.a2/mihomo/config.yaml",
       "dataDir": "/Users/alice/.a2/mihomo",
-      "controller": "127.0.0.1:9097"
-    },
-    "compatibility": {
-      "floor": "1.19.0",
-      "meets": true,
-      "shortfalls": []
+      "controller": "127.0.0.1:9097",
+      "controllerReachable": true,
+      "hasProxies": true,
+      "restartCount": 0
     },
     "home": "/Users/alice/.a2"
   },
-  "actions": ["foreign_instance_restarted"]
+  "actions": [
+    "mihomo_started"
+  ]
 }

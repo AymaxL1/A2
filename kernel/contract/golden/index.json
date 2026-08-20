@@ -207,6 +207,24 @@
       "why": "observe 读不到 controller:非回环端点如实报 skippedController 而不探(红线);guidance 态 D(系统代理要 --port 显式带参,不猜端口)"
     },
     {
+      "file": "mihomo-status-observe.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "observe 正常态:外来实例可达、事实齐全、没有要指引的事就没有 guidance —— 只读旁观的完整样本(spec §1 点名)"
+    },
+    {
+      "file": "mihomo-status-embedded-noproxies.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "guidance 态 F 逐字定稿入金标:embedded 跑着但 hasProxies=false —— 教 agent 直接读改 YAML(节点合并 CLI 已废案,第 2 步是纯 description)"
+    },
+    {
+      "file": "mihomo-status-coexist.json",
+      "schema": "MihomoStatusResult",
+      "kind": "valid",
+      "why": "guidance 态 E 逐字定稿入金标:并跑提醒 —— 「未经用户同意不要执行」是写给 agent 的行为指令(spec §1 点名 coexist)"
+    },
+    {
       "file": "mihomo-change-enable.json",
       "schema": "MihomoChangeResult",
       "kind": "valid",
@@ -222,13 +240,13 @@
       "file": "invalid-mihomo-status-retired-mode.json",
       "schema": "MihomoStatusResult",
       "kind": "invalid",
-      "why": "共存阶梯词表(managed_install/reuse_binary)已随 14 票退场,进不了托管模式枚举 —— 旧客户端的报文在新契约上必须当场红"
+      "why": "共存阶梯词表(样本用 managed_install)已随 14 票退场,进不了托管模式枚举 —— 旧客户端的报文在新契约上必须当场红"
     },
     {
       "file": "invalid-mihomo-change-unknown-action.json",
       "schema": "MihomoChangeResult",
       "kind": "invalid",
-      "why": "actions 词表封闭:未登记的动作(含旧世界的 mihomo_started/unit_written 一族)必须被拒 —— 审计词表不许静默扩张"
+      "why": "actions 词表封闭:status 是合法新形状,**唯一**的非法处是未登记动作 mihomo_started(旧世界词)——词表失守时本样本立刻绿掉、门禁当场红"
     },
     {
       "file": "invalid-request-missing-op.json",

@@ -188,9 +188,9 @@ class LaunchdSupervisor implements Supervisor {
 
   /**
    * `-k` = 先杀再拉。**漂移收敛那一路走不到这里**(launchd 的 load 已经换了进程),
-   * 但「换了文件而 unit 没变」那一类走得到,而且**是两处**:`a2 mihomo upgrade` 换 mihomo 二进制、
+   * 但「换了文件而 unit 没变」那一类走得到,如今**只剩一处**:
    * `a2 service install --copy-to-home` 换内核自己那份拷贝(15 票)——
-   * 都只能靠这条把进程换到新 inode 上。
+   * 只能靠这条把进程换到新 inode 上。(mihomo 的升级随行不经 unit,14 票起归 child.ts。)
    */
   async restart(): Promise<void> {
     await run(["launchctl", "kickstart", "-k", this.#target()]);

@@ -31,7 +31,7 @@ export interface ProxyTarget {
   /** 控制面此刻答不答话。 */
   apiReachable: boolean;
   /**
-   * 此刻有没有一个可用于控制的实例。判据:控制面可达,**或**(自管档且 supervisor 报了 pid)。
+   * 此刻有没有一个可用于控制的实例。判据:控制面可达,**或**(embedded 且认尸文件判 running)。
    * 后半句保住了旧口径里那条独立事实 ——「进程活着但控制面还没就绪」不该被说成"没在跑"。
    * 别人那份没有后半句:它的进程生死归原托管方,内核对它只有控制面这一个观察窗口(这是红线,不是遗漏)。
    */
@@ -63,6 +63,25 @@ export async function resolveProxyTarget(
 
   // embedded:代理域的对话对象恒是自己那份(它归 a2 管,写面的闸门也只对它开)。
   if (status.mode === "embedded") {
+    // 故障态给**准确的码**(CR M5):mihomo_failed = 它在这台机器上、但坏着 ——
+    // 与 mihomo_unreachable(压根没有对象)是两种处境,agent 的下一步也不同(restart,不是 enable)。
+    if (status.embedded.state === "failed") {
+      throw new CapabilityFailedError(
+        "内置 mihomo 处于故障态(连续启动失败,已暂停重拉),代理控制面此刻没有对象。",
+        status.embedded.lastError ?? "最近一次失败没有留下 stderr 输出。",
+        {
+          code: ErrorCode.mihomoFailed,
+          guidance: {
+            summary: "对照 lastError 修好配置,再重启内置内核(故障计数清零)。",
+            steps: [
+              { description: "看故障详情(lastError 原文 + 配置路径)", command: "a2 mihomo status --json" },
+              { description: "修好后重启内置内核", command: "a2 mihomo restart --json" },
+            ],
+            context: { configPath: status.embedded.configPath },
+          },
+        },
+      );
+    }
     const secret = await readSecretOf(layout.configPath);
     const apiReachable = status.embedded.controllerReachable;
     return {

@@ -528,6 +528,28 @@ test("故障态:连续秒退 ×3 → failed + lastError 原文 + guidance 态 C;
   expect(back.embedded.restartCount).toBe(0);
 }, 30000);
 
+test("升级随行的另一半(CR):daemon 启动的 apply 也对表 —— 盘上旧版,拉起前自动换锁定版", async () => {
+  const box = (sandbox = await makeSandbox());
+  await placeManagedBinary(box);
+  await mihomo(box, ["enable", "--mode=embedded"]);
+
+  // 盘上那份此后"变旧"(自报 v1.18.0),渠道上摆着锁定版 —— daemon 起来的 apply 必须换掉它,
+  // 不等人重跑 enable(ADR 0014 D6:升级随 a2 走)。
+  const release = serveRelease(await releasePayload("# apply-upgraded"));
+  try {
+    box.daemon = await startDaemon(box.home, {
+      ...box.env,
+      A2_FAKE_MIHOMO_VERSION: "v1.18.0",
+      A2_MIHOMO_RELEASE_BASE: release.base,
+      A2_MIHOMO_EXPECT_SHA256: release.sha256,
+    });
+    await waitFor("apply 换上了锁定版", async () =>
+      (await readFile(box.managedBinary, "utf8")).includes("# apply-upgraded"));
+  } finally {
+    release.stop();
+  }
+}, 30000);
+
 test("restart 的两道闸:daemon 不在 → 退出码 4;模式不是 embedded → mihomo_not_enabled", async () => {
   const box = (sandbox = await makeSandbox());
 

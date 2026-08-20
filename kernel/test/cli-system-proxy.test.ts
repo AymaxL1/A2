@@ -320,3 +320,21 @@ test("红线:整场对 networksetup 说过的话,只有内核认得的那几条�
     }
   }
 });
+
+
+test("proxy on --port(14 票):observe 无 controller 的显式端口路 —— 不问 mihomo,端口由人负责", async () => {
+  const box = (sandbox = await makeProxySandbox());
+  await startProxyDaemon(box);
+
+  const result = await proxy(box, ["on", "--port", "7897"]);
+  expect(result.exitCode).toBe(0);
+  expect(out(result).port).toBe(7897);
+  const state = await networkState(box);
+  const wifi = state.services.find((s) => s.service === "Wi-Fi")!;
+  expect(wifi.http).toEqual({ enabled: true, host: "127.0.0.1", port: 7897 });
+
+  // 还原照旧走快照,与缺省路径同一条(显式端口不改变还原语义)。
+  const off = await proxy(box, ["off"]);
+  expect(off.exitCode).toBe(0);
+  expect(await networkState(box)).toEqual(INITIAL_NETWORK_STATE);
+});

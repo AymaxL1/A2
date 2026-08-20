@@ -8,13 +8,14 @@
 // 本文件不做任何裁定(那是 `src/mihomo/` 的事),只管:argv 怎么解析、结果怎么给人看。
 
 import {
+  ErrorCode,
   MihomoChangeResultSchema,
   MihomoStatusResultSchema,
   Op,
-  type MihomoAction,
   type MihomoChangeResult,
   type MihomoManagedMode,
   type MihomoStatusResult,
+  type OpOutcome,
 } from "../contract/wire.ts";
 import { callKernel } from "../client/kernel-client.ts";
 import { mihomoDisable, mihomoEnable, mihomoStatus } from "../mihomo/manager.ts";
@@ -65,12 +66,8 @@ export async function mihomoCommand(args: string[], paths: KernelPaths): Promise
         `enable 需要 --mode=observe 或 --mode=embedded(收到:${modeArg ?? "(缺省)"})`,
       );
     }
-    const outcome = await mihomoEnable(paths, modeArg);
-    const applied = outcome.ok ? await notifyDaemonApply(paths) : [];
     return outcomeFromOpOutcome(
-      outcome.ok && applied.length > 0
-        ? { ok: true, result: withExtraActions(outcome.result as MihomoChangeResult, applied) }
-        : outcome,
+      await withDaemonApply(paths, await mihomoEnable(paths, modeArg)),
       "mihomo.enable",
       MihomoChangeResultSchema,
       (result) => renderChange(result, "启用"),
@@ -78,12 +75,8 @@ export async function mihomoCommand(args: string[], paths: KernelPaths): Promise
   }
 
   if (action === "disable") {
-    const outcome = await mihomoDisable(paths);
-    const applied = outcome.ok ? await notifyDaemonApply(paths) : [];
     return outcomeFromOpOutcome(
-      outcome.ok && applied.length > 0
-        ? { ok: true, result: withExtraActions(outcome.result as MihomoChangeResult, applied) }
-        : outcome,
+      await withDaemonApply(paths, await mihomoDisable(paths)),
       "mihomo.disable",
       MihomoChangeResultSchema,
       (result) => renderChange(result, "停用"),
@@ -103,19 +96,29 @@ export async function mihomoCommand(args: string[], paths: KernelPaths): Promise
 }
 
 /**
- * 尽力通知 daemon「模式落盘了,照着办」。daemon 不在场不是错误 —— 模式已经落盘,
- * 它下次启动自然照办;status 的 guidance(态 G)会把「服务没跑」这件事说清楚。
- * daemon 在场且真做了事时,把它的动作(child_started / child_stopped)并进本次报文。
+ * 落盘之后,尽力让 daemon「立即照办」并**采纳它的答案**:
+ *   * daemon 不在场(`daemon_unreachable`)不是错误 —— 模式已落盘,它下次启动自然照办;
+ *     status 的 guidance(态 G)会把「服务没跑」这件事说清楚。**只有这一种失败可以静默**。
+ *   * daemon 在场且 apply 真失败(二进制被删、spawn 起不来…)→ 结构化错误**原样上抛**
+ *     (CR M1:吞掉它等于 enable 以 0 退出零痕迹,与「拒绝即指引」相抵)。
+ *   * apply 成功 → **整体采用它返回的 status**(CR H2:那才是拉起之后的实况;
+ *     留着落盘时算的旧 status 会出现 actions 说 child_started 而 status 说 stopped 的自相矛盾),
+ *     actions 则两段拼接(落盘动作 + 拉起动作,一次显式启用的完整账)。
  */
-async function notifyDaemonApply(paths: KernelPaths): Promise<MihomoAction[]> {
+async function withDaemonApply(paths: KernelPaths, outcome: OpOutcome): Promise<OpOutcome> {
+  if (!outcome.ok) return outcome;
+  const local = outcome.result as MihomoChangeResult;
   const envelope = await callKernel(paths, Op.mihomoApply);
-  if (!envelope.ok) return [];
+  if (!envelope.ok) {
+    if (envelope.error?.code === ErrorCode.daemonUnreachable) return outcome;
+    return { ok: false, error: envelope.error ?? { code: ErrorCode.mihomoOperationFailed, message: "mihomo.apply 失败且没有错误报文。" } };
+  }
   const parsed = MihomoChangeResultSchema.safeParse(envelope.result);
-  return parsed.success ? parsed.data.actions : [];
-}
-
-function withExtraActions(result: MihomoChangeResult, extra: MihomoAction[]): MihomoChangeResult {
-  return { ...result, actions: [...result.actions, ...extra] };
+  if (!parsed.success) return outcome;
+  return {
+    ok: true,
+    result: { status: parsed.data.status, actions: [...local.actions, ...parsed.data.actions] },
+  };
 }
 
 // MARK: - 人类面

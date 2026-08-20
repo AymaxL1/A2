@@ -112,7 +112,7 @@ export async function serviceInstall(
       actions.push(...kernelActions(converged.actions));
       let state = converged.state;
 
-      // **换了文件不等于换了进程**(与 `a2 mihomo upgrade` 同一条道理):bin 换了新 inode 而 unit
+      // **换了文件不等于换了进程**(内嵌 mihomo 的升级随行同一条道理):bin 换了新 inode 而 unit
       // 一个字没动时,收敛逻辑什么都不会做,跑着的那个进程还攥着旧 bin。这一步就是显式升级的落点。
       if (binChanged && before.pid !== undefined && !processReplaced(converged.actions, supervisor)) {
         await supervisor.restart();
@@ -236,8 +236,9 @@ export async function serviceUninstall(
       purge.removedUnits.push(plan.label);
     }
 
-    // ② a2 自管的 mihomo。plan 取的是 `a2 mihomo install` **会写的那一份**(同一个 layout、
-    //    同一个渲染器)—— 各拼一次路径就会有"purge 删的不是 install 装的"这种最难查的漂移。
+    // ② 旧版 a2 自装的 `com.a2.mihomo`(14 票起内核不再写它,这里只为拆干净)。
+    //    plan 的路径取自 `mihomoLayout`(与内嵌子进程同一个来源)—— 各拼一次路径就会有
+    //    "purge 删的不是当年装的"这种最难查的漂移。
     const mihomo = mihomoPlanFor(plan, paths);
     const removedMihomo = await removeUnit(mihomo, createSupervisor(mihomo));
     if (removedMihomo.state.pid !== undefined) {

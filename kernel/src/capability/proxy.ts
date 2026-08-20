@@ -454,11 +454,33 @@ function systemEnable(context: ProxyContext): Capability {
       risk: "normal",
       summary:
         "接管系统代理:把各网络服务的 HTTP/HTTPS/SOCKS 指向本机 mihomo 的混合端口(可逆写;还原请用 proxy.system.disable)",
-      parameters: [],
+      parameters: [
+        {
+          name: "port",
+          type: "number",
+          required: false,
+          // 14 票(spec §4):observe 模式下外来实例没开 controller 时,端口问不出来 ——
+          // 显式带参是唯一不猜的路(猜错端口 = 断网)。缺省仍取内核实况(GET /configs 的 mixed-port)。
+          description: "显式指定混合入站端口(observe 无 controller 时用;缺省取 mihomo 实况)",
+        },
+      ],
       cliAlias: ["proxy", "on"],
     },
-    handler: async () => {
+    handler: async (input) => {
       const net = networkSetup(context);
+      const explicit = typeof input["port"] === "number" && Number.isInteger(input["port"]) && (input["port"] as number) > 0
+        ? (input["port"] as number)
+        : undefined;
+      if (explicit !== undefined) {
+        // 显式端口:不问 mihomo(那正是它问不出来的处境),端口的正确性由给参数的人负责。
+        const result = await withSystemProxy(() => takeover(context.paths, net, "127.0.0.1", explicit));
+        return payload({
+          enabled: true,
+          host: result.snapshot.host,
+          port: result.snapshot.port,
+          status: await systemStatusResult(context, net, result.live),
+        });
+      }
       const target = await reachableTarget(context);
       // 端口取**内核实况**(`GET /configs` 的 mixed-port),不取配置文件里写的那个:
       // 内核正在听哪个端口只有它自己知道,接管必须指向真在听的那个。

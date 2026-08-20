@@ -169,7 +169,14 @@ export function ensureOwnedHeader(
     if (!match) continue;
     const key = (match[1] ?? match[2] ?? match[3]) as string;
     const want = desired.find(([k]) => k === key);
-    if (!want || seen.has(key)) continue;
+    if (!want) continue;
+    if (seen.has(key)) {
+      // owned 键出现第二次 = 重复键(yaml.v3 直接拒载)。第一处已被钉成 a2 的值,后面的丢弃。
+      lines.splice(i, 1);
+      i -= 1;
+      changed = true;
+      continue;
+    }
     seen.add(key);
     const wantedLine = `${want[0]}: ${want[1]}`;
     if (lines[i] !== wantedLine) {
@@ -188,7 +195,7 @@ export function ensureOwnedHeader(
 
 /**
  * 这份配置里**有没有节点**(guidance 态 F「尚未配置节点」的判据)。
- * 行级启发式,与本文件其余部分同一condition:零缩进 `proxies:` 后面跟着至少一个列表项,
+ * 行级启发式,与本文件其余部分同一口径:零缩进 `proxies:` 后面跟着至少一个列表项,
  * 或行内非空数组。判不准宁可判"有"(不该在人配好了之后还唠叨)。
  */
 export function configHasProxies(text: string): boolean {

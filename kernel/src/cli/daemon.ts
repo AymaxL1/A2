@@ -34,8 +34,9 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
   // 重拉归 child.ts,系统代理谁都不碰。(内嵌 mihomo 本体也随 daemon 起落 —— 14 票,见下方退出钩子。)
   runtime.supervisor.start();
 
-  // 照落盘的托管模式把内嵌子进程收敛到位(embedded → 拉起;其余 → 确保停着)。
-  // 不 await:下载/认尸再慢也不该拦着 socket 就绪;失败会体现在 status 的故障态里,不该拦启动。
+  // 照落盘的托管模式把内嵌子进程收敛到位(embedded → 拉起前对表二进制,再拉起;其余 → 确保停着)。
+  // 「升级随 a2 走」的落点之一就在这次对表(ADR 0014 D6:a2 升级 → 下次拉起前自动换锁定版)。
+  // 不 await:对表/认尸再慢也不该拦着 socket 就绪;失败以 stopped/failed 之态入 status,不拦启动。
   void mihomoApplyOp(paths, runtime.mihomo).catch(() => {});
 
   emitEvent("daemon.listening", {

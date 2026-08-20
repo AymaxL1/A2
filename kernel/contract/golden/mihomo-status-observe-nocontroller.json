@@ -22,7 +22,7 @@
     "steps": [
       {
         "description": "如需接管系统代理,先向用户问到 mihomo 的混入端口,再显式带参执行",
-        "command": "a2 proxy system enable --port <端口> --json"
+        "command": "a2 proxy on --port <端口> --json"
       }
     ],
     "context": {

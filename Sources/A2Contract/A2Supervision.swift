@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// 实例归属(对照 `MihomoOwnerSchema`):`a2` = `com.a2.mihomo` 托管的那份;`foreign` = 别人的。
+/// 实例归属(对照 `MihomoOwnerSchema`):`a2` = 内核内嵌的那份子进程(14 票);`foreign` = 别人的。
 public enum A2MihomoOwner: String, Sendable, Codable, Equatable, CaseIterable {
     case a2
     case foreign

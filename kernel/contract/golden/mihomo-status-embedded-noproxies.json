@@ -1,0 +1,39 @@
+{
+  "mode": "embedded",
+  "embedded": {
+    "state": "running",
+    "binaryPath": "/Users/alice/.a2/mihomo/bin/mihomo",
+    "lockedVersion": "v1.19.28",
+    "configPath": "/Users/alice/.a2/mihomo/config.yaml",
+    "dataDir": "/Users/alice/.a2/mihomo",
+    "controller": "127.0.0.1:9097",
+    "controllerReachable": true,
+    "hasProxies": false,
+    "restartCount": 0,
+    "pid": 4242,
+    "binaryVersion": "v1.19.28"
+  },
+  "guidance": {
+    "summary": "内置 mihomo 运行中,但配置里没有任何代理节点(当前为空配置、全部直连)。需要把用户的订阅或节点写进配置才真正可用。",
+    "steps": [
+      {
+        "description": "向用户要订阅链接(机场订阅 URL)或节点信息"
+      },
+      {
+        "description": "读取订阅内容,把其中的节点(proxies)合并写进配置文件(/Users/alice/.a2/mihomo/config.yaml)——这是你(agent)直接读改 YAML 的活;只搬 proxies 与所需分组,不要把订阅里的 rules 整份搬来覆盖已有策略"
+      },
+      {
+        "description": "重启内置内核使配置生效",
+        "command": "a2 mihomo restart --json"
+      },
+      {
+        "description": "确认代理已可用",
+        "command": "a2 proxy status --json"
+      }
+    ],
+    "context": {
+      "configPath": "/Users/alice/.a2/mihomo/config.yaml"
+    }
+  },
+  "home": "/Users/alice/.a2"
+}

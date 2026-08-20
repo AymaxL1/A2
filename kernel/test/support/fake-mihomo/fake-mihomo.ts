@@ -248,12 +248,18 @@ const server = Bun.serve({
   },
 });
 
-// 真 mihomo 收到 SIGTERM 干净退出(main.go);假件照办,好让 supervisor 的停/重启语义成立。
+// 真 mihomo 收到 SIGTERM 干净退出(main.go);假件照办,好让停/重启语义成立。
+// `A2_FAKE_MIHOMO_IGNORE_SIGTERM=1` = 「卡死不理 SIGTERM」档(14 票):
+// 验 stop() 的宽限→SIGKILL 升级与认尸补刀,没有这一档那两条路径就是零覆盖。
 const stop = () => {
   server.stop(true);
   process.exit(0);
 };
-process.on("SIGTERM", stop);
+if (process.env["A2_FAKE_MIHOMO_IGNORE_SIGTERM"] === "1") {
+  process.on("SIGTERM", () => {});
+} else {
+  process.on("SIGTERM", stop);
+}
 process.on("SIGINT", stop);
 
 console.log(`fake mihomo ${version} listening on ${server.hostname}:${server.port} (config ${bootConfigPath})`);
