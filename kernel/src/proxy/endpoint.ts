@@ -123,7 +123,7 @@ export async function resolveProxyTarget(
 
 /**
  * 要求控制面此刻真的答话 —— 凡是要发写请求的能力,开头都得过这一关。
- * 拒绝报文里那条「人类可执行的重启命令」与 06 票 `mihomo install` 给的是同一句话(同源,不另写)。
+ * 拒绝报文里那条「人类可执行的命令」与 status 的 guidance 同源(restart / enable,不另写一套)。
  */
 export function requireReachable(target: ProxyTarget): void {
   if (target.apiReachable) return;

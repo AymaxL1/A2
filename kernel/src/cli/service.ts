@@ -43,7 +43,7 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
     return serviceUsageOutcome(`service ${action} 不接受多余参数:${rest.join(" ")}`);
   }
   // `--copy-to-home` 只对 install 有意义。默默忽略等于让人以为它生效了,所以照用法错处理
-  // (与 `a2 mihomo install --isolated` 同一口径)。
+  // (与 `a2 mihomo enable --mode=…` 对动作的挑剔同一口径)。
   if (copyToHome && action !== "install") {
     return serviceUsageOutcome(
       `${COPY_TO_HOME_FLAG} 只对 install 有意义(收到:service ${action} ${COPY_TO_HOME_FLAG})`,

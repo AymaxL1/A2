@@ -154,7 +154,7 @@ export async function downloadLockedBinary(
       {
         summary: "摘要不符只有两种可能:渠道被改了,或锁定版元数据过时了。两种都不该由内核自作主张。",
         steps: [
-          { description: "换回官方渠道再试一次", command: "a2 mihomo install --json" },
+          { description: "换回官方渠道再试一次(幂等)", command: "a2 mihomo enable --mode=embedded --json" },
           { description: "查当前锁定版与本机现状", command: "a2 mihomo status --json" },
         ],
         context: { url, expectedSha256: expected, actualSha256: actual },

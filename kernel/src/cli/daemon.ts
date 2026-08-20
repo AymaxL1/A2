@@ -30,8 +30,8 @@ export async function daemonRunCommand(paths: KernelPaths): Promise<CommandOutco
     return startFailureOutcome(error, paths);
   }
 
-  // 存活观测跟着 daemon 起落 —— 它是**只读**观测(见 `proxy/supervision.ts` 文件头),
-  // 停掉它不会碰 mihomo 一根汗毛,也不会动系统代理:数据面不随控制面起落。
+  // 存活观测跟着 daemon 起落 —— 它是**只读**观测(见 `proxy/supervision.ts` 文件头):
+  // 重拉归 child.ts,系统代理谁都不碰。(内嵌 mihomo 本体也随 daemon 起落 —— 14 票,见下方退出钩子。)
   runtime.supervisor.start();
 
   // 照落盘的托管模式把内嵌子进程收敛到位(embedded → 拉起;其余 → 确保停着)。

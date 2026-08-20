@@ -39,7 +39,7 @@ export interface Capability {
  *   * `code` —— 换一个已登记的 `ErrorCode`(如 `mihomo_unreachable`),让 agent 能按细因分支;
  *     退出码仍由 `exitCodeForErrorCode` 统一裁,能力自己决定不了自己的退出码。
  *   * `guidance` —— 「拒绝即指引」不该只属于仲裁层:代理域的失败大多有一条人类可执行的下一步
- *     (「把你自己的 mihomo 拉起来」「先 a2 mihomo install」),不带上就等于让 agent 猜。
+ *     (「把你自己的 mihomo 拉起来」「先 a2 mihomo enable」),不带上就等于让 agent 猜。
  */
 export class CapabilityFailedError extends Error {
   readonly code: ErrorCode;

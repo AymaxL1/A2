@@ -212,9 +212,10 @@ test("service install(launchd):plist 落位、自愈自启键齐全、A2_HOME �
   const plist = await readFile(box.unitPath, "utf8");
   expect(plist).toContain("<key>Label</key>");
   expect(plist).toContain(`<string>${LABEL}</string>`);
-  // 自愈与自启:崩溃由 launchd 重拉(KeepAlive.Crashed),装载即起(RunAtLoad)。应用层不造看门狗。
+  // 自愈与自启:崩溃由 launchd 重拉(Crashed),kill -9 由 SuccessfulExit:false 兜住(14 票/03 研究,
+  // OR 语义;代价 = 主动停止路径必须 exit 0)。装载即起(RunAtLoad)。对 a2 自身,应用层仍不造看门狗。
   expect(plist).toContain("<key>KeepAlive</key>");
-  expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>Crashed<\/key>\s*<true\/>/);
+  expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>Crashed<\/key>\s*<true\/>\s*<key>SuccessfulExit<\/key>\s*<false\/>/);
   expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/);
   // supervisor 不读 shell 配置:A2_HOME 必须写进 unit,否则托管实例会去管 ~/.a2。
   expect(plist).toMatch(

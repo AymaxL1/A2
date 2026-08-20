@@ -3,7 +3,7 @@
 // **纯计算**:只产出字符串与路径,不碰 launchctl/systemctl(那是 supervisor.ts 的事),也不写盘。
 // 这样"内容对不对""路径对不对"两件事在测试里可以逐字断言,而不必真的装一次服务。
 //
-// 自愈与自启全在这份内容里(ADR 0008 第 6 条):launchd `KeepAlive.Crashed` + `RunAtLoad`,
+// 自愈与自启全在这份内容里(ADR 0008 第 6 条 + 14 票修订):launchd `KeepAlive.{Crashed,SuccessfulExit:false}` + `RunAtLoad`,
 // systemd `Restart=on-failure` + `WantedBy=default.target`。应用层不造看门狗 —— 内核崩了由系统重拉,
 // 内核被显式停掉(SIGTERM)则**不**重拉(两种 supervisor 的语义在这一点上恰好一致)。
 
@@ -228,14 +228,15 @@ function xmlEscape(value: string): string {
 /**
  * launchd user 域 plist。
  *
- * `KeepAlive` 只给 `Crashed`(而不是 `true`):崩溃(SIGSEGV 等)由 launchd 重拉,
- * 而**显式停服(SIGTERM)不重拉** —— 否则 `a2 service uninstall` 之外的任何停都会被系统顶回来。
+ * `KeepAlive` 是双键 `{Crashed:true, SuccessfulExit:false}`(14 票 / 03 研究,OR 语义):
+ *   * `Crashed` 管典型崩溃信号(SIGSEGV/SIGABRT,实测约 ThrottleInterval 后重拉);
+ *   * `SuccessfulExit:false` 补上 **`kill -9` 那一格** —— man page 的 `Crashed` 不把 SIGKILL 当崩溃
+ *     (「有人存心弄死它」),而 jetsam 杀内存大户用的恰是 SIGKILL;`SuccessfulExit:false` 按
+ *     「非 0 退出就重拉」兜住它(信号致死无退出码,算非 0;03 票实测 SIGKILL 后约 30s 重拉)。
+ *   * **代价是一条红线**:一切主动停止路径(uninstall bootout、daemon 正常关闭)必须以 **exit 0**
+ *     收尾,否则 launchd 会把刚停的服务顶回来 —— daemon 的退出钩子(`cli/daemon.ts`)为此负责。
  * `ThrottleInterval` 写成默认值 10s,是为了让"崩溃循环会被节流"这件事在文件里看得见。
- *
- * **两端语义的一处不对称(实测,已知并接受)**:launchd 的 `Crashed` 按 man page 只认"典型崩溃信号"
- * —— 本机实测 SIGSEGV / SIGABRT 会重拉(各约 9s,即 ThrottleInterval),而 **`kill -9`(SIGKILL)不会**
- * (launchd 视之为"有人存心弄死它");systemd 的 `Restart=on-failure` 则把任何信号致死都算 failure,
- * 因此 Linux 那边 `kill -9` 也会重拉。两边都符合各自的"崩溃自愈"承诺,差别只在 SIGKILL 这一格。
+ * systemd 的 `Restart=on-failure` 本就把信号致死都算 failure,两端自此对齐(SIGKILL 一格不再不对称)。
  */
 export function renderLaunchdPlist(spec: UnitSpec): string {
   const lines: string[] = [
@@ -270,6 +271,8 @@ export function renderLaunchdPlist(spec: UnitSpec): string {
     "\t<dict>",
     "\t\t<key>Crashed</key>",
     "\t\t<true/>",
+    "\t\t<key>SuccessfulExit</key>",
+    "\t\t<false/>",
     "\t</dict>",
     "\t<key>ThrottleInterval</key>",
     "\t<integer>10</integer>",

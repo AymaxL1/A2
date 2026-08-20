@@ -62,8 +62,8 @@ export const PRODUCT_LICENSE =
 /** 升级口径:**没有静默更新**,升级永远是显式动作。 */
 export const UPGRADE_POLICY =
   "升级永远显式:重跑安装脚本(或直接换掉那个单文件 a2)即完成内核升级;" +
-  "mihomo 的升级是另一条显式命令 `a2 mihomo upgrade`。a2 不做静默更新、不后台自查版本、" +
-  "不会在你不知情时改变机器上的任何版本。";
+  "内嵌 mihomo 的版本锁死在 a2 里、随 a2 升级走(下次拉起前自动换成锁定版,没有独立的升级命令)。" +
+  "a2 不做静默更新、不后台自查版本、不会在你不知情时替你升级任何**别人的**东西。";
 
 /** 被调用的外部程序表。V1 只有一条,但形状是**表**——将来多一个外部程序,声明面不用改结构。 */
 export function externalPrograms(): ExternalProgram[] {

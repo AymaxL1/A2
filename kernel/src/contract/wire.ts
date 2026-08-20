@@ -1093,7 +1093,7 @@ export const ProxySupervisionEventSchema = z.object({
   controller: z.string().min(1),
   owner: MihomoOwnerSchema,
   detail: z.string().optional(),
-  /** `instance_down` 必带 —— 「人类如何完成」与 `a2 mihomo install` 那条同源。 */
+  /** `instance_down` 必带 —— 「人类如何完成」与 status 故障态(guidance 态 C)同源:restart。 */
   guidance: GuidanceSchema.optional(),
 });
 export type ProxySupervisionEvent = z.infer<typeof ProxySupervisionEventSchema>;
