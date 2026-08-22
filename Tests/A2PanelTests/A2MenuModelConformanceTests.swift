@@ -116,10 +116,20 @@ struct A2MenuModelConformanceTests {
         #expect(items(m).contains { $0.kind == .info && $0.title == "mihomo:未运行" })
         #expect(modeItem(m, "rule")?.enabled == false && modeItem(m, "global")?.enabled == false,
                 "mihomo 没跑时模式项应全部置灰(点了也只会失败,不给假入口)")
-        #expect(item(m, titled: "开启系统代理")?.enabled == false,
-                "mihomo 没跑时接管会指向死端口,应置灰")
+        // **2026-08-22 用户改判**:开启降为「复制指令给 AI 助手」的本地项,于是**不再置灰** ——
+        // mihomo 没跑恰恰更该找 agent(它会把整条链一起收拾),而不是对着灰掉的入口发呆。
+        // 「点了也只会失败」那条理由只对**直发命令**的项成立,对复制一段话不成立。
+        #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.enabled == true,
+                "改判后它只是复制一段指令,任何时候都该可点")
+        #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.kind == .local,
+                "不经 UDS:接管由 agent 按本机网络环境执行(能力仍注册,见 menuExemptCapabilities)")
         #expect(item(m, titled: "关闭系统代理(还原)")?.enabled == true,
                 "还原永远可点 —— 内核死了才更需要它,而且「退出即还原」已废除,这是唯一的还原入口")
+        // **救命按钮红线**(2026-08-22 裁定):关闭**不许**跟着开启改成 prompt。
+        // 系统代理指向死端口时机器就断网,那一刻 agent 自己都可能上不了网 —— 用户手上只剩这一项,
+        // 它必须是面板亲自发起的能力项,不经任何第三者转手。
+        #expect(item(m, titled: "关闭系统代理(还原)")?.kind == .action)
+        #expect(item(m, titled: "关闭系统代理(还原)")?.capabilityID == "proxy.system.disable")
         #expect(items(m).contains { $0.kind == .info && $0.title.contains("mihomo 未运行,不可用") })
         #expect(items(m).allSatisfy { $0.capabilityID != "proxy.node.select" || !$0.enabled })
         #expect(item(m, titled: "更新订阅")?.enabled == false)
@@ -149,8 +159,8 @@ struct A2MenuModelConformanceTests {
         })
         #expect(items(m).contains { $0.kind == .group && $0.title == "PROXY:HK-01" })
         // 14 票记的那条「已知缺口」(接管态没有只读能力面 → 菜单不显示勾选)在新契约下已填上。
-        #expect(item(m, titled: "开启系统代理")?.checked == true,
-                "systemProxy.takenOver=true 时「开启系统代理」应勾选(14 票的已知缺口已由 07 票契约填上)")
+        #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.checked == true,
+                "systemProxy.takenOver=true 时该项应勾选(14 票的已知缺口已由 07 票契约填上;改判成本地项后勾选照旧跟状态走)")
         #expect(item(m, titled: "关闭系统代理(还原)")?.checked == false)
     }
 
@@ -177,7 +187,7 @@ struct A2MenuModelConformanceTests {
             $0.capabilityID == "proxy.subscription.add" && $0.enabled
                 && Set($0.prompts.map(\.name)) == ["name", "source"]
         })
-        #expect(item(m, titled: "开启系统代理")?.checked == false)
+        #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.checked == false)
     }
 
     @Test("10/14 状态④(与内核断连):面板失联与内置内核随服务起落,两件事都如实说")

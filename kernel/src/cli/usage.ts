@@ -328,9 +328,12 @@ dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(�
 export const GUIDE_USAGE = `a2 guide —— 给 AI 助手的 A2 使用说明全文(08 票)
 
 用法:
-  a2 [--json] guide                打印说明全文(--json 时 result 形如 { "text": "<全文>" })
+  a2 [--json] guide                A2 本身怎么用(全文;--json 时 result 形如 { "text": "<全文>" })
+  a2 [--json] guide --mihomo       怎么把代理配起来:代理内核是怎么回事 + **本机此刻**的下一步
 
-不接受任何参数,**不经 daemon、不碰网络**:一个还没把内核服务装起来的 agent,恰恰最需要读到它。
+**不经 daemon、不碰网络**:一个还没把内核服务装起来的 agent,恰恰最需要读到它们。
+--mihomo 的步骤那一段**不是另写的一份**,而是 mihomo status 的 guidance 现取现渲染
+(同一个函数、同一套判据)—— 所以它对一台早就配好的机器不会再劝人从头启用。
 
 它说了什么:CLI 完整路径与 --json 纪律、开工前先跑哪三条 status、常用命令、
 mihomo 的配置归 agent 直接读改(含订阅节点怎么并)、以及两条边界(dangerous 只转告不绕过;

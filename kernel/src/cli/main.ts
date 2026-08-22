@@ -47,7 +47,9 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   // 给 AI 助手的使用说明(08 票)。与 version/help/about 同类:**不经 daemon、不碰网络** ——
   // 面板只给一句「先跑 a2 guide」的指针,全文永远来自当下这份 bin(说明随内核一起升级)。
   if (command === "guide") {
-    return guideCommand(args);
+    // `--mihomo` 那一路要读本机现状(它的步骤**就是** `mihomo status` 的 guidance,同一个函数生成),
+    // 于是要 paths;仍不经 daemon —— 现状读的是文件系统与只读探测。
+    return await guideCommand(args, resolvePaths());
   }
   if (command === "status") {
     if (args.length > 0) return usageOutcome(`status 不接受多余参数:${args.join(" ")}`);

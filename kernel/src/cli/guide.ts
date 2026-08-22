@@ -11,7 +11,14 @@
 // 文中路径**写死 `~/.a2/bin/a2`**(不插值 A2_HOME):它是给用户贴进对话框的一段话,
 // 而缺省安装就落在那里;自定义 A2_HOME 的人自己知道该换成什么,agent 照 status 的输出走即可。
 
-import { GuideResultSchema, opSuccess } from "../contract/wire.ts";
+import {
+  GuideResultSchema,
+  opSuccess,
+  type Guidance,
+  type MihomoStatusResult,
+} from "../contract/wire.ts";
+import { mihomoStatus } from "../mihomo/manager.ts";
+import type { KernelPaths } from "../runtime/paths.ts";
 import { KERNEL_VERSION } from "../runtime/version.ts";
 import { outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
 import { GUIDE_USAGE, guideUsageOutcome, helpOutcome } from "./usage.ts";
@@ -26,6 +33,9 @@ export const GUIDE_TEXT = `【给 AI 助手的 A2 使用说明】(A2 内核 ${KE
 · 用户若想在终端直接敲 a2:请转告 ta 自行加一行 export PATH="$HOME/.a2/bin:$PATH"(A2 刻意不改 shell 配置、不建 symlink——零 sudo、卸载才删得净;这是可选项,你自己始终用完整路径)
 · 每条命令都加 --json:stdout 只有一条 JSON 包封,成功失败同一形状;失败时读 error.code 与 error.guidance——guidance 里有修复步骤与命令原文,照做即可。
 · 全貌以本机为准:~/.a2/bin/a2 help;~/.a2/bin/a2 capabilities list --json
+
+■ 要把代理配起来(用户让你"配代理 / 装 mihomo"时,先读这个)
+· ~/.a2/bin/a2 guide --mihomo    # 代理内核怎么回事 + **这台机器此刻**的下一步(随现状变)
 
 ■ 先了解现状(开工前各跑一次)
 · ~/.a2/bin/a2 status --json          # 内核与服务状态
@@ -44,14 +54,79 @@ mihomo 的配置是一份 YAML,路径以 mihomo status 的输出为准。你可�
 · dangerous 档操作会被内核默拒并附「人类如何完成」的指引:转告用户,不要试图绕过。
 · 本机若有用户自己装的 mihomo(非 A2 管理):不要动它——对它只读。`;
 
-/** 同步返回:这条命令的全部事实都在编译进 bin 的那段文本里,没有任何 I/O 可等。 */
-export function guideCommand(args: string[]): CommandOutcome {
-  if (args[0] === "--help" || args[0] === "-h") return helpOutcome(GUIDE_USAGE);
-  if (args.length > 0) {
-    return guideUsageOutcome(`guide 不接受多余参数:${args.join(" ")}`);
+/**
+ * `--mihomo` 的**静态半边**:把代理内核这件事讲清楚(它是什么、会发生什么、边界在哪)。
+ *
+ * 这里**刻意不写"第几步敲什么命令"** —— 那是 `mihomo status` 的 guidance 的活,而 guidance
+ * 知道本机此刻的处境(还没启用?已经跑着但没节点?故障了?)。写死一份步骤在这里,等于把同一件事
+ * 说两遍:改一处忘一处不说,它还会对着一台"早就配好了"的机器,永远劝人从头启用。
+ * 于是这条命令的形态是:**静态散文 + 动态步骤**,后者由下面的 `renderGuidance` 从 guidance 现取。
+ */
+const MIHOMO_INTRO = `【给 AI 助手:把 A2 的代理配起来】
+
+A2 用 mihomo 作代理内核。启用「内置模式」之后,mihomo 是 A2 内核服务的子进程:
+随 A2 一起启动、一起退出,配置与保活都归 A2 管,用户不必自己伺候它。
+
+要点(动手前先读):
+· 首次启用会**下载** mihomo(约 15 MB,校验后落位)—— 下载、改配置这类动作,先征得用户同意。
+· 配置是一份 YAML,路径以 \`mihomo status\` 的输出为准,**直接读改它就是你的活**;改完 restart 生效。
+· 把机场订阅并进配置时**只搬节点**(proxies)与所需分组,别把订阅里的 rules 整份搬来覆盖用户已有策略。
+· 用户本机若另有他自己装的 mihomo(非 A2 管理):不要动它 —— A2 对它只读,你也只读。
+· 配好之后要不要接管系统代理(\`a2 proxy on\`),问过用户再说。
+
+下面是**这台机器此刻**的下一步(由内核按现状生成,与 \`a2 mihomo status --json\` 里的 guidance 同源):`;
+
+/** 把 guidance 渲染成人读的步骤块。**唯一的步骤出处**,壳与文档都不再各写一份。 */
+function renderGuidance(guidance: Guidance | undefined): string {
+  if (!guidance) {
+    // 没有 guidance = 内核认为此刻无事可做(如 embedded 跑着、节点也配好了)。
+    // 与其编一段假的下一步,不如如实说,并把"去哪看现状"给出来。
+    return [
+      "内核此刻没有给出下一步 —— 多半是代理已经配好在跑了。",
+      "确认一眼:~/.a2/bin/a2 mihomo status --json",
+    ].join("\n");
   }
+  const lines = [guidance.summary, ""];
+  guidance.steps.forEach((step, index) => {
+    lines.push(`${index + 1}. ${step.description}`);
+    if (step.command) lines.push(`   ~/.a2/bin/${step.command}`);
+  });
+  return lines.join("\n");
+}
+
+/**
+ * `a2 guide` = A2 本身怎么用;`a2 guide --mihomo` = 怎么把代理配起来(2026-08-22 用户裁定的分工)。
+ *
+ * 前者是纯静态文本(没有 I/O 可等);后者要读一次本机现状,所以整条命令是 async。
+ * 两者都**不经 daemon**:说明与指引必须在服务还没跑起来的时候就读得到。
+ */
+export async function guideCommand(args: string[], paths: KernelPaths): Promise<CommandOutcome> {
+  if (args[0] === "--help" || args[0] === "-h") return helpOutcome(GUIDE_USAGE);
+
+  const mihomo = args.includes("--mihomo");
+  const rest = args.filter((arg) => arg !== "--mihomo");
+  if (rest.length > 0) {
+    return guideUsageOutcome(`guide 只认 --mihomo(收到多余参数:${rest.join(" ")})`);
+  }
+
+  if (!mihomo) {
+    return outcomeFromOpOutcome(
+      opSuccess({ text: GUIDE_TEXT }),
+      "guide",
+      GuideResultSchema,
+      (result) => result.text,
+    );
+  }
+
+  // 现状读不出来(极少见:文件系统层面的意外)也别让这条命令哑掉 —— 静态半边照样值得读,
+  // 步骤那半边如实说"问不出来,去跑 status"。指引不许因为一次读失败就变成空白。
+  const outcome = await mihomoStatus(paths);
+  const status = outcome.ok ? (outcome.result as MihomoStatusResult) : undefined;
+  const text = `${MIHOMO_INTRO}\n\n${
+    status ? renderGuidance(status.guidance) : "(本机现状读取失败,请直接跑 ~/.a2/bin/a2 mihomo status --json 看它怎么说)"
+  }`;
   return outcomeFromOpOutcome(
-    opSuccess({ text: GUIDE_TEXT }),
+    opSuccess({ text }),
     "guide",
     GuideResultSchema,
     (result) => result.text,

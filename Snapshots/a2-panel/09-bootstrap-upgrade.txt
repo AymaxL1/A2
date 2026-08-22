@@ -8,7 +8,7 @@
 [separator]
 [info disabled] mihomo:未运行  → proxy.status  @basicStatus
 [separator]
-[action disabled] 开启系统代理  → proxy.system.enable  @systemProxyToggle  (mihomo 未运行,接管后会指向死端口)
+[local enabled] 开启系统代理(复制指令给 AI 助手)  ⇢ local:copySystemProxyPrompt
 [action enabled checked] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
 [separator]
 [action disabled] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch  (mihomo 未运行)

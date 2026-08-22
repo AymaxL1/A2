@@ -157,7 +157,11 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
         case .copyInstallMihomoPrompt:
             presentForAssistant(A2AssistantGuide.installMihomoPrompt,
                                 title: "把这段指令交给你的 AI 助手",
-                                note: "它会先读本机的使用说明,再按下面的流程配好代理;要动你的东西时会先问你。")
+                                note: "它会先读本机的使用说明,再按内核当下给出的步骤配好代理;要动你的东西时会先问你。")
+        case .copySystemProxyPrompt:
+            presentForAssistant(A2AssistantGuide.systemProxyPrompt,
+                                title: "把这段指令交给你的 AI 助手",
+                                note: "接管系统代理要看本机网络环境行事,所以交给它。要关掉随时回菜单点「关闭系统代理(还原)」。")
         }
     }
 

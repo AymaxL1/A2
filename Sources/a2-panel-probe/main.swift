@@ -298,7 +298,10 @@ final class Probe: A2PanelSessionDelegate {
             .joined(separator: ",")
         let active = items.first { $0.capabilityID == "proxy.subscription.activate" && $0.checked }?
             .params["id"]?.stringValue ?? "-"
-        let systemProxy = items.contains { $0.capabilityID == "proxy.system.enable" && $0.checked } ? "on" : "off"
+        // 2026-08-22 改判:「开启系统代理」从能力项降为**本地项**(复制指令给 agent,接管归它按
+        // 本机网络环境执行),于是这里不能再按 capabilityID 找它 —— 判据换成那条本地动作。
+        // 勾选态本身的含义一个字没变:它照旧直接来自 `proxy.status` 的 `systemProxy.takenOver`。
+        let systemProxy = items.contains { $0.localAction == .copySystemProxyPrompt && $0.checked } ? "on" : "off"
         return "PANEL_MENU: mode=\(mode) nodes=\(nodes.isEmpty ? "-" : nodes) active=\(active) "
             + "systemProxy=\(systemProxy) running=\(state.proxy.kernelRunning ? 1 : 0) "
             + "groups=\(state.proxy.groups.count) subs=\(state.proxy.subscriptions.count) items=\(items.count)"

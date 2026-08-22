@@ -209,17 +209,14 @@ struct A2BootstrapMenuTests {
         #expect(guideEntry.contains("~/.a2/bin/a2 guide"))
         // 指令那一段的第一步同样是 `a2 guide`,第二步才是照 mihomo status 的 guidance 办。
         #expect(prompt.contains("~/.a2/bin/a2 guide"))
-        #expect(prompt.contains("~/.a2/bin/a2 mihomo status --json"))
+        #expect(prompt.contains("~/.a2/bin/a2 guide --mihomo"))
         #expect(prompt.contains("先征得我的同意"))
-        // **2026-08-22 用户改判:五步流程写成明文**(prompt 是给人过目再贴的,不许把内容藏进命令输出)。
-        // 每条命令原文都在,人不跑任何东西也读得懂将要发生什么。
-        #expect(prompt.contains("~/.a2/bin/a2 mihomo enable --mode=embedded --json"))
-        #expect(prompt.contains("~/.a2/bin/a2 mihomo restart --json"))
-        #expect(prompt.contains("~/.a2/bin/a2 proxy status --json"))
-        #expect(prompt.contains("约 15 MB"))
-        #expect(prompt.contains("不要把订阅里的 rules 整份搬来覆盖已有策略"))
-        // 明文流程会漂(本机现状与写死的步骤未必一致),所以锚必须留着:冲突时听 guidance 的。
-        #expect(prompt.contains("以它输出里的 guidance 为准"))
+        // **2026-08-22 定稿:壳里不留第二份流程**(明文归 `a2 guide --mihomo`,而那份的步骤
+        // 又是 `mihomo status` 的 guidance 现渲染的)。所以这段**必须短**:两行指路 + 一句边界。
+        // 有人手痒把命令流程往回抄,这条断言就会红 —— 它守的是"同一件事只有一处出处"。
+        #expect(!prompt.contains("--mode=embedded"))
+        #expect(!prompt.contains("mihomo restart"))
+        #expect(prompt.split(separator: "\n").count <= 5)
     }
 
     @Test("08 已装版不再拼当前状态:全文归 `a2 guide`,壳这边不留第二份会漂的长文")

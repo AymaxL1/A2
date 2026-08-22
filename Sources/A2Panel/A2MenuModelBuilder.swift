@@ -111,18 +111,27 @@ public enum A2MenuModelBuilder {
         //
         // 14 票在这里记过一条「已知缺口」:接管态没有只读能力面,菜单只能并列两项、不显示勾选。
         //   新契约把 `systemProxy.takenOver` 写进了 `proxy.status`(07 票),**缺口已填** —— 显示勾选态。
+        // **2026-08-22 用户裁定:开启改走 agent**。接管要看本机网络环境行事(哪个网络服务、
+        // 端口取哪个、要不要绕过内网),那是需要现场判断的活;面板一键接管在别的机器上未必对。
+        // 于是这一项从「能力项(经 UDS 发起)」降为「本地项(复制一段指令)」——
+        // `proxy.system.enable` 仍在内核注册表里,agent 照常调得到,只是不再有菜单入口
+        // (对账见 `A2PanelFixtures.menuExemptCapabilities`)。
+        //
+        // **不按 mihomo 在不在跑来禁用**:mihomo 没跑恰恰更该找 agent(它会把整条链一起收拾),
+        // 而不是让人对着一个灰掉的入口发呆。
         if has("proxy.system.enable") {
             items.append(A2MenuItemModel(
-                kind: .action, title: "开启系统代理",
-                enabled: proxy.kernelRunning,
+                kind: .local, title: "开启系统代理(复制指令给 AI 助手)",
+                enabled: true,
                 checked: proxy.systemProxyTakenOver,
-                capabilityID: "proxy.system.enable",
-                userAction: .systemProxyToggle,
-                disabledReason: proxy.kernelRunning ? nil : "mihomo 未运行,接管后会指向死端口"))
+                localAction: .copySystemProxyPrompt))
         }
         if has("proxy.system.disable") {
             // 关闭**永远可点**:mihomo 死了才更需要还原系统代理(否则用户滞留断网态)。
             //   新架构里这条更重要 —— 「退出即还原」已废除,还原**只能**由这条显式命令发起。
+            //   2026-08-22 用户裁定又给了它第二重身份:**救命按钮**。系统代理一旦指向死端口,
+            //   机器就断网,连 agent 自己都可能上不了网 —— 那一刻用户手上只剩这一项。
+            //   所以它**刻意不跟着开启那项改成 prompt**:救命的东西不许经第三者转手。
             items.append(A2MenuItemModel(
                 kind: .action, title: "关闭系统代理(还原)",
                 checked: !proxy.systemProxyTakenOver,

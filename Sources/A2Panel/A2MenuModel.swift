@@ -41,6 +41,9 @@ public enum A2PanelLocalAction: String, Sendable, Equatable, CaseIterable {
     /// 把**「请帮我把代理用起来」那段指令**拷进剪贴板(08 票):小白主流程的入口 ——
     /// 用户自己不必懂 mihomo 是什么,把这段贴给 agent,由 agent 照 `mihomo status` 的 guidance 办。
     case copyInstallMihomoPrompt
+    /// 把**「请帮我开启系统代理」那段指令**拷进剪贴板(2026-08-22 用户裁定):
+    /// 接管要看本机网络环境行事,交给 agent;**关闭**则相反 —— 那条留在菜单里由面板亲自发起(救命按钮)。
+    case copySystemProxyPrompt
 }
 
 // ============================================================================

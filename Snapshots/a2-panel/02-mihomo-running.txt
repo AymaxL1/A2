@@ -6,7 +6,7 @@
 [info disabled] mihomo:运行中 v1.19.28  → proxy.status  @basicStatus
 [info disabled] 模式:规则 · 节点:HK-01 · 端口:7890  → proxy.status  @basicStatus
 [separator]
-[action enabled checked] 开启系统代理  → proxy.system.enable  @systemProxyToggle
+[local enabled checked] 开启系统代理(复制指令给 AI 助手)  ⇢ local:copySystemProxyPrompt
 [action enabled] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
 [separator]
 [action enabled checked] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch

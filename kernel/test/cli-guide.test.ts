@@ -9,6 +9,7 @@
 // CLI 完整路径或边界两条,面板那句指针就成了指向空处的箭头。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { GuideResultSchema } from "../src/contract/wire.ts";
 import { cleanupHome, makeHome, parseJsonStdout, runCli, socketPathFor } from "./support/harness.ts";
@@ -96,4 +97,43 @@ test("顶层帮助列出 guide(可发现性:agent 不该靠猜才知道有这条
   const usage = parseJsonStdout(await runCli(["help", "--json"], { home })).result.usage as string;
 
   expect(usage).toContain("guide");
+});
+
+// MARK: - `--mihomo`(2026-08-22 用户裁定的分工:guide 讲 A2,guide --mihomo 讲配代理)
+
+test("guide --mihomo:静态散文 + **本机此刻**的步骤(步骤取自 guidance,壳与文档都不再各写一份)", async () => {
+  const result = await runCli(["guide", "--mihomo", "--json"], { home });
+
+  expect(result.exitCode).toBe(0);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(true);
+  expect(GuideResultSchema.safeParse(body.result).success).toBe(true);
+  const text = body.result.text as string;
+
+  // 静态半边:讲清楚会发生什么与边界(这些**不在** guidance 里,不构成第二份步骤)。
+  expect(text).toContain("【给 AI 助手:把 A2 的代理配起来】");
+  expect(text).toContain("约 15 MB");
+  expect(text).toContain("只搬节点");
+  expect(text).toContain("不要动它");
+  // 动态半边:干净的 home = 未启用,于是步骤必须是态 A 那条(与 mihomo status 同源)。
+  const status = parseJsonStdout(await runCli(["mihomo", "status", "--json"], { home }));
+  expect(text).toContain(status.result.guidance.summary);
+  expect(text).toContain(status.result.guidance.steps[0].command);
+});
+
+test("guide --mihomo:不经 daemon(socket 都没有也照样答话,退出 0)", async () => {
+  expect(existsSync(socketPathFor(home))).toBe(false);
+  const result = await runCli(["guide", "--mihomo", "--json"], { home });
+  expect(result.exitCode).toBe(0);
+  expect(parseJsonStdout(result).ok).toBe(true);
+  // 一个字节都没往 home 里写(读现状是只读的)。
+  expect(await readdir(home)).toEqual([]);
+});
+
+test("guide 只认 --mihomo:别的参数是用法错(退出码 1),错在哪原样回给人", async () => {
+  const result = await runCli(["guide", "--proxy", "--json"], { home });
+  expect(result.exitCode).toBe(1);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.message).toContain("--proxy");
 });
