@@ -151,25 +151,60 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
             }()
             // 服务态问不到时按"连上了就算装了"退一步:连得上内核,CLI 当然存在。
             let serviceInstalled = bootstrapState.serviceState.map { $0 != .notInstalled } ?? connected
-            copyForAssistant(A2AssistantGuide.text(serviceInstalled: serviceInstalled),
-                             note: "使用说明已复制,粘贴给你的 AI 助手即可。")
+            presentForAssistant(A2AssistantGuide.text(serviceInstalled: serviceInstalled),
+                                title: "给 AI 助手的使用说明",
+                                note: "复制后粘贴给你的 AI 助手即可。")
         case .copyInstallMihomoPrompt:
-            copyForAssistant(A2AssistantGuide.installMihomoPrompt,
-                             note: "指令已复制,粘贴给你的 AI 助手即可。")
+            presentForAssistant(A2AssistantGuide.installMihomoPrompt,
+                                title: "把这段指令交给你的 AI 助手",
+                                note: "它会先读本机的使用说明,再按下面的流程配好代理;要动你的东西时会先问你。")
         }
     }
 
-    /// 上剪贴板 + 反馈一句(04 票定稿):告诉人下一步是"贴给助手",而不是让这次点击悄无声息。
-    private func copyForAssistant(_ text: String, note: String) {
+    /// 呈现全文 + 上剪贴板(04 票「复制并反馈」→ 2026-08-22 用户改判为**先看清再复制**)。
+    ///
+    /// 旧行为是"点了就复制,再弹一句已复制":贴出去的是什么,人从头到尾没见过。而这两段文本
+    /// 恰恰是**要交给 agent 去动这台机器**的东西 —— 看不见就等于闭着眼睛授权。于是改成:
+    /// 弹窗里把全文原样摆出来(可选中、可滚动),人读完自己按「复制」。
+    /// 「关闭」那一路**一个字节都不进剪贴板**:不想复制的人不该被塞一嘴。
+    private func presentForAssistant(_ text: String, title: String, note: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = note
+        alert.addButton(withTitle: "复制")
+        alert.addButton(withTitle: "关闭")
+        alert.accessoryView = Self.selectableTextView(text)
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        let alert = NSAlert()
-        alert.messageText = "已复制"
-        alert.informativeText = note
-        alert.addButton(withTitle: "好")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+    }
+
+    /// 弹窗里那块正文:**可选中、可滚动、不可编辑**。
+    ///
+    /// 用 `NSTextView` 而不是 `NSTextField`:人可能只想拷其中一条命令去自己敲,而 label 选不中。
+    /// 高度按内容算并封顶 —— 说明全文比指令长得多,固定高度不是嫌它挤就是留一大片空白。
+    private static func selectableTextView(_ text: String) -> NSView {
+        let width: CGFloat = 460
+        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let textView = NSTextView()
+        textView.string = text
+        textView.font = font
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.frame = NSRect(x: 0, y: 0, width: width, height: 0)
+        textView.sizeToFit()
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: width,
+                                                height: min(max(textView.frame.height + 8, 120), 380)))
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .lineBorder
+        return scroll
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

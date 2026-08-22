@@ -27,17 +27,26 @@ public enum A2AssistantGuide {
         serviceInstalled ? installedText() : notInstalledText()
     }
 
-    /// 「安装 mihomo(复制指令给 AI 助手)」那一项复制的东西(08 票逐字定稿)。
+    /// 「安装 mihomo(复制指令给 AI 助手)」那一项呈现并复制的东西(08 票初稿→2026-08-22 用户改判)。
     ///
     /// 与上面两段的分野:那两段是**说明**(我是什么、怎么调),这一段是**指令**(请你替我做这件事)。
-    /// 它有意不写具体命令的参数,只把 agent 引到 `a2 guide` 与 `mihomo status` 的 guidance 上 ——
-    /// 下一步该敲什么,以内核当下说的为准;要下载、要改动的地方,先回来问用户。
+    /// 初稿只把 agent 引到 guidance 上(「照 status 说的办」),用户裁定改**明文**:五步流程原文写出来,
+    /// 人复制之前自己就能读懂要发生什么 —— prompt 是给人过目再贴的,不该把内容藏在命令输出里。
+    /// 防漂的锚仍在:每步动手前以 `mihomo status` 的 guidance 为准(比如已启用的机器,guidance 会直接跳到配置)。
     public static let installMihomoPrompt = [
         "【请帮我把代理用起来】",
         "1. 先运行 ~/.a2/bin/a2 guide,阅读本机 A2 的使用说明(给 AI 助手的)。",
-        "2. 然后运行 ~/.a2/bin/a2 mihomo status --json,按输出里 guidance 的步骤一步步来:",
-        "   需要做选择(如启用哪种模式)或要下载/改动时,先征得我的同意;",
-        "   配好节点后重启并验证代理可用,最后把结果告诉我。",
+        "2. 然后按下面流程把内置代理配好。每步动手前先跑 ~/.a2/bin/a2 mihomo status --json,",
+        "   以它输出里的 guidance 为准(与下面冲突时听 guidance 的,它知道本机现状):",
+        "   ① 看现状:~/.a2/bin/a2 mihomo status --json",
+        "   ② 与我确认后启用内置代理内核:~/.a2/bin/a2 mihomo enable --mode=embedded --json",
+        "      (首次会下载 mihomo,约 15 MB)",
+        "   ③ 问我要机场订阅链接(或节点信息),读取后把其中的节点(proxies)合并写进",
+        "      mihomo 的配置文件 —— 路径以 status 输出为准;只搬节点与所需分组,",
+        "      不要把订阅里的 rules 整份搬来覆盖已有策略",
+        "   ④ 重启生效:~/.a2/bin/a2 mihomo restart --json",
+        "   ⑤ 验证可用:~/.a2/bin/a2 proxy status --json,并把结果告诉我",
+        "要做选择、要下载、要改动我的东西时,先征得我的同意。",
     ].joined(separator: "\n")
 
     static func notInstalledText() -> String {

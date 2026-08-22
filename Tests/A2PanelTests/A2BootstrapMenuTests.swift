@@ -211,6 +211,15 @@ struct A2BootstrapMenuTests {
         #expect(prompt.contains("~/.a2/bin/a2 guide"))
         #expect(prompt.contains("~/.a2/bin/a2 mihomo status --json"))
         #expect(prompt.contains("先征得我的同意"))
+        // **2026-08-22 用户改判:五步流程写成明文**(prompt 是给人过目再贴的,不许把内容藏进命令输出)。
+        // 每条命令原文都在,人不跑任何东西也读得懂将要发生什么。
+        #expect(prompt.contains("~/.a2/bin/a2 mihomo enable --mode=embedded --json"))
+        #expect(prompt.contains("~/.a2/bin/a2 mihomo restart --json"))
+        #expect(prompt.contains("~/.a2/bin/a2 proxy status --json"))
+        #expect(prompt.contains("约 15 MB"))
+        #expect(prompt.contains("不要把订阅里的 rules 整份搬来覆盖已有策略"))
+        // 明文流程会漂(本机现状与写死的步骤未必一致),所以锚必须留着:冲突时听 guidance 的。
+        #expect(prompt.contains("以它输出里的 guidance 为准"))
     }
 
     @Test("08 已装版不再拼当前状态:全文归 `a2 guide`,壳这边不留第二份会漂的长文")
