@@ -44,7 +44,7 @@ amended: 2026-08-04
 
 ## 修订记录（2026-08-04）
 
-架构反转（[ADR 0008](0008-kernel-bin-ui-optional.md)）把「宿主 GUI 一定在」这条隐含前提拆了，原第 4 条随之重设计。用户 2026-08-04 现场面试五问逐条拍板（决策原文：`.scratch/kernel-bin-recharter/issues/05-dangerous-confirm-redesign.md`，**本机决策记录，未入库**），改动如下：
+架构反转（[ADR 0008](0008-kernel-bin-ui-optional.md)）把「宿主 GUI 一定在」这条隐含前提拆了，原第 4 条随之重设计。用户 2026-08-04 现场面试五问逐条拍板；事实调研见 [headless-confirm-patterns.md](../research/headless-confirm-patterns.md)，本节收录最终裁定：
 
 1. **第 4 条整条替换**：「dangerous 最终确认必须落宿主 GUI」→ **三层仲裁模型**（默拒 fail-closed / 拒绝即指引 / 确认器带外升级）。触发事实：无 GUI 成为一等公民运行形态后，「必须落 GUI」等于「无 GUI 端 dangerous 不可用且无出路」；第②层「拒绝即指引」补上了那条出路，且不给 agent 任何自批的口子。
 2. **新增「在场 = 长连接」判据**：确认器注册角色 + 保持长连接，断线即降级；不用心跳、不用轮询、不设陈旧状态窗口；内核校验对端 UID。

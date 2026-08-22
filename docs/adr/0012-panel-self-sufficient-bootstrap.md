@@ -12,7 +12,7 @@ date: 2026-08-09
 - **实际卡住的地方**：[ADR 0008](0008-kernel-bin-ui-optional.md) 第 6 条定了「常驻 = 显式安装 + 系统托管」，10 票的壳照此实现为纯壳（包里只有 `Contents/MacOS/a2-panel`）。于是一个只想点图标的 mac 用户的真实路径是：开终端 → `curl … | sh` 或手动下单文件 → `a2 service install` → 再回来双击 `.app`。**「可选客户端」在实践中前置了一段命令行**，而 mac 上想要 dangerous 确认弹窗的恰恰是最不想开终端的那批人。
 - **multica 的桌面端形态（参照要点）**：把 Go 二进制**打进 `.app`**、**GUI 只当发起者**（不自己实现业务逻辑）、**GUI 不把 CLI 装进 PATH**、**bin 版本随 app 走**（换 app 就换 bin，不做两条独立升级线）。这四条与本项目的薄壳铁律同向，本次原样采纳。
 - **a2 与 multica 的分野**：multica 的 daemon 是 GUI **fork 出来的子进程、无看门狗**。a2 **不学这一条**——常驻仍归 launchd 用户域托管（`RunAtLoad` + `KeepAlive.Crashed`），开机自启与崩溃自愈归系统 supervisor，应用层不造看门狗（[ADR 0008](0008-kernel-bin-ui-optional.md) 第 6 条不动）。旧版壳退出只断连；2026-08-22 的生命周期修订见下。
-- **macOS 的两条环境事实**：①**App Translocation**——带 `com.apple.quarantine` 的 app 从非标准位置首次启动时，系统会把它挂到一个随机只读位置再运行，包内绝对路径因此**不稳定**（【推断/高质量二手】，见 `docs/research/kernel-daemon-topology.md` §3，**该研究文档未入库**；本仓库未实测 translocation 本身）；②本地构建的 `.app` 不带 quarantine、但浏览器下载的 zip 会带，而 ad-hoc 签名的包过不了 Gatekeeper（**13 票本机实测**，见 [签名 runbook](../runbooks/signing-and-authorization.md) §6.1）。
+- **macOS 的两条环境事实**：①**App Translocation**——带 `com.apple.quarantine` 的 app 从非标准位置首次启动时，系统会把它挂到一个随机只读位置再运行，包内绝对路径因此**不稳定**（【推断/高质量二手】，见 [kernel-daemon-topology.md](../research/kernel-daemon-topology.md) §3；本仓库未实测 translocation 本身）；②本地构建的 `.app` 不带 quarantine、但浏览器下载的 zip 会带，而 ad-hoc 签名的包过不了 Gatekeeper（**13 票本机实测**，见 [签名 runbook](../runbooks/signing-and-authorization.md) §6.1）。
 - **决策原文**：`.scratch/a2-kernel/issues/14-panel-embed-kernel.md`（打包与门禁）、`15-service-copy-to-home.md`（内核侧机制）、`16-panel-bootstrap-ui.md`（UI）——**本机决策记录，未入库**；本 ADR 正文自足。
 
 ## Decision

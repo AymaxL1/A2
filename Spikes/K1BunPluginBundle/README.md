@@ -2,7 +2,7 @@
 
 > PROTOTYPE。本目录是「a2 内核 bin 化」效应的 02 票实验，验证一条依赖流能否走通，**代码不进产品**、可整目录删除。
 > 对应票：`.scratch/a2-kernel/issues/02-spike-bun-be-bun-build.md`（本机决策记录，未入库）。
-> 结论已追加进 [`docs/research/ts-kernel-runtime-bun.md`](../../docs/research/ts-kernel-runtime-bun.md) §8（该文档同为未入库的本机调研底稿）。
+> 结论已追加进 [`docs/research/ts-kernel-runtime-bun.md`](../../docs/research/ts-kernel-runtime-bun.md) §8。
 
 ## 回答的问题
 

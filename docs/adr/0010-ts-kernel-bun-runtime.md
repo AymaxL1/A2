@@ -13,7 +13,7 @@ supersedes: ADR-0002
 - ADR 0002 的前提是 Mac-only + UI 是必需品；反转后内核要跨端、要能把 agent 现场写的插件当子进程拉起，前提消失，语言全重议（用户首先明确排除「Swift 跨端」这条唯一免重写路线）。
 - **关键定性**：本内核是**控制面**不是数据面——流量在 mihomo 子进程里，内核只做生命周期、注册表、UDS API、确认仲裁。因此 Rust 的性能优势兑现不了，TS 的 GC/吞吐短板也大半打不到。
 - **决定性裁定**：插件北极星 =「**agent 现场写插件**」——插件≈一个 `.ts` 文本文件，agent 当场写、当场装、当场调用，内核 bin 用自带运行时把它作**子进程**拉起。此形态只有 TS 内核能做到最轻（Go 只能嵌 goja 折中）。安全（进程外隔离）与法律（跨语言天然隔离 mihomo）两关皆过之后，按裁决序轮到 agent-first 说话。
-- **本机实测背书**（`docs/research/ts-kernel-runtime-bun.md`，未入库）：Bun compile 产物 60.5MiB、冷启动 7.7–13ms、常驻 RSS 26.4MiB；`--target=bun-linux-x64` 交叉编译产出合法 ELF；编译产物内部 `Bun.spawn(process.execPath, …, { BUN_BE_BUN: "1" })` 能把编译期完全不存在的外部 `.ts` 当真正的子进程拉起；`bun:ffi` + `node:net` 取 fd 调 `getpeereid()` 在 macOS 完整打通。
+- **本机实测背书**（[ts-kernel-runtime-bun.md](../research/ts-kernel-runtime-bun.md)）：Bun compile 产物 60.5MiB、冷启动 7.7–13ms、常驻 RSS 26.4MiB；`--target=bun-linux-x64` 交叉编译产出合法 ELF；编译产物内部 `Bun.spawn(process.execPath, …, { BUN_BE_BUN: "1" })` 能把编译期完全不存在的外部 `.ts` 当真正的子进程拉起；`bun:ffi` + `node:net` 取 fd 调 `getpeereid()` 在 macOS 完整打通。
 - 决策原文：`.scratch/kernel-bin-recharter/issues/10-kernel-language-decision.md`、`.../11-ts-runtime-bun-verification.md`、`.../07-target-architecture-mapping.md`——**本机决策记录，未入库**；本 ADR 正文已自足。
 
 ## Decision

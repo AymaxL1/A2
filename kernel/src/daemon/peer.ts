@@ -17,8 +17,7 @@
 //   * 已知边界(同 UID 冒充 + fail-open)已写进 ADR 0005 与 ADR 0008 的修订记录。
 // **取到了但对不上,一律拒**——那才是真信号。
 //
-// 实现路径(macOS 侧实测过,见 `docs/research/ts-kernel-runtime-bun.md` §4.4 与其中本票加的更正框;
-// **该研究文档未入库**):
+// 实现路径(macOS 侧实测过,见 `docs/research/ts-kernel-runtime-bun.md` §4.4 与其中的更正框):
 //   * macOS:`getpeereid(fd, &uid, &gid)`(libSystem.B.dylib);
 //   * Linux:`getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &ucred, &len)`(libc.so.6),`struct ucred` 12 字节。
 // **协议层没有平台分支**:两端都只是"给一个 fd、要回一个 uid",所以「Linux 形态由构造保证」——

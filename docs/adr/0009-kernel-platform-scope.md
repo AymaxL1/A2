@@ -11,7 +11,7 @@ supersedes: ADR-0001
 ## Context
 
 - ADR 0001 把平台承诺收缩为 Mac-only，理由是三端承诺把技术栈锁在 Electron 系、为无真实需求的跨端能力持续付成本。这个理由在「UI 三端」的语境下成立；本次反转后，需要跨端的是**无头内核**（CLI 面），不是 UI——两者的成本结构完全不同，故重开并推翻。
-- 事实输入（本机调研 `docs/research/kernel-language-cross-platform.md`，未入库）：Swift 在 Linux 上扎实、在 Windows 上官方自认仍在补课；本机盘点显示平台绑定面只有 AppKit 三个壳 target（2386 行 / 18.9%），其余 10213 行纯逻辑可携带；**Windows 是常驻（SCM）、UDS（仅 SOCK_STREAM、无对端凭据）、POSIX 三处都要重新设计的独立一档**，不是「多编译一个 target」。
+- 事实输入（本机调研 [kernel-language-cross-platform.md](../research/kernel-language-cross-platform.md)）：Swift 在 Linux 上扎实、在 Windows 上官方自认仍在补课；本机盘点显示平台绑定面只有 AppKit 三个壳 target（2386 行 / 18.9%），其余 10213 行纯逻辑可携带；**Windows 是常驻（SCM）、UDS（仅 SOCK_STREAM、无对端凭据）、POSIX 三处都要重新设计的独立一档**，不是「多编译一个 target」。
 - 决策原文：`.scratch/kernel-bin-recharter/issues/01-premises-confirm.md`（跨端 = 当下承诺）与 `.../10-kernel-language-decision.md`（端范围连同语言一起裁）——**本机决策记录，未入库**；本 ADR 正文已自足。
 
 ## Decision
