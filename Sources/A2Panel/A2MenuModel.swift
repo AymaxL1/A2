@@ -35,9 +35,9 @@ import A2Contract
 /// 菜单里「动作整个发生在面板进程里」的那几项。加一条就多一个 case,
 /// 与白名单命令同一种纪律:**封闭枚举,逐字可对照**。
 public enum A2PanelLocalAction: String, Sendable, Equatable, CaseIterable {
-    /// 把「AI 助手使用说明」拷进剪贴板(05 票定稿;08 票起已装版是一句指向 `a2 guide` 的指针,
-    /// 未装版仍是那段"请用户点菜单装"的说明,见 `A2AssistantGuide`)。
-    case copyAssistantGuide
+    /// 把「初始化 A2」提示词拷进剪贴板:让 agent 创建/更新名为 `a2` 的个人 skill,
+    /// 而 skill 以本机 `a2 guide` 为动态事实源,见 `A2AssistantGuide`。
+    case copyInitializeA2Prompt
     /// 把**「请帮我把代理用起来」那段指令**拷进剪贴板(08 票):小白主流程的入口 ——
     /// 用户自己不必懂 mihomo 是什么,把这段贴给 agent,由 agent 照 `mihomo status` 的 guidance 办。
     case copyInstallMihomoPrompt

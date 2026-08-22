@@ -401,11 +401,11 @@ public enum A2MenuModelBuilder {
     }
 
     /// mihomo 区段(14 票 / 04·05 票定稿,08 票加装入口):状态行、「尚未配置节点」提示、
-    /// 「安装 mihomo」入口、重启项、AI 助手说明入口。
+    /// 「安装 mihomo」入口、重启项、初始化 A2 skill 入口。
     ///
     /// 与引导区段同一条隐藏纪律:没有内嵌 bin 就一项都不出(dev / 测试态菜单与 10 票逐字相同)。
-    /// 「复制 AI 助手使用说明」**未装也出现**(04 票裁定):内容随状态自适应 ——
-    /// 未装版教 agent 引导用户点菜单安装,而不是让一个装了面板的人自己去猜下一步。
+    /// 「初始化 A2（添加到 AI 助手）」**未装也出现**:内容随状态自适应 ——
+    /// 未装版先教 agent 引导用户点菜单安装,装好后再创建 skill。
     static func mihomoItems(state: A2PanelState, bootstrap: A2BootstrapState) -> [A2MenuItemModel] {
         guard bootstrap.embeddedBinAvailable else { return [] }
         var items: [A2MenuItemModel] = []
@@ -467,9 +467,9 @@ public enum A2MenuModelBuilder {
 
         items.append(A2MenuItemModel(
             kind: .local,
-            title: "复制 AI 助手使用说明",
+            title: "初始化 A2（添加到 AI 助手）",
             enabled: true,
-            localAction: .copyAssistantGuide))
+            localAction: .copyInitializeA2Prompt))
         return items
     }
 

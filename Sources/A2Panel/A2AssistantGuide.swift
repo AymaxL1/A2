@@ -1,30 +1,24 @@
-// A2Panel ——「给 AI 助手的使用说明」的**文本生成**(14 票 / 05 票定稿,08 票改判已装版)。
+// A2Panel ——「初始化 A2(添加到 AI 助手)」的**提示词生成**。
 // 纯函数,零 AppKit。
 //
-// 这段文本是 a2 面向 agent 的入口:小白把它贴给自己的 AI 助手,助手从此知道 CLI 在哪、
-// 怎么调、边界是什么。**第一读者是 agent**,人以第三人称出现。
+// 这段文本让 agent 创建一个名为 `a2` 的个人 skill。skill 刻意保持极薄:**只调用本机
+// `~/.a2/bin/a2 guide` 并按输出工作**。以后新增能力、升级说明、编号菜单与安全边界全部只改 guide,
+// 不在 skill 与壳里复制第二份。
 //
-// 三段文本,各有各的处境:
-//   * 服务未装 → 「未安装版」(05 票原样):只教 agent 引导用户点菜单装,**明文禁止绕后调 .app 内嵌 bin**;
-//   * 服务已装 → 「入口版」(**08 票改判**):从"全文副本"缩成**一句指针** —— 全文改由内核自报
-//     (`a2 guide`)。理由:说明要随内核一起升级,而剪贴板里那份是复制那一刻的快照;两处各写一份
-//     的口径迟早会分家,贴出去的还未必是本机这版内核的说法。壳这边少一份会漂的长文,
-//     agent 则永远读到当下这台机器上真正生效的那一份;
+// 四段文本,各有各的处境:
+//   * 服务未装 → 先教 agent 引导用户点菜单装,**明文禁止绕后调 .app 内嵌 bin**;安装完成后建 skill;
+//   * 服务已装 → 直接建/更新薄 skill,并立即调用一次完成初始化验收;
 //   * 「安装 mihomo」入口 → `installMihomoPrompt`(08 票新增):用户点一下,复制一段**给 agent 的
 //     指令**(先读说明、再按 mihomo status 的 guidance 走),把小白主流程从菜单接回对话里。
-// 未安装版的文案仍与 `.scratch/mihomo-embedded/assets/agent-guidance-copy-mock.html`(标签页①)同源。
+//   * 「开启系统代理」入口 → `systemProxyPrompt`:交给 agent 现场判断网络环境。
 
 import Foundation
 
 public enum A2AssistantGuide {
 
-    /// 生成要复制的那段文本。
-    ///
-    /// **08 票起只剩一个入参**:已装版不再拼当前状态(内核态 / mihomo 态 / 系统代理态),
-    /// 因为那些事实 agent 自己跑一条 `status` 就问得到,而且问到的是**此刻**的,不是复制那一刻的。
-    /// 留着一堆只为拼快照而存在的参数,只会让人以为这段文本还在反映什么。
-    public static func text(serviceInstalled: Bool) -> String {
-        serviceInstalled ? installedText() : notInstalledText()
+    /// 生成要复制的初始化提示词。只按 CLI 是否已经可用分流,不拼任何运行状态快照。
+    public static func initializationPrompt(serviceInstalled: Bool) -> String {
+        serviceInstalled ? installedInitializationPrompt() : notInstalledInitializationPrompt()
     }
 
     /// 「安装 mihomo(复制指令给 AI 助手)」那一项呈现并复制的东西。
@@ -56,29 +50,35 @@ public enum A2AssistantGuide {
         "要改我的网络设置前先问我。(要关掉的话我自己在菜单栏点「关闭系统代理(还原)」就行。)",
     ].joined(separator: "\n")
 
-    static func notInstalledText() -> String {
+    static func notInstalledInitializationPrompt() -> String {
         [
-            "【给 AI 助手的 A2 使用说明 · 尚未安装】",
+            "【请帮我初始化 A2 · 尚未安装】",
             "",
             "用户已下载 A2 Panel,但尚未安装内核服务——A2 的 CLI 此刻还不存在。",
             "",
             "请这样帮助用户:",
             "1. 请用户点击菜单栏的 A² 图标 →「安装并启动内核」,一次点击即完成",
             "   (含开机自启;若首启欢迎弹窗还开着,点「安装并启动」即可)。",
-            "2. 安装完成后,请用户再点一次「复制 AI 助手使用说明」,把新的说明粘贴给你——",
-            "   那份说明会告诉你 CLI 在哪、以及怎么读到完整用法,你就可以开始工作了。",
+            "2. 用户确认安装完成后,创建或更新名为 a2 的个人 skill,并安装到当前用户的全局 skill 目录;不要创建在当前项目或仓库里。",
+            "   这个 skill 只做一件事:",
+            "   每次使用时先运行 ~/.a2/bin/a2 guide,读取本机当前版本的说明并严格按输出继续。",
+            "3. 不要把 guide 的正文、命令清单或流程复制进 skill;以后所有升级内容都以 a2 guide 为准。",
+            "4. 创建完成后立刻使用一次 a2 skill,按 guide 的要求向用户展示下一步。",
             "",
             "注意:不要尝试直接调用 .app 包内的二进制替用户安装——安装 A2 是用户本人的一次显式点击。",
         ].joined(separator: "\n")
     }
 
-    /// 已装版 = **一句指针**(08 票逐字定稿)。全文在内核里(`a2 guide`),这里不再抄第二份。
-    static func installedText() -> String {
+    /// 已装版只负责生成/更新薄 skill。产品知识全部留在 `a2 guide`。
+    static func installedInitializationPrompt() -> String {
         [
-            "【给 AI 助手的 A2 使用说明 · 入口】",
-            "本机装有 A2(agent-first 的代理管理工具)。完整使用说明内置在 CLI 里,请先运行:",
-            "  ~/.a2/bin/a2 guide",
-            "照说明操作即可。(CLI 完整路径 ~/.a2/bin/a2,刻意不在 PATH 上。)",
+            "【请帮我初始化 A2】",
+            "请按你所在环境的 skill 规范,创建或更新一个名为 a2 的个人 skill。",
+            "必须把它安装到当前用户的用户级全局 skill 目录,让所有项目都能使用;不要创建在当前项目或仓库里。",
+            "这个 skill 只做一件事:每次使用时先运行 ~/.a2/bin/a2 guide,读取本机当前版本的说明并严格按输出继续。",
+            "不要把 guide 全文写死在 skill 里,也不要复制其中的命令清单、操作菜单或流程;以后所有功能与升级内容都只以 a2 guide 为准。",
+            "完成后立刻使用 a2 skill。它应先调用 a2 guide,再按 guide 的要求给我列出编号菜单,等待我选择。",
+            "(CLI 完整路径是 ~/.a2/bin/a2,刻意不在 PATH 上。)",
         ].joined(separator: "\n")
     }
 }

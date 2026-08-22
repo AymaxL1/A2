@@ -49,7 +49,7 @@ public final class A2MenuBarController: NSObject, NSMenuDelegate {
     /// 没有确认框、或那个框没有勾选框时恒 false。
     private let onBootstrap: (A2BootstrapMenuAction, Bool) -> Void
     /// 面板本地动作(14 票):不出面板进程的第三条出口
-    /// (两条:「复制 AI 助手使用说明」与 08 票的「安装 mihomo(复制指令给 AI 助手)」)。
+    /// (初始化 A2 skill、安装 mihomo 指令、开启系统代理指令)。
     private let onLocal: (A2PanelLocalAction) -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void

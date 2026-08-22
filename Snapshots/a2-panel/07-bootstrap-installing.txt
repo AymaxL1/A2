@@ -3,7 +3,7 @@
 [info disabled] 内核:未连接(内核未安装)— 仅本面板失联;内置代理内核随内核服务起落
 [bootstrap disabled] 安装并启动内核  ⇒ a2 service install --copy-to-home  (安装中,请稍候)
 [info disabled] ⏳ 安装中…(经包内内核 bin;装完面板会自动重连)
-[local enabled] 复制 AI 助手使用说明  ⇢ local:copyAssistantGuide
+[local enabled] 初始化 A2（添加到 AI 助手）  ⇢ local:copyInitializeA2Prompt
 [separator]
 [group enabled] 高级
   [bootstrap disabled] 停止并卸载内核服务…  ⇒ a2 service uninstall  (有引导操作在途)

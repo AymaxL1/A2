@@ -145,16 +145,16 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
     /// 文本由纯函数生成(`A2AssistantGuide`);这里只负责取状态、上剪贴板、给反馈。
     private func performLocal(_ action: A2PanelLocalAction) {
         switch action {
-        case .copyAssistantGuide:
+        case .copyInitializeA2Prompt:
             let connected: Bool = {
                 if case .connected = panelState.connection { return true }
                 return false
             }()
             // 服务态问不到时按"连上了就算装了"退一步:连得上内核,CLI 当然存在。
             let serviceInstalled = bootstrapState.serviceState.map { $0 != .notInstalled } ?? connected
-            presentForAssistant(A2AssistantGuide.text(serviceInstalled: serviceInstalled),
-                                title: "给 AI 助手的使用说明",
-                                note: "复制后粘贴给你的 AI 助手即可。")
+            presentForAssistant(A2AssistantGuide.initializationPrompt(serviceInstalled: serviceInstalled),
+                                title: "初始化 A2（添加到 AI 助手）",
+                                note: "复制后粘贴给你的 AI 助手;它会创建或更新名为 a2 的 skill。")
         case .copyInstallMihomoPrompt:
             presentForAssistant(A2AssistantGuide.installMihomoPrompt,
                                 title: "把这段指令交给你的 AI 助手",

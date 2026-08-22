@@ -24,9 +24,10 @@ date: 2026-08-18
 6. **升级随 a2 走**：mihomo 版本锁死在 a2 里；a2 升级后锁定版变 → 下次拉起子进程前自动换二进制（授权由 a2 升级本身的显式性覆盖）。独立 `a2 mihomo upgrade` 退场；`reuse_binary` 档退场，embedded 一律下载锁定版（SHA-256 校验照旧）。**mihomo 仍不随包分发**（[ADR 0007](0007-mihomo-subprocess-gpl-compliance.md) 该条不动）：enable 时才从官方渠道拉取。
 7. **并跑与端口口径**：选 embedded 时外来实例在跑 → **允许并行**（端口自动错开），指引建议**经用户同意后**停掉外来那份；系统代理谁后按谁生效，如实告知。observe 模式外来实例无 controller 时，`proxy system enable` **必须 `--port` 显式带参**——不猜端口，猜错 = 断网。
 8. **迁移**：检出旧版 a2 自装的 `com.a2.mihomo` unit → embedded 启用时**自动 bootout + 删 plist**、审计留痕（自己的遗产自己收）；`service uninstall --purge` 继续认得旧 label 兜底。**别人的 mihomo 永不动**（硬红线）——任何路径都只指引、不动手。
-9. **agent 接口（05 票文案定稿）**：面板菜单项「**复制 AI 助手使用说明**」——未安装也出现，内容随状态自适应（未装版 = 教 agent 引导用户点菜单安装，**明文禁止 agent 绕后调 `.app` 内嵌 bin**）；`a2 mihomo status` 的 guidance 六态逐字稿定稿（off 无外来 / off 有外来 / 故障 / observe 无 controller / 并跑提醒 / 未配置节点），**第一读者是 agent**，人以第三人称出现。CLI 仍不进 PATH（[ADR 0012](0012-panel-self-sufficient-bootstrap.md) 第 7 条不动）。
-10. **「尚未配置节点」的小白落点**：面板不做配置 UI；状态提示行**可点击 = 复制 AI 助手说明**并反馈「已复制」，把人引向 agent。
+9. **agent 接口（2026-08-22 修订）**：面板菜单项为「**初始化 A2（添加到 AI 助手）**」——未安装也出现，内容随状态自适应（未装版 = 先教 agent 引导用户点菜单安装，**明文禁止 agent 绕后调 `.app` 内嵌 bin**）。提示词要求 agent 在**当前用户的全局 skill 目录**创建/更新名为 `a2` 的个人 skill，禁止落到当前项目/仓库；skill 只调用 `~/.a2/bin/a2 guide` 并按输出工作，不复制产品知识。`a2 mihomo status` 的动态 guidance 继续作为具体行动依据。CLI 仍不进 PATH（[ADR 0012](0012-panel-self-sufficient-bootstrap.md) 第 7 条不动）。
+10. **「尚未配置节点」的小白落点**：面板不做配置 UI；状态提示行可点击，复制「请帮我把代理用起来」提示词，把人直接引向既有 agent 配置流。
 11. **总 guide 增设便利入口（2026-08-22 追记）**：agent 读完 `a2 guide` 后，先向用户列出 1–6 编号菜单（安装/启用 mihomo、配置节点或订阅、查看状态、开启代理、关闭并还原代理、故障排查）；用户回复编号即可继续。选择安装或配置时直接转入既有 `a2 guide --mihomo` 动态指引，**不要求用户回面板另复制 mihomo 安装提示词**。这是原流程之前的路由层，不改 mihomo 专用提示词、动态 guidance、授权边界或执行步骤。
+12. **skill 只是动态入口（2026-08-22 追记）**：`a2` skill 不固化 1–6 菜单，也不固化任何命令或流程；每次只调用本机 `a2 guide`，所有新能力、升级说明、菜单变化和边界均随内核 guide 更新。由此避免 app 提示词、个人 skill 与内核三份知识漂移。
 
 ## Consequences
 

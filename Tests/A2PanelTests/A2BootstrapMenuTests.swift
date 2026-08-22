@@ -194,19 +194,25 @@ struct A2BootstrapMenuTests {
         #expect(hint.kind == .local)
         #expect(hint.enabled)
         #expect(hint.localAction == .copyInstallMihomoPrompt)
-        // 说明入口照旧常驻(两条本地动作各司其职,没有一条被另一条顶掉)。
-        #expect(item(m, titled: "复制 AI 助手使用说明")?.localAction == .copyAssistantGuide)
+        // 初始化入口照旧常驻(两条本地动作各司其职,没有一条被另一条顶掉)。
+        #expect(item(m, titled: "初始化 A2（添加到 AI 助手）")?.localAction == .copyInitializeA2Prompt)
     }
 
-    @Test("08 两条本地动作都真有文本可复制,且各说各的事(空文本 = 点了个寂寞)")
+    @Test("初始化与 mihomo 两个入口都有各自的提示词(空文本 = 点了个寂寞)")
     func localActionsHaveDistinctPayloads() {
-        let guideEntry = A2AssistantGuide.text(serviceInstalled: true)
+        let guideEntry = A2AssistantGuide.initializationPrompt(serviceInstalled: true)
         let prompt = A2AssistantGuide.installMihomoPrompt
         #expect(!guideEntry.isEmpty)
         #expect(!prompt.isEmpty)
         #expect(guideEntry != prompt)
-        // 已装版是**一句指针**:它必须把那条命令原样写出来,否则指针指向空处。
+        // 初始化提示词必须把本机 guide 当事实源,否则生成的 skill 会随版本漂移。
         #expect(guideEntry.contains("~/.a2/bin/a2 guide"))
+        #expect(guideEntry.contains("名为 a2 的个人 skill"))
+        #expect(guideEntry.contains("用户级全局 skill 目录"))
+        #expect(guideEntry.contains("不要创建在当前项目或仓库里"))
+        #expect(guideEntry.contains("不要把 guide 全文写死"))
+        #expect(guideEntry.contains("每次使用"))
+        #expect(guideEntry.contains("完成后立刻使用 a2 skill"))
         // 指令那一段的第一步同样是 `a2 guide`,第二步才是照 mihomo status 的 guidance 办。
         #expect(prompt.contains("~/.a2/bin/a2 guide"))
         #expect(prompt.contains("~/.a2/bin/a2 guide --mihomo"))
@@ -219,17 +225,26 @@ struct A2BootstrapMenuTests {
         #expect(prompt.split(separator: "\n").count <= 5)
     }
 
-    @Test("08 已装版不再拼当前状态:全文归 `a2 guide`,壳这边不留第二份会漂的长文")
-    func installedGuideIsAPointerNotACopy() {
-        let text = A2AssistantGuide.text(serviceInstalled: true)
-        #expect(text.contains("【给 AI 助手的 A2 使用说明 · 入口】"))
+    @Test("初始化提示词让 agent 建 a2 skill,但不把本机 guide 复制成会漂的静态正文")
+    func initializationPromptCreatesDynamicSkill() {
+        let text = A2AssistantGuide.initializationPrompt(serviceInstalled: true)
+        #expect(text.contains("【请帮我初始化 A2】"))
+        #expect(text.contains("创建或更新一个名为 a2 的个人 skill"))
+        #expect(text.contains("用户级全局 skill"))
+        #expect(text.contains("不要创建在当前项目或仓库里"))
+        #expect(text.contains("不要把 guide 全文写死"))
+        #expect(text.contains("每次使用时先运行 ~/.a2/bin/a2 guide"))
+        #expect(text.contains("列出编号菜单"))
         // 05 票那版里的状态块与命令清单都不该再出现(它们此刻只会是复制那一刻的旧快照)。
         #expect(!text.contains("■ 当前状态"))
         #expect(!text.contains("■ 常用命令"))
         #expect(!text.contains("内核服务:"))
-        // 未装版仍是 05 票那段(装之前 CLI 压根不存在,指针无处可指)。
-        let notInstalled = A2AssistantGuide.text(serviceInstalled: false)
+        // 未装版先让人完成显式安装,随后仍落到创建 skill,不绕后调用 app 内嵌 bin。
+        let notInstalled = A2AssistantGuide.initializationPrompt(serviceInstalled: false)
         #expect(notInstalled.contains("尚未安装"))
+        #expect(notInstalled.contains("创建或更新名为 a2 的个人 skill"))
+        #expect(notInstalled.contains("当前用户的全局 skill 目录"))
+        #expect(notInstalled.contains("不要创建在当前项目或仓库里"))
         #expect(notInstalled.contains("不要尝试直接调用 .app 包内的二进制"))
     }
 

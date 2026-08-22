@@ -5,7 +5,7 @@
 [info disabled] 内置代理内核:运行中
 [local enabled] ⚠ 尚未配置节点 — 让你的 AI 助手帮你配置  ⇢ local:copyInstallMihomoPrompt
 [bootstrap enabled] 重启代理内核  ⇒ a2 mihomo restart
-[local enabled] 复制 AI 助手使用说明  ⇢ local:copyAssistantGuide
+[local enabled] 初始化 A2（添加到 AI 助手）  ⇢ local:copyInitializeA2Prompt
 [separator]
 [info disabled] mihomo:运行中 v1.19.28  → proxy.status  @basicStatus
 [info disabled] 模式:规则 · 节点:HK-01 · 端口:7890  → proxy.status  @basicStatus
