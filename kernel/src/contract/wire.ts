@@ -570,6 +570,8 @@ export const ServiceActionSchema = z.enum([
   "supervisor_reloaded",
   /** 显式拉起了内核进程(launchd kickstart / systemd start)。 */
   "kernel_started",
+  /** 显式停止了内核进程,但保留 unit 与开机自启登记。 */
+  "kernel_stopped",
   /**
    * 显式重启了内核进程。**两个产出面,各占一端**:
    *   * **unit 内容漂了而服务正跑着** —— 重写文件不足以让已经在跑的那个进程换成新内容。这一路

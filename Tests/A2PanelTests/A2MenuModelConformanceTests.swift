@@ -124,12 +124,14 @@ struct A2MenuModelConformanceTests {
         #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.kind == .local,
                 "不经 UDS:接管由 agent 按本机网络环境执行(能力仍注册,见 menuExemptCapabilities)")
         #expect(item(m, titled: "关闭系统代理(还原)")?.enabled == true,
-                "还原永远可点 —— 内核死了才更需要它,而且「退出即还原」已废除,这是唯一的还原入口")
+                "还原永远可点 —— 内核死了才更需要它;Panel 安全退出也会调用同一能力")
         // **救命按钮红线**(2026-08-22 裁定):关闭**不许**跟着开启改成 prompt。
         // 系统代理指向死端口时机器就断网,那一刻 agent 自己都可能上不了网 —— 用户手上只剩这一项,
         // 它必须是面板亲自发起的能力项,不经任何第三者转手。
         #expect(item(m, titled: "关闭系统代理(还原)")?.kind == .action)
         #expect(item(m, titled: "关闭系统代理(还原)")?.capabilityID == "proxy.system.disable")
+        #expect(item(m, titled: "关闭系统代理(还原)")?.checked == false,
+                "动作项不应因系统代理已经关闭而显示勾号")
         #expect(items(m).contains { $0.kind == .info && $0.title.contains("mihomo 未运行,不可用") })
         #expect(items(m).allSatisfy { $0.capabilityID != "proxy.node.select" || !$0.enabled })
         #expect(item(m, titled: "更新订阅")?.enabled == false)
@@ -161,7 +163,8 @@ struct A2MenuModelConformanceTests {
         // 14 票记的那条「已知缺口」(接管态没有只读能力面 → 菜单不显示勾选)在新契约下已填上。
         #expect(item(m, titled: "开启系统代理(复制指令给 AI 助手)")?.checked == true,
                 "systemProxy.takenOver=true 时该项应勾选(14 票的已知缺口已由 07 票契约填上;改判成本地项后勾选照旧跟状态走)")
-        #expect(item(m, titled: "关闭系统代理(还原)")?.checked == false)
+        #expect(item(m, titled: "关闭系统代理(还原)")?.checked == false,
+                "动作项不应拿勾号表达‘当前未接管’;否则看起来像关闭动作已经被选中")
     }
 
     @Test("10 状态③(有激活订阅):激活项勾选、逐条可更新可删除、add 声明两个待输入参数")
@@ -196,7 +199,7 @@ struct A2MenuModelConformanceTests {
         let line = items(m).first { $0.kind == .info && $0.title.hasPrefix("内核:未连接") }
         #expect(line != nil, "断连时应有一行明说未连接")
         // 14 票改判:「数据面不随控制面起落」废除 —— 内嵌 mihomo 随内核服务生死,
-        // 断连行不能再承诺「代理不受影响」;但「退出面板 ≠ 停代理」仍成立(仅本面板失联)。
+        // 断连行不能承诺「代理不受影响」;这里表达的是意外断连,不是用户点了安全退出。
         #expect(line?.title.contains("仅本面板失联") == true)
         #expect(line?.title.contains("内置代理内核随内核服务起落") == true)
         // 断连时仲裁面未知 → 不该出现「确认器在场」这种没有依据的断言。
@@ -212,13 +215,12 @@ struct A2MenuModelConformanceTests {
                 "同一构造器喂不同状态应当产出不同模型")
     }
 
-    @Test("10 退出项措辞:必须写明「代理继续运行」(「退出即还原」已废除)")
-    func quitWordingSaysProxyKeepsRunning() {
+    @Test("退出项措辞:退出 A2 会同时关闭代理")
+    func quitWordingSaysA2AndProxyStopTogether() {
         let m = A2MenuModelBuilder.build(state: A2PanelFixtures.mihomoRunning.state)
         let quit = items(m).first { $0.kind == .quit }
         #expect(quit != nil)
-        #expect(quit?.title.contains("代理继续运行") == true,
-                "壳退出仅断连;标题不说清楚,用户会以为关掉面板等于关掉服务")
+        #expect(quit?.title == "退出 A2(同时关闭代理)")
     }
 
     @Test("10 能力缺席即不出现:内核没登记的能力不生成假入口")

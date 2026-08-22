@@ -22,7 +22,7 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   proxy …              代理控制面:on / off / status / mode / node / groups / ping / config /
                        subscription … / supervision(见 a2 proxy --help)
   arbitration status   dangerous 三层仲裁面:确认器在不在场、在途确认、审计事件(见 a2 arbitration --help)
-  service …            常驻服务:install / uninstall / status(见 a2 service --help)
+  service …            常驻服务:install / uninstall / start / stop / status(见 a2 service --help)
   mihomo …             内嵌代理内核:status / enable / disable / restart(见 a2 mihomo --help)
   plugin …             插件装载:add <路径> / list / remove <名字>(见 a2 plugin --help)
   daemon run           前台起常驻内核(调试用;开机自启请用 service 安装)
@@ -64,11 +64,13 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
 用法:
   a2 [--json] service install [--copy-to-home]   装成系统托管的常驻服务并确保它跑着(幂等)
   a2 [--json] service uninstall [--purge]        停掉并干净移除(幂等);--purge 连数据一起清
+  a2 [--json] service start                      拉起已安装的服务(保留 unit,幂等)
+  a2 [--json] service stop                       停止服务与内嵌 mihomo(保留 unit 与数据,幂等)
   a2 [--json] service status                     查安装态与运行态(只读)
 
 除 --copy-to-home / --purge 外不接受任何参数:unit 名恒为 com.a2.kernel 与 com.a2.mihomo,
 内核只碰这两个 —— 你自己装的 mihomo(io.metacubex.mihomo 等)在任何路径下都不在射程内。
-三条命令都可 --json(与走 daemon 的命令同一形状的包封)—— 面板的引导路径走的就是这条机读面。
+五条命令都可 --json(与走 daemon 的命令同一形状的包封)—— 面板的引导与生命周期路径走的就是这条机读面。
 
 --copy-to-home(面板自足,ADR 0012):
   先把**本 bin 自己**原子拷进 $A2_HOME/bin/a2(0755),再让 unit 指向那份拷贝 ——
@@ -325,7 +327,7 @@ dangerous 是**声明**:声明为真的工具被调用时自动走三层仲裁(�
 
 退出码:0 成功 / 1 用法错 / 4 daemon 不可达 / 5 装载或调用没成 / 6 插件说的话不合协议`;
 
-export const GUIDE_USAGE = `a2 guide —— 给 AI 助手的 A2 使用说明全文(08 票)
+export const GUIDE_USAGE = `a2 guide —— 给 AI 助手的 A2 使用说明全文与编号式便利入口(08 票)
 
 用法:
   a2 [--json] guide                A2 本身怎么用(全文;--json 时 result 形如 { "text": "<全文>" })
@@ -335,7 +337,7 @@ export const GUIDE_USAGE = `a2 guide —— 给 AI 助手的 A2 使用说明全�
 --mihomo 的步骤那一段**不是另写的一份**,而是 mihomo status 的 guidance 现取现渲染
 (同一个函数、同一套判据)—— 所以它对一台早就配好的机器不会再劝人从头启用。
 
-它说了什么:CLI 完整路径与 --json 纪律、开工前先跑哪三条 status、常用命令、
+它说了什么:读完先向用户列出 1–6 操作菜单、CLI 完整路径与 --json 纪律、开工前先跑哪三条 status、常用命令、
 mihomo 的配置归 agent 直接读改(含订阅节点怎么并)、以及两条边界(dangerous 只转告不绕过;
 别人的 mihomo 只读不碰)。
 

@@ -129,6 +129,15 @@ case "$verb" in
     fi
     exit 0
     ;;
+  kill)
+    label="$(label_of_target "${3:-}")"
+    pidfile="$(pidfile_of_label "$label")"
+    if [ ! -f "$pidfile" ]; then exit 113; fi
+    pid=$(cat "$pidfile")
+    kill "$pid" 2>/dev/null || true
+    # pidfile 刻意保留:launchd 仍登记着这个 job,只是此刻没有活进程。
+    exit 0
+    ;;
 esac
 
 printf 'Unrecognized subcommand: %s\n' "$verb" >&2

@@ -131,7 +131,7 @@ public struct A2MenuItemModel: Sendable, Equatable {
         case group
         /// 「关于 A2 Panel」。
         case about
-        /// 「退出」。**退出仅断连**(ADR 0008:「退出即还原」废除)。
+        /// 「退出 A2」。AppDelegate 会先还原系统代理,再停服务与内嵌 mihomo。
         case quit
     }
 

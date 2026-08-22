@@ -78,6 +78,7 @@
           "supervisor_unloaded",
           "supervisor_reloaded",
           "kernel_started",
+          "kernel_stopped",
           "kernel_restarted",
           "mihomo_unit_removed",
           "home_purged"

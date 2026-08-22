@@ -259,6 +259,30 @@ test("service install(launchd):plist 落位、自愈自启键齐全、A2_HOME �
   expect(existsSync(socketPathFor(box.home))).toBe(true);
 });
 
+test("service stop/start(launchd):停进程但保留 unit,随后能原样拉起", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  const installed = await service(box, ["install"]);
+  expect(installed.exitCode).toBe(0);
+  const oldPid = parseJsonStdout(installed).result.status.pid as number;
+
+  const stopped = await service(box, ["stop"]);
+  expect(stopped.exitCode).toBe(0);
+  const stoppedBody = parseJsonStdout(stopped);
+  expect(stoppedBody.result.actions).toEqual(["kernel_stopped"]);
+  expect(stoppedBody.result.status.state).toBe("installed_not_running");
+  expect(existsSync(box.unitPath)).toBe(true);
+  await waitFor("a2 daemon 与 socket 一起退出", () => !isAlive(oldPid) && !existsSync(socketPathFor(box.home)));
+
+  const started = await service(box, ["start"]);
+  expect(started.exitCode).toBe(0);
+  const startedBody = parseJsonStdout(started);
+  expect(startedBody.result.actions).toEqual(["kernel_started"]);
+  expect(startedBody.result.status.state).toBe("running");
+  expect(startedBody.result.status.pid).not.toBe(oldPid);
+  expect(existsSync(box.unitPath)).toBe(true);
+  expect(existsSync(socketPathFor(box.home))).toBe(true);
+}, 15_000);
+
 test("service install 幂等:已收敛时第二次什么都不改(actions 为空),状态仍是 running", async () => {
   const box = (sandbox = await makeSandbox("launchd"));
   await service(box, ["install"]);

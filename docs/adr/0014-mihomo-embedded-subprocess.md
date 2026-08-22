@@ -26,6 +26,7 @@ date: 2026-08-18
 8. **迁移**：检出旧版 a2 自装的 `com.a2.mihomo` unit → embedded 启用时**自动 bootout + 删 plist**、审计留痕（自己的遗产自己收）；`service uninstall --purge` 继续认得旧 label 兜底。**别人的 mihomo 永不动**（硬红线）——任何路径都只指引、不动手。
 9. **agent 接口（05 票文案定稿）**：面板菜单项「**复制 AI 助手使用说明**」——未安装也出现，内容随状态自适应（未装版 = 教 agent 引导用户点菜单安装，**明文禁止 agent 绕后调 `.app` 内嵌 bin**）；`a2 mihomo status` 的 guidance 六态逐字稿定稿（off 无外来 / off 有外来 / 故障 / observe 无 controller / 并跑提醒 / 未配置节点），**第一读者是 agent**，人以第三人称出现。CLI 仍不进 PATH（[ADR 0012](0012-panel-self-sufficient-bootstrap.md) 第 7 条不动）。
 10. **「尚未配置节点」的小白落点**：面板不做配置 UI；状态提示行**可点击 = 复制 AI 助手说明**并反馈「已复制」，把人引向 agent。
+11. **总 guide 增设便利入口（2026-08-22 追记）**：agent 读完 `a2 guide` 后，先向用户列出 1–6 编号菜单（安装/启用 mihomo、配置节点或订阅、查看状态、开启代理、关闭并还原代理、故障排查）；用户回复编号即可继续。选择安装或配置时直接转入既有 `a2 guide --mihomo` 动态指引，**不要求用户回面板另复制 mihomo 安装提示词**。这是原流程之前的路由层，不改 mihomo 专用提示词、动态 guidance、授权边界或执行步骤。
 
 ## Consequences
 

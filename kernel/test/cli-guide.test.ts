@@ -53,6 +53,22 @@ test("全文要件:CLI 完整路径、--json 纪律、先跑哪三条 status、�
   expect(text).toContain("不要把订阅里的 rules 整份搬来覆盖用户已有策略");
 });
 
+test("便利入口:agent 读完总 guide 后先列 1–6 菜单,用户不用再复制 mihomo 专用 prompt", async () => {
+  const text = parseJsonStdout(await runCli(["guide", "--json"], { home })).result.text as string;
+
+  expect(text).toContain("■ 读完后先给用户一个编号菜单");
+  expect(text).toContain("1. 安装或启用 mihomo 代理内核");
+  expect(text).toContain("2. 配置代理节点或导入订阅");
+  expect(text).toContain("3. 查看 A2、mihomo 与系统代理状态");
+  expect(text).toContain("4. 开启系统代理");
+  expect(text).toContain("5. 关闭并还原系统代理");
+  expect(text).toContain("6. 排查代理不可用、断网或节点异常");
+  expect(text).toContain("用户可以回复编号");
+  expect(text).toContain("不要再让用户回到 Panel 复制「安装 mihomo」提示词");
+  // 便利入口只能路由到既有动态流程,不能在总 guide 里另造一份安装步骤。
+  expect(text).toContain("选 1 或 2:直接运行 ~/.a2/bin/a2 guide --mihomo");
+});
+
 test("版本号取内核既有常量:与 a2 version 报的是同一个数(说明随内核一起升级)", async () => {
   const text = parseJsonStdout(await runCli(["guide", "--json"], { home })).result.text as string;
   const version = (await runCli(["version"], { home })).stdout.trim();

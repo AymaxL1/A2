@@ -63,6 +63,14 @@ enum BootstrapGolden {
             + "\"actions\":[\"supervisor_unloaded\",\"unit_removed\"]}}"
         return A2BootstrapRun(exitCode: 0, standardOutput: line)
     }
+
+    static func serviceChange(status file: String, actions: [String]) throws -> A2BootstrapRun {
+        let status = try text(file)
+        let actionJSON = try String(data: JSONSerialization.data(withJSONObject: actions), encoding: .utf8)!
+        let line = "{\"v\":1,\"id\":\"018f7a20-9c31-7d42-b6a8-5e1f3c8d7042\",\"ok\":true,"
+            + "\"result\":{\"status\":\(status),\"actions\":\(actionJSON)}}"
+        return A2BootstrapRun(exitCode: 0, standardOutput: line)
+    }
 }
 
 // ============================================================================
@@ -72,23 +80,26 @@ enum BootstrapGolden {
 @Suite("16/17/14 引导白名单(ADR 0012 第 3 条:七条,一条不多)")
 struct A2BootstrapWhitelistTests {
 
-    @Test("17/14 白名单逐字对照 ADR 0012 —— 多一条少一条都要在这里当场红")
-    func argumentsAreExactlyTheSeven() {
+    @Test("生命周期白名单逐字对照 —— 多一条少一条都要在这里当场红")
+    func argumentsIncludePanelLifecycle() {
         let table = A2BootstrapCommand.allCases.map { $0.arguments }
         #expect(table == [
             ["service", "install", "--copy-to-home", "--json"],
             ["service", "uninstall", "--json"],
             ["service", "uninstall", "--purge", "--json"],
             ["service", "status", "--json"],
+            ["service", "start", "--json"],
+            ["service", "stop", "--json"],
             ["version", "--json"],
             ["mihomo", "status", "--json"],
             ["mihomo", "restart", "--json"],
+            ["proxy", "off", "--json"],
         ])
     }
 
-    @Test("17/14 白名单只有七条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
-    func whitelistHasSevenEntries() {
-        #expect(A2BootstrapCommand.allCases.count == 7)
+    @Test("生命周期白名单只有十条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
+    func whitelistHasTenEntries() {
+        #expect(A2BootstrapCommand.allCases.count == 10)
     }
 
     @Test("17 --purge 只出现在卸载那一条上(它是唯一会删数据的形态)")
@@ -108,16 +119,18 @@ struct A2BootstrapWhitelistTests {
         }
     }
 
-    @Test("17/14 白名单里没有任何越界的那一条(只碰 service 四条 + version + mihomo 两条)")
+    @Test("白名单里没有生命周期之外的命令")
     func noCommandOutsideTheServiceSurface() {
         for command in A2BootstrapCommand.allCases {
             let head = command.arguments[0]
-            #expect(head == "service" || head == "version" || head == "mihomo",
+            #expect(head == "service" || head == "version" || head == "mihomo" || head == "proxy",
                     "白名单里混进了 `\(head)` —— 要加命令得先改 ADR 0012/0014")
         }
         // mihomo 域恰两条:status(只读)与 restart —— enable/disable 不进面板(07 票:初始化归 agent)。
         let mihomo = A2BootstrapCommand.allCases.filter { $0.arguments[0] == "mihomo" }
         #expect(mihomo == [.mihomoStatus, .mihomoRestart])
+        let proxy = A2BootstrapCommand.allCases.filter { $0.arguments[0] == "proxy" }
+        #expect(proxy == [.proxyOff], "退出链只允许还原系统代理,不能借机开放别的代理写面")
     }
 
     @Test("16 菜单角标 = 会跑的那条命令(去掉 --json)")
@@ -498,6 +511,53 @@ struct A2BootstrapCoordinatorTests {
         #expect(runner.issued == [.version, .serviceStatus, .mihomoStatus])
         #expect(coordinator.state.embeddedKernelVersion == "0.1.0")
         #expect(coordinator.state.serviceState == .notInstalled)
+    }
+
+    @Test("Panel 启动时发现服务已安装但已停止:只发 start,不重装也不升级")
+    func probeStartsInstalledService() throws {
+        let runner = RecordingRunner()
+        runner.responses[.version] = try BootstrapGolden.success("version-result.json")
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-installed-not-running.json")
+        runner.responses[.serviceStart] = try BootstrapGolden.serviceChange(
+            status: "service-status-running.json", actions: ["kernel_started"])
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.probe()
+
+        #expect(runner.issued == [.version, .serviceStatus, .serviceStart, .mihomoStatus])
+        #expect(runner.issued.contains(.serviceInstall) == false)
+        #expect(coordinator.state.serviceState == .running)
+    }
+
+    @Test("Panel 退出:已接管时先还原系统代理,再停止服务")
+    func quitRestoresProxyThenStopsService() throws {
+        let runner = RecordingRunner()
+        runner.responses[.proxyOff] = try BootstrapGolden.success("system-proxy-change-restored.json")
+        runner.responses[.serviceStop] = try BootstrapGolden.serviceChange(
+            status: "service-status-installed-not-running.json", actions: ["kernel_stopped"])
+        let (coordinator, _) = makeCoordinator(runner)
+        var completed = false
+
+        coordinator.shutdownForQuit(restoreSystemProxy: true) { result in
+            if case .success = result { completed = true }
+        }
+
+        #expect(completed)
+        #expect(runner.issued == [.proxyOff, .serviceStop])
+        #expect(coordinator.state.serviceState == .installedNotRunning)
+    }
+
+    @Test("Panel 退出:未接管时直接停止服务")
+    func quitWithoutTakeoverStopsDirectly() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceStop] = try BootstrapGolden.serviceChange(
+            status: "service-status-installed-not-running.json", actions: ["kernel_stopped"])
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.shutdownForQuit(restoreSystemProxy: false) { _ in }
+
+        #expect(runner.issued == [.serviceStop])
     }
 
     @Test("16 版本问不出来不算失败:只是不提示升级,菜单上不挂无关的红字")

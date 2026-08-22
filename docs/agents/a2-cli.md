@@ -89,7 +89,7 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
 - **升级永远显式**（重跑安装脚本或换掉那个单文件），a2 不做静默更新；
 - 许可与 GPL 声明读 `a2 about`（不依赖 daemon、不依赖任何 UI）。
 
-### 服务面三条命令（`a2 service status|install|uninstall --json`）
+### 服务面五条命令（`a2 service status|install|uninstall|start|stop --json`）
 
 它们**不经 daemon**——daemon 没跑的时候恰恰最需要它们答话，但机读面与走 daemon 的命令同一形状，
 你看不出区别。两个字段值得单说：
@@ -99,12 +99,13 @@ a2 capabilities call plugin.hello.greet --input '{"who":"世界"}' --json
 | `service status` 的 `binPath` | unit **实际指向**的那个可执行（读盘上那份 unit 的事实值）。unit 还不存在时给的是本次 `install` 会写进去的那个。「托管的是不是我这份内核」只有它答得了 |
 | `service install --copy-to-home` | 把**当前这个 a2 单文件自己**原子拷进 `$A2_HOME/bin/a2`，并让 unit 指向那份拷贝。幂等（判据是内容）；拷贝换了而服务正跑着时会显式重启，如实报 `kernel_restarted`。mac 菜单栏壳「A2 Panel」走的就是这条（见 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md)） |
 | `service uninstall --purge` | 拆完 `com.a2.kernel` 之后**继续往下清**：拆 a2 自管的 `com.a2.mihomo`（不在则跳过、不报 action）→ 删掉整个 `$A2_HOME`。**只对缺省 `~/.a2` 生效**（见下）。机读面多一个 `result.purge`：`removedUnits`（移除的 label）+ `removedPaths`（删掉的绝对路径），这是「先看后删」的对账面 |
+| `service start` / `service stop` | 只拉起 / 停止已经安装的进程，保留 unit、开机自启登记和 `$A2_HOME`。`stop` 会触发 daemon 的正常退出钩子，因此内嵌 mihomo 同步退出；`start` 会按既有托管模式重新拉起。Panel 的打开 / 正常退出走的就是这对生命周期命令。 |
 
 `--copy-to-home` 只对 `install` 有意义，`--purge` 只对 `uninstall` 有意义；用在别的子命令上是用法错
 （不会被默默忽略）。源码态跑 `--copy-to-home` 会得到 `service_self_copy_unsupported`（退出码 6）——
 那时的"自身"是 bun 而不是 a2，拷过去只是个跑不起来的空壳；拒绝时 unit / bin / supervisor 三处一个字节都不动。
 `actions` 是封闭词表（`bin_copied` / `unit_written` / `unit_removed` / `supervisor_*` /
-`kernel_started` / `kernel_restarted` / `mihomo_unit_removed` / `home_purged`），
+`kernel_started` / `kernel_stopped` / `kernel_restarted` / `mihomo_unit_removed` / `home_purged`），
 **空数组是合法且常见的**：幂等复跑什么都不改。
 不带 `--purge` 的 `uninstall` **只拆 unit**——`$A2_HOME/bin/a2` 那份拷贝与 `~/.a2` 里的数据要清理请显式删
 （就是 `--purge`，或者你自己 `rm -rf`）。

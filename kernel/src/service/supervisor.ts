@@ -61,6 +61,8 @@ export interface Supervisor {
   load(state: SupervisorState, unitChanged: boolean): Promise<UnitAction[]>;
   /** 显式拉起进程(装载了但没在跑时用)。 */
   start(): Promise<void>;
+  /** 只停进程,保留 unit 与开机自启登记。正常退出不会触发崩溃自愈。 */
+  stop(state: SupervisorState): Promise<void>;
   /**
    * 显式重启进程。**三处调用,两类原因**:
    *   * **unit 内容漂了而服务正跑着**(`converge.ts`):重写文件只收敛了「磁盘上写的是什么」,
@@ -186,6 +188,11 @@ class LaunchdSupervisor implements Supervisor {
     await run(["launchctl", "kickstart", this.#target()]);
   }
 
+  async stop(state: SupervisorState): Promise<void> {
+    if (state.pid === undefined) return;
+    await run(["launchctl", "kill", "SIGTERM", this.#target()]);
+  }
+
   /**
    * `-k` = 先杀再拉。**漂移收敛那一路走不到这里**(launchd 的 load 已经换了进程),
    * 但「换了文件而 unit 没变」那一类走得到,如今**只剩一处**:
@@ -262,6 +269,11 @@ class SystemdSupervisor implements Supervisor {
 
   async start(): Promise<void> {
     await run(this.#systemctl("start", this.#unit()));
+  }
+
+  async stop(state: SupervisorState): Promise<void> {
+    if (state.pid === undefined) return;
+    await run(this.#systemctl("stop", this.#unit()));
   }
 
   async restart(): Promise<void> {

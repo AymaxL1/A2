@@ -56,6 +56,10 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     case serviceUninstallPurge
     /// 问服务态(不经 daemon —— daemon 没跑时恰恰最需要它答话)。
     case serviceStatus
+    /// 拉起已经安装但已停止的服务;不改 unit、不升级 bin。
+    case serviceStart
+    /// 停止服务进程但保留 unit 与数据;a2 会在退出钩子里收掉内嵌 mihomo。
+    case serviceStop
     /// 问内嵌 bin 自己的版本(启动时问一次并缓存,不轮询 —— ADR 0012 第 5 条)。
     case version
     /// 问内嵌 mihomo 的托管现状(14 票;只读,不经 daemon 也能答)。
@@ -64,6 +68,8 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     /// 重启内嵌 mihomo 子进程(14 票;经 daemon —— 子进程是 daemon 的孩子)。
     /// 菜单「重启代理内核」那一项;改完配置让它生效、故障态清零复活,走的都是这条。
     case mihomoRestart
+    /// Panel 退出前还原系统代理,避免留下指向已停止端口的网络设置。
+    case proxyOff
 
     /// 传给内嵌 bin 的 argv。**全仓唯一构造引导 argv 的地方**。
     public var arguments: [String] {
@@ -72,9 +78,12 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
         case .serviceUninstall:      return ["service", "uninstall", "--json"]
         case .serviceUninstallPurge: return ["service", "uninstall", "--purge", "--json"]
         case .serviceStatus:         return ["service", "status", "--json"]
+        case .serviceStart:          return ["service", "start", "--json"]
+        case .serviceStop:           return ["service", "stop", "--json"]
         case .version:               return ["version", "--json"]
         case .mihomoStatus:          return ["mihomo", "status", "--json"]
         case .mihomoRestart:         return ["mihomo", "restart", "--json"]
+        case .proxyOff:              return ["proxy", "off", "--json"]
         }
     }
 
@@ -117,7 +126,7 @@ public protocol A2BootstrapRunner: AnyObject {
 /// `service install` 会留下一个装了一半的服务,比让菜单显示「安装中…」更糟。
 ///
 /// **真挂死时会怎样,说清楚**:在途守卫会把引导面锁在「安装中…」上,直到用户重启面板 ——
-/// 而重启面板是**无害**的(退出仅断连,ADR 0008:不还原系统代理、不停 mihomo、不动已装的服务)。
+/// 重启 Panel 会让已安装服务重新启动;不会安装、升级或删除任何数据。
 /// 换句话说,这个故障模式的最坏后果是"这个菜单区段这次用不了",不是"系统被弄坏了"。
 public final class A2BootstrapProcessRunner: A2BootstrapRunner {
 
@@ -419,6 +428,11 @@ public enum A2BootstrapReading {
             }
             return .success(version)
         }
+    }
+
+    /// 只关心命令成功与否的生命周期步骤(如 `proxy off`)。
+    public static func commandSucceeded(_ run: A2BootstrapRun) -> Result<Void, A2BootstrapFailure> {
+        result(run).map { _ in () }
     }
 
     // ---- 私有 ----

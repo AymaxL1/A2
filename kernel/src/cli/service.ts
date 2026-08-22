@@ -1,6 +1,6 @@
-// `a2 service install|uninstall|status` —— 常驻服务的显式安装面(ADR 0008 第 6 条)。
+// `a2 service install|uninstall|start|stop|status` —— 常驻服务与 Panel 生命周期面。
 //
-// 这三条命令**不经 UDS**:服务面问的是系统 supervisor,而 daemon 没跑的时候恰恰是最需要它们答话的时候。
+// 这五条命令**不经 UDS**:服务面问的是系统 supervisor,而 daemon 没跑的时候恰恰是最需要它们答话的时候。
 // 但机读面与走 daemon 的命令同一形状(`outcomeFromOpOutcome` 负责),agent 看不出区别。
 // 15 票起这三条也是**面板的引导路径**(ADR 0012 的执行器白名单),所以机读面从面板可达这件事
 // 不是附带的:面板拿到的就是 agent 拿到的那一条包封,没有第二套输出。
@@ -15,7 +15,13 @@ import {
   type ServiceStatusResult,
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
-import { serviceInstall, serviceStatus, serviceUninstall } from "../service/manager.ts";
+import {
+  serviceInstall,
+  serviceStart,
+  serviceStatus,
+  serviceStop,
+  serviceUninstall,
+} from "../service/manager.ts";
 import { outcomeFromOpOutcome, type CommandOutcome } from "./outcome.ts";
 import { SERVICE_USAGE, helpOutcome, serviceUsageOutcome } from "./usage.ts";
 
@@ -26,14 +32,14 @@ const PURGE_FLAG = "--purge";
 const FLAGS = [COPY_TO_HOME_FLAG, PURGE_FLAG];
 
 export async function serviceCommand(args: string[], paths: KernelPaths): Promise<CommandOutcome> {
-  // 三条命令一共只认这两个旗标(`--copy-to-home` 归 install、`--purge` 归 uninstall);
+  // 五条命令一共只认这两个旗标(`--copy-to-home` 归 install、`--purge` 归 uninstall);
   // `--json` 更早一步就被 `main.ts` 摘掉了,走到这里的从来只有子命令自己的参数。
   const copyToHome = args.includes(COPY_TO_HOME_FLAG);
   const purge = args.includes(PURGE_FLAG);
   const [action, ...rest] = args.filter((arg) => !FLAGS.includes(arg));
 
   if (action === undefined) {
-    return serviceUsageOutcome("service 需要一个动作:install / uninstall / status");
+    return serviceUsageOutcome("service 需要一个动作:install / uninstall / start / stop / status");
   }
   if (action === "help" || action === "-h" || action === "--help") {
     return helpOutcome(SERVICE_USAGE);
@@ -79,6 +85,22 @@ export async function serviceCommand(args: string[], paths: KernelPaths): Promis
       "service.uninstall",
       ServiceChangeResultSchema,
       (result) => renderChange(result, purge ? "卸载并清理" : "卸载", purge ? undefined : UNINSTALL_KEEPS_BIN),
+    );
+  }
+  if (action === "start") {
+    return outcomeFromOpOutcome(
+      await serviceStart(paths),
+      "service.start",
+      ServiceChangeResultSchema,
+      (result) => renderChange(result, "启动"),
+    );
+  }
+  if (action === "stop") {
+    return outcomeFromOpOutcome(
+      await serviceStop(paths),
+      "service.stop",
+      ServiceChangeResultSchema,
+      (result) => renderChange(result, "停止"),
     );
   }
 

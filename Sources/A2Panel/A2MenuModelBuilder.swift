@@ -134,7 +134,7 @@ public enum A2MenuModelBuilder {
             //   所以它**刻意不跟着开启那项改成 prompt**:救命的东西不许经第三者转手。
             items.append(A2MenuItemModel(
                 kind: .action, title: "关闭系统代理(还原)",
-                checked: !proxy.systemProxyTakenOver,
+                checked: false,
                 capabilityID: "proxy.system.disable",
                 userAction: .systemProxyToggle))
         }
@@ -291,9 +291,9 @@ public enum A2MenuModelBuilder {
 
         // ---- ⑥ 关于 / 退出 ----
         items.append(A2MenuItemModel(kind: .about, title: "关于 A2 Panel"))
-        // 「退出」的语义在新架构里变了,标题必须说出来:壳退出**只是断连**,代理照跑
-        //   (ADR 0008 / spec:「退出即还原」废除)。用户点它之前就该知道这件事。
-        items.append(A2MenuItemModel(kind: .quit, title: "退出面板(代理继续运行)"))
+        // 小白心智模型只有一个 A2:从 UI 退出时,先安全还原系统代理,再停 a2 服务;
+        // daemon 的退出钩子负责收掉内嵌 mihomo。
+        items.append(A2MenuItemModel(kind: .quit, title: "退出 A2(同时关闭代理)"))
 
         // 收口:把分隔线收拾干净(见 `tidySeparators` 的理由)。
         return A2MenuModel(items: tidySeparators(items))

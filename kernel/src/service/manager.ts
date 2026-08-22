@@ -1,9 +1,9 @@
-// `a2 service install|uninstall|status` 的实体:把「系统托管常驻」这件事收敛到一条命令。
+// `a2 service install|uninstall|start|stop|status` 的实体:系统托管与进程生命周期。
 //
 // 深模块的边界:调用方(CLI)只拿到**一种东西** —— 一个 `OpOutcome`(成了带 result,没成带 WireError)。
 // 平台差异、命令编排、幂等判定、失败指引全在这一层里消化掉。
 //
-// 幂等口径(票面第 1 条):三条命令都是**收敛**语义 —— 说的是"我要它是这个样子",不是"执行这几步"。
+// 幂等口径:五条命令都是**收敛**语义 —— 说的是"我要它是这个样子",不是"执行这几步"。
 // 已经是那个样子就什么都不做,`actions` 为空数组;这就是幂等的可观察面(不必比对前后状态)。
 //
 // 「CLI 永不隐式拉起 daemon」不因本票而破:`install` 是**人类显式授权**的动作,由它把常驻交给系统
@@ -68,6 +68,42 @@ export async function serviceStatus(paths: KernelPaths): Promise<OpOutcome> {
   return await withPlan(paths, async (plan) => {
     const state = await createSupervisor(plan).query();
     return opSuccess(statusResult(plan, state));
+  });
+}
+
+/** 拉起已经安装但已停止的服务;不写 unit、不换 bin。 */
+export async function serviceStart(paths: KernelPaths): Promise<OpOutcome> {
+  return await withPlan(paths, async (plan) => {
+    const supervisor = createSupervisor(plan);
+    let state = await supervisor.query();
+    if (!existsSync(plan.unitPath) || !state.registered) {
+      return opFailure(serviceNotInstalledError(plan, "启动"));
+    }
+    const actions: ServiceAction[] = [];
+    if (state.pid === undefined) {
+      await supervisor.start();
+      actions.push("kernel_started");
+      state = await settle(supervisor, (current) => current.pid !== undefined);
+    }
+    if (state.pid === undefined) return opFailure(notRunningError(plan));
+    if (!(await settleDaemonReachable(plan))) return opFailure(notAnsweringError(plan));
+    return opSuccess({ status: statusResult(plan, state), actions });
+  });
+}
+
+/** 停止服务进程但保留 unit/自启登记;a2 的退出钩子会同步收掉内嵌 mihomo。 */
+export async function serviceStop(paths: KernelPaths): Promise<OpOutcome> {
+  return await withPlan(paths, async (plan) => {
+    const supervisor = createSupervisor(plan);
+    let state = await supervisor.query();
+    const actions: ServiceAction[] = [];
+    if (state.pid !== undefined) {
+      await supervisor.stop(state);
+      actions.push("kernel_stopped");
+      state = await settle(supervisor, (current) => current.pid === undefined);
+    }
+    if (state.pid !== undefined) return opFailure(stillRunningError(plan, state.pid));
+    return opSuccess({ status: statusResult(plan, state), actions });
   });
 }
 
@@ -335,7 +371,7 @@ function kernelActions(actions: UnitAction[]): ServiceAction[] {
   );
 }
 
-/** 三条命令共用的前置:选 supervisor → 算 plan → 把两类失败(平台不支持 / 命令失败)翻成 WireError。 */
+/** 五条命令共用的前置:选 supervisor → 算 plan → 把两类失败(平台不支持 / 命令失败)翻成 WireError。 */
 async function withPlan(
   paths: KernelPaths,
   body: (plan: ServicePlan) => Promise<OpOutcome>,
@@ -498,6 +534,19 @@ function commandFailedError(error: SupervisorCommandError, plan: ServicePlan): W
         { description: "重试安装(幂等)", command: "a2 service install" },
       ],
       context: { unitPath: plan.unitPath, label: plan.label, supervisor: plan.kind },
+    },
+  };
+}
+
+function serviceNotInstalledError(plan: ServicePlan, verb: string): WireError {
+  return {
+    code: ErrorCode.serviceOperationFailed,
+    message: `a2 服务尚未安装,无法${verb}。`,
+    detail: `${plan.unitPath} 不存在,或 supervisor 尚未登记 ${plan.label}。`,
+    guidance: {
+      summary: "先显式安装服务,再重试。",
+      steps: [{ description: "安装并启动服务", command: "a2 service install --json" }],
+      context: { unitPath: plan.unitPath, label: plan.label },
     },
   };
 }

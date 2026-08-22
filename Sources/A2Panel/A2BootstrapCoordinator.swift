@@ -38,6 +38,8 @@ public final class A2BootstrapCoordinator {
     private let execute: Scheduler
     private let deliver: Scheduler
     private let onChange: (A2BootstrapState) -> Void
+    private var lifecycleInFlight = false
+    private var isShuttingDown = false
 
     /// - Parameters:
     ///   - runner: 执行缝。`nil` = 没有内嵌 bin → 引导功能整体隐藏,本类型此后什么都不做。
@@ -100,6 +102,9 @@ public final class A2BootstrapCoordinator {
             switch A2BootstrapReading.serviceStatus(output) {
             case let .success(facts):
                 self.state.serviceState = facts.state
+                if facts.state == .installedNotRunning && !self.isShuttingDown {
+                    self.startInstalledService()
+                }
             case .failure:
                 // 问不出来就是问不出来 —— 保留上一次的答案会让菜单说一句已经不成立的话。
                 self.state.serviceState = nil
@@ -110,6 +115,62 @@ public final class A2BootstrapCoordinator {
             self.publish()
         }
         refreshMihomoStatus()
+    }
+
+    /// 用户打开 Panel 就是在显式启动 A2:只拉起已安装服务,不安装、不升级、不改 unit。
+    private func startInstalledService() {
+        guard let runner, !lifecycleInFlight else { return }
+        lifecycleInFlight = true
+        run { runner.run(.serviceStart) } then: { [weak self] output in
+            guard let self else { return }
+            self.lifecycleInFlight = false
+            switch A2BootstrapReading.serviceChange(output) {
+            case let .success(change):
+                self.state.serviceState = change.status.state
+                self.state.lastFailure = nil
+            case let .failure(failure):
+                self.state.lastFailure = failure
+            }
+            self.publish()
+        }
+    }
+
+    /// Panel 的安全退出链:必要时先还原系统代理,再停 a2；unit 与用户数据全部保留。
+    public func shutdownForQuit(restoreSystemProxy: Bool,
+                                completion: @escaping (Result<Void, A2BootstrapFailure>) -> Void) {
+        guard let runner, !lifecycleInFlight else {
+            completion(.failure(A2BootstrapFailure(
+                code: nil, message: "内嵌内核执行器不可用,无法安全停止 A2", exitCode: 5)))
+            return
+        }
+        isShuttingDown = true
+        lifecycleInFlight = true
+
+        func finish(_ result: Result<Void, A2BootstrapFailure>) {
+            self.lifecycleInFlight = false
+            if case .failure = result { self.isShuttingDown = false }
+            completion(result)
+        }
+        func stopService() {
+            self.run { runner.run(.serviceStop) } then: { output in
+                switch A2BootstrapReading.serviceChange(output) {
+                case let .success(change):
+                    self.state.serviceState = change.status.state
+                    self.publish()
+                    finish(.success(()))
+                case let .failure(failure):
+                    finish(.failure(failure))
+                }
+            }
+        }
+
+        guard restoreSystemProxy else { stopService(); return }
+        run { runner.run(.proxyOff) } then: { output in
+            switch A2BootstrapReading.commandSucceeded(output) {
+            case .success: stopService()
+            case let .failure(failure): finish(.failure(failure))
+            }
+        }
     }
 
     /// 重问一次 mihomo 托管事实(14 票)。时机与服务态同一套:事件驱动、无定时器。

@@ -110,8 +110,8 @@ public final class A2PanelSession {
         self.thread = thread
     }
 
-    /// 停止会话。**壳退出走的就是这条路:只断连,什么都不还原**
-    /// (ADR 0008:「退出即还原」废除;还原是 `a2 proxy off` 这条显式命令的事)。
+    /// 只停止会话。Panel 的完整退出链由 AppDelegate 在调用这里之前完成
+    /// (`proxy off` → `service stop`);本类型仍保持纯粹的连接生命周期。
     public func stop() {
         queueLock.lock()
         stopping = true
@@ -168,7 +168,7 @@ public final class A2PanelSession {
         }
         client?.close()
         client = nil
-        emit(log: "会话已停止(仅断连;代理与内核不受影响)")
+        emit(log: "面板会话已停止")
     }
 
     private func connectAndServe() throws {

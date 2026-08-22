@@ -9,4 +9,4 @@
   [info disabled] (默认只拆服务;确认框里可勾选「同时删除 ~/.a2」)
 [separator]
 [about enabled] 关于 A2 Panel
-[quit enabled] 退出面板(代理继续运行)
+[quit enabled] 退出 A2(同时关闭代理)

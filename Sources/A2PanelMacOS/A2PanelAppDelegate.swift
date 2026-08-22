@@ -1,14 +1,13 @@
 // A2PanelMacOS —— 装配层(10 票):把会话、菜单、确认器接在一起,一行业务逻辑都不加。
 //
 // ============================================================================
-// 「退出仅断连」在这里的落实(ADR 0008:「退出即还原」废除)
+// 「退出 A2」在这里的落实(2026-08-22 小白心智模型改判)
 // ============================================================================
-// `applicationWillTerminate` 只做一件事:`session.stop()`。
-//   * **不**还原系统代理(那是 `a2 proxy off` 这条显式命令的事);
-//   * **不**碰 mihomo(14 票起内嵌 mihomo 是**内核 daemon** 的子进程 —— 退面板只是断连,
-//     内核照跑、mihomo 照跑;真停 mihomo 的是「停内核服务」那条显式路径,不是退面板);
-//   * **不**通知内核「我要走了」—— 断连本身就是信号:内核收到断线立即把 dangerous 降回默拒
-//     (08 票已实现,壳这侧只要真的断掉即可)。
+// `applicationShouldTerminate` 先执行一条可验的安全链:
+//   * 若系统代理由 a2 接管,先显式执行 `a2 proxy off` 精确还原;
+//   * 再执行 `a2 service stop`;daemon 的退出钩子负责收掉内嵌 mihomo;
+//   * 两步成功才允许 AppKit 真正终止。任一步失败都留在 UI 并如实报错。
+// `applicationWillTerminate` 只负责最后断开会话。
 // 旧宿主在这里有一整套「退出前还原 + 持久化标记 + 下次启动自愈」的编排,新架构把它整族拆掉了
 // (对等映射表 07 票 D 组:整族淘汰,理由成文)。
 //
@@ -19,7 +18,7 @@
 //   用户自己去开终端敲 `a2 service install`。
 // 16 票起壳自带执行器(`.app` 里那份内嵌内核 bin),于是边界的措辞必须改准 ——
 //   **变的是「显式」可以从哪里发起,不是那条边界松了**:
-//     * 启动**不自动装**、连不上**不自动起**、退出**不自动停**,一条都没变;
+//     * 启动**不自动装**;但已安装且被 Panel 正常停下的服务会随下次打开 Panel 重新拉起;
 //     * 改变系统状态的仍然只有**用户的一次显式点击**:首启说明框上那个按钮,或菜单里那一项。
 //       首启弹不弹由一个纯函数决定(`A2BootstrapDecision`,四个输入全组合有断言);
 //       用户点过「稍后」就再不自动问,菜单项常驻可随时再装。
@@ -54,6 +53,8 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
     private var bootstrapState = A2BootstrapState.hidden
     /// 首启说明框**至多弹一次**(每次启动)。判据本身是纯函数,这个标记只防"同一次启动里弹两遍"。
     private var firstRunPromptShown = false
+    private var terminationPending = false
+    private var terminationReady = false
 
     public override init() { super.init() }
 
@@ -213,7 +214,34 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         confirmations?.dismissAll()
-        session?.stop()   // 只断连,别的什么都不做(见文件头)
+        session?.stop()
+    }
+
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationReady { return .terminateNow }
+        if terminationPending { return .terminateLater }
+        terminationPending = true
+        bootstrap?.shutdownForQuit(
+            restoreSystemProxy: panelState.proxy.systemProxyTakenOver
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.terminationReady = true
+                self.session?.stop()
+                sender.reply(toApplicationShouldTerminate: true)
+            case let .failure(failure):
+                self.terminationPending = false
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "A2 尚未退出"
+                alert.informativeText = failure.displayLine
+                alert.addButton(withTitle: "知道了")
+                alert.runModal()
+                sender.reply(toApplicationShouldTerminate: false)
+            }
+        }
+        return .terminateLater
     }
 }
 

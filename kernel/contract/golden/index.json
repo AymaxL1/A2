@@ -147,6 +147,12 @@
       "why": "显式升级(15 票):拷贝内容变了而 unit 一个字没动,于是只有 bin_copied + kernel_restarted —— 换了文件不等于换了进程"
     },
     {
+      "file": "service-change-stopped.json",
+      "schema": "ServiceChangeResult",
+      "kind": "valid",
+      "why": "Panel 生命周期收口:kernel_stopped 后 unit 与 supervisor 登记仍在,服务态是 installed_not_running"
+    },
+    {
       "file": "service-change-purge.json",
       "schema": "ServiceChangeResult",
       "kind": "valid",

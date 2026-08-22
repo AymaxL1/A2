@@ -7,7 +7,7 @@
 [info disabled] 模式:全局 · 节点:JP-02 · 端口:7890  → proxy.status  @basicStatus
 [separator]
 [local enabled] 开启系统代理(复制指令给 AI 助手)  ⇢ local:copySystemProxyPrompt
-[action enabled checked] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
+[action enabled] 关闭系统代理(还原)  → proxy.system.disable  @systemProxyToggle
 [separator]
 [action enabled] 模式:规则  → proxy.mode.set {mode=rule}  @modeSwitch
 [action enabled checked] 模式:全局  → proxy.mode.set {mode=global}  @modeSwitch
@@ -31,4 +31,4 @@
 [action enabled] 添加 / 替换订阅源…  → proxy.subscription.add prompts[name,source]  @subscriptionManage
 [separator]
 [about enabled] 关于 A2 Panel
-[quit enabled] 退出面板(代理继续运行)
+[quit enabled] 退出 A2(同时关闭代理)
