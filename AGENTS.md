@@ -7,6 +7,19 @@ subprocess and read one JSON envelope from stdout. See `docs/agents/a2-cli.md` (
 dangerous arbitration, guidance-on-refusal, plugins). The CLI's own `--help` is the spec — the
 doc points at it rather than duplicating it.
 
+## Git conventions
+
+Trunk is `main` — git flow with the `develop`/`main` pair collapsed into `main` until releases
+need separating. Short-lived branches off `main`, merged back into `main`, deleted on merge:
+
+- `feature/<slug>` — new work (tickets, refactors)
+- `fix/<slug>` — bug fixes; `hotfix/<slug>` for emergencies on a shipped version
+- `release/<version>` — release stabilisation; tag `v<version>` on merge
+- `research/<slug>` — investigation docs; the doc merges into `main` even when the idea is rejected
+
+Agent worktree branches (`worktree-*`) count as feature branches: merge, then delete.
+Commit subjects follow conventional commits — `type(scope): summary`, Chinese summary (see `git log`).
+
 ## Agent skills
 
 ### Issue tracker
