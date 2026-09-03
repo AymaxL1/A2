@@ -260,6 +260,26 @@ export const ErrorCode = {
   pluginLoadFailed: "plugin_load_failed",
   /** 指名道姓的那个插件没登记过(`a2 plugin remove` 的对象不存在)。 */
   unknownPlugin: "unknown_plugin",
+
+  // MARK: URL 分流面(url-router 施工 02 票)—— 两码,都归退出码 5(路走通了、事没办成)
+
+  /**
+   * 决策做完了、降级链也走完了,但最后那步 `open` 没能把链接交出去
+   * (bundle id 不存在、.app 被删了、`open` 非零退出)。
+   *
+   * 为什么必须是一条错误而不是一行日志(母本就只写日志):对 agent 与 CLI 而言,
+   * 「分流成功」与「链接压根没打开」是天差地别的两件事,而它们在报文上唯一的区别就是这一码。
+   */
+  urlRouterOpenFailed: "url_router_open_failed",
+  /**
+   * `takeover` / `restore` 的**非幂等**那一路:当前 handler 不是目标,而真正的执行器
+   * (壳的机械执行器 + 执行指令帧,spec §5/§6.3)要到 04 票才接线。
+   *
+   * 归 5 不归 6:这条请求完全成立、参数也没错 —— 内核确实走到了该动手的地方,
+   * 只是这一版的内核还没有能动手的那只手。agent 拿到它该做的是转告"这条路本版未通",
+   * 不是改参数重试(那是 6 的语义)。
+   */
+  urlRouterExecutorUnwired: "url_router_executor_unwired",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -1132,6 +1152,123 @@ export const ProxySupervisionResultSchema = z.object({
   events: z.array(ProxySupervisionEventSchema),
 });
 export type ProxySupervisionResult = z.infer<typeof ProxySupervisionResultSchema>;
+
+// MARK: - URL 分流面 result(url-router 施工 02 票,spec §3/§4)
+//
+// 五条能力三种 result:`status` 报现状、`decide` 报一个判断、`route` 报"从哪儿出去的",
+// `takeover` / `restore` 共用一条(它们是同一件事的两个方向:把 handler 设成某个 bundle id)。
+
+/**
+ * 配置的**可外传视图** —— 与 `url-router/config.ts` 的 `RedactedUrlRouterConfig` 逐字段对应。
+ *
+ * `roxyAPIKey` 在这里只剩 `roxyAPIKeyConfigured` 一个布尔:spec §8 的那条纪律
+ * (「只留本机文件,不入 git、不进快照推送、不进日志」)在契约层就把值挡住 ——
+ * 报文里根本没有可以放它的字段,谁想漏也漏不出来。
+ */
+export const UrlRouterConfigViewSchema = z.object({
+  fallbackBrowserBundleID: z.string().min(1),
+  routedDomains: z.array(z.string()),
+  roxyApplicationPath: z.string(),
+  roxyProcessMatch: z.string(),
+  roxyProfilePathMarker: z.string(),
+  roxyProfileID: z.string(),
+  roxyAPIHost: z.string().nullable(),
+  roxyAPIOpenPath: z.string(),
+  roxyAPITokenHeader: z.string(),
+  roxyWorkspaceID: z.number().int().nullable(),
+  roxyForceOpen: z.boolean(),
+  roxyAPITimeoutSeconds: z.number(),
+  roxyStartupAttempts: z.number().int(),
+  roxyStartupDelaySeconds: z.number(),
+  /** 设过 key 没有(**值永不外传**)。 */
+  roxyAPIKeyConfigured: z.boolean(),
+});
+export type UrlRouterConfigView = z.infer<typeof UrlRouterConfigViewSchema>;
+
+/**
+ * 系统默认 handler 的现状。
+ *
+ * 三个字段都可能是 `null`,且 `null` 是**一句真话而不是缺省值**:LaunchServices 那份库里
+ * 一台从没换过默认浏览器的机器根本没有对应条目。报 `null` + `undetermined` 说清"未能判定",
+ * 好过猜一个 —— 猜错会让 `takeover` 的幂等判据多出一个错误答案。
+ */
+export const UrlRouterHandlerSchema = z.object({
+  http: z.string().nullable(),
+  https: z.string().nullable(),
+  /** 两个 scheme **都**是目标才算是;有一个读不出来就是 `null`。 */
+  matchesTarget: z.boolean().nullable(),
+  /** 读不出来时说清为什么(如实说「未能判定」)。完整的悬空诊断归 05 票。 */
+  undetermined: z.string().optional(),
+});
+export type UrlRouterHandler = z.infer<typeof UrlRouterHandlerSchema>;
+
+/** `url-router.status` 的 result:配置健康 + handler 现状(只读,spec §3/§8)。 */
+export const UrlRouterStatusResultSchema = z.object({
+  /** 配置文件该在哪儿(在不在是另一回事,见 `configSource`)。 */
+  configPath: z.string().min(1),
+  /** 这份生效配置怎么来的:全缺省 / 文件合并 / 文件用不了已整份退回缺省。 */
+  configSource: z.enum(["defaults", "file", "unusable"]),
+  /** `configSource === "unusable"` 时说清是什么毛病(**绝不带文件原文片段**)。 */
+  problem: z.string().optional(),
+  config: UrlRouterConfigViewSchema,
+  /** 接管的目标身份(`com.a2.panel`)—— agent 免猜。 */
+  panelBundleID: z.string().min(1),
+  handler: UrlRouterHandlerSchema,
+});
+export type UrlRouterStatusResult = z.infer<typeof UrlRouterStatusResultSchema>;
+
+/** `url-router.decide` 的 result:一条 URL 的判决,**不执行**(CLI `route --dry-run` 的落点)。 */
+export const UrlRouterDecideResultSchema = z.object({
+  /** 脱敏后的 URL(query/fragment 换成 redacted)。原文永不回显。 */
+  url: z.string().min(1),
+  /** spec §3 词表:`fallback-browser` / `roxy-cdp:<port>` / `roxy-api` / `roxy-launcher` / `unsupported`。 */
+  decision: z.string().min(1),
+  /** 探到的目标 profile CDP 端口(没探到就没有这个字段 —— 绝不写 0 冒充"没有")。 */
+  roxyDevToolsPort: z.number().int().positive().optional(),
+});
+export type UrlRouterDecideResult = z.infer<typeof UrlRouterDecideResultSchema>;
+
+/** 真的从哪一级出去的(决策词说"该走哪儿",这个说"实际走的哪儿")。 */
+export const UrlRouterActionSchema = z.enum([
+  "cdp-new-tab",
+  "roxy-api",
+  "roxy-launcher",
+  "fallback-browser",
+]);
+export type UrlRouterAction = z.infer<typeof UrlRouterActionSchema>;
+
+/** `url-router.route` 的 result:决策 + 执行(spec §3)。 */
+export const UrlRouterRouteResultSchema = z.object({
+  url: z.string().min(1),
+  decision: z.string().min(1),
+  action: UrlRouterActionSchema,
+  /** 交给谁:bundle id / .app 路径 / `127.0.0.1:<port>`。 */
+  target: z.string().min(1),
+  /**
+   * 决策的那一级没走通、降下来了吗。**降级不是失败**(ok 照旧、退出码 0),
+   * 但它必须在报文里看得见 —— 否则"每次都要多等两秒"这种事永远查不出原因。
+   */
+  fellBack: z.boolean(),
+  /** 这一趟的步骤(已脱敏)。母本写日志文件的那些话进这儿 —— spec §8 不设独立 logPath。 */
+  steps: z.array(z.string()),
+});
+export type UrlRouterRouteResult = z.infer<typeof UrlRouterRouteResultSchema>;
+
+/**
+ * `url-router.takeover` / `url-router.restore` 的 result。
+ *
+ * **02 票只产出幂等那一条**(`already: true`:当前 handler 已经是目标,一个系统调用都没发)。
+ * 真正的编排(拉起壳、下发执行指令帧、等两次系统弹框)归 04 票 —— 在那之前,非幂等的调用返回
+ * `url_router_executor_unwired`。字段只增不改:04 票会往这条上加 `outcome` / `perScheme`。
+ */
+export const UrlRouterHandoffResultSchema = z.object({
+  /** 要成为 http+https 默认 handler 的那个 bundle id。 */
+  target: z.string().min(1),
+  /** 当前 handler 已经是目标 —— 幂等直通,不弹框(spec §3「幂等判据」)。 */
+  already: z.boolean(),
+  handler: UrlRouterHandlerSchema,
+});
+export type UrlRouterHandoffResult = z.infer<typeof UrlRouterHandoffResultSchema>;
 
 // MARK: - 角色注册、订阅推送与三层仲裁(08 票)
 //

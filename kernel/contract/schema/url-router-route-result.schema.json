@@ -1,0 +1,46 @@
+{
+  "title": "UrlRouterRouteResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "cdp-new-tab",
+        "roxy-api",
+        "roxy-launcher",
+        "fallback-browser"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fellBack": {
+      "type": "boolean"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "url",
+    "decision",
+    "action",
+    "target",
+    "fellBack",
+    "steps"
+  ],
+  "additionalProperties": false
+}

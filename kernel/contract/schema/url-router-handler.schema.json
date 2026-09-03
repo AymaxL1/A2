@@ -1,0 +1,46 @@
+{
+  "title": "UrlRouterHandler",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "http": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "https": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "matchesTarget": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "undetermined": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "http",
+    "https",
+    "matchesTarget"
+  ],
+  "additionalProperties": false
+}

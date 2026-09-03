@@ -1,0 +1,168 @@
+{
+  "title": "UrlRouterStatusResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "configPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "configSource": {
+      "type": "string",
+      "enum": [
+        "defaults",
+        "file",
+        "unusable"
+      ]
+    },
+    "problem": {
+      "type": "string"
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "fallbackBrowserBundleID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "routedDomains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "roxyApplicationPath": {
+          "type": "string"
+        },
+        "roxyProcessMatch": {
+          "type": "string"
+        },
+        "roxyProfilePathMarker": {
+          "type": "string"
+        },
+        "roxyProfileID": {
+          "type": "string"
+        },
+        "roxyAPIHost": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roxyAPIOpenPath": {
+          "type": "string"
+        },
+        "roxyAPITokenHeader": {
+          "type": "string"
+        },
+        "roxyWorkspaceID": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roxyForceOpen": {
+          "type": "boolean"
+        },
+        "roxyAPITimeoutSeconds": {
+          "type": "number"
+        },
+        "roxyStartupAttempts": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "roxyStartupDelaySeconds": {
+          "type": "number"
+        },
+        "roxyAPIKeyConfigured": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fallbackBrowserBundleID",
+        "routedDomains",
+        "roxyApplicationPath",
+        "roxyProcessMatch",
+        "roxyProfilePathMarker",
+        "roxyProfileID",
+        "roxyAPIHost",
+        "roxyAPIOpenPath",
+        "roxyAPITokenHeader",
+        "roxyWorkspaceID",
+        "roxyForceOpen",
+        "roxyAPITimeoutSeconds",
+        "roxyStartupAttempts",
+        "roxyStartupDelaySeconds",
+        "roxyAPIKeyConfigured"
+      ],
+      "additionalProperties": false
+    },
+    "panelBundleID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "handler": {
+      "type": "object",
+      "properties": {
+        "http": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "https": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matchesTarget": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "undetermined": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "http",
+        "https",
+        "matchesTarget"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "configPath",
+    "configSource",
+    "config",
+    "panelBundleID",
+    "handler"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,8 @@
+{
+  "url": "https://claude.ai/chat",
+  "decision": "roxy-cdp:50325",
+  "action": "roxy-cdp",
+  "target": "127.0.0.1:50325",
+  "fellBack": false,
+  "steps": []
+}

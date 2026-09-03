@@ -60,6 +60,12 @@ import {
   SubscriptionListResultSchema,
   SystemProxyChangeResultSchema,
   SystemProxyStatusResultSchema,
+  UrlRouterConfigViewSchema,
+  UrlRouterDecideResultSchema,
+  UrlRouterHandlerSchema,
+  UrlRouterHandoffResultSchema,
+  UrlRouterRouteResultSchema,
+  UrlRouterStatusResultSchema,
   VersionResultSchema,
   WireErrorSchema,
 } from "./wire.ts";
@@ -109,6 +115,16 @@ export const CONTRACT_SCHEMAS = {
   SubscriptionListResult: SubscriptionListResultSchema,
   SubscriptionChangeResult: SubscriptionChangeResultSchema,
   ProxySupervisionResult: ProxySupervisionResultSchema,
+  // url-router 施工 02 票:五条能力的三种 result。
+  // `UrlRouterConfigView` 与 `UrlRouterHandler` 是嵌套形状,但**单独登记**(与 `Guidance` 同一口径,
+  // 与 `GuidanceStep` 相反):前者是 `roxyAPIKey` 那条脱敏纪律在契约层的落点、后者是接管幂等判据的
+  // 读数源,两者都会被壳与 agent 单独引用,值得各有一份可读的 schema。
+  UrlRouterConfigView: UrlRouterConfigViewSchema,
+  UrlRouterHandler: UrlRouterHandlerSchema,
+  UrlRouterStatusResult: UrlRouterStatusResultSchema,
+  UrlRouterDecideResult: UrlRouterDecideResultSchema,
+  UrlRouterRouteResult: UrlRouterRouteResultSchema,
+  UrlRouterHandoffResult: UrlRouterHandoffResultSchema,
   // 08 票:角色注册、订阅推送、三层仲裁。09 票的 Swift 壳既要**读**推送(PushEnvelope/KernelEvent/
   // KernelSnapshot),也要**写**请求(RoleRegisterParams/ConfirmationResolveParams),两侧都在这张表上。
   RoleRegisterParams: RoleRegisterParamsSchema,

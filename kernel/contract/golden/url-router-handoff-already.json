@@ -1,0 +1,9 @@
+{
+  "target": "com.a2.panel",
+  "already": true,
+  "handler": {
+    "http": "com.a2.panel",
+    "https": "com.a2.panel",
+    "matchesTarget": true
+  }
+}

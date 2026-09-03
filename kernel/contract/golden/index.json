@@ -673,6 +673,60 @@
       "schema": "AboutResult",
       "kind": "invalid",
       "why": "`bundled` 恒为 false 是契约层的承诺:声称随包分发 GPL 二进制的报文必须被拒(义务面若真变了,那是一次要改 ADR 的决策)"
+    },
+    {
+      "file": "url-router-status-defaults.json",
+      "schema": "UrlRouterStatusResult",
+      "kind": "valid",
+      "why": "URL 分流的常态:没有配置文件 = 全缺省(合法状态,不是错),且系统 handler **未能判定** —— 一台从没换过默认浏览器的机器上 LaunchServices 里根本没有条目,报 null + undetermined 是真话,猜一个才是错"
+    },
+    {
+      "file": "url-router-status-taken-over.json",
+      "schema": "UrlRouterStatusResult",
+      "kind": "valid",
+      "why": "另一端:配置文件用不了(整份退回缺省 + problem 指名道姓,**绝不带原文片段** —— 那份文件里躺着 roxyAPIKey),而 handler 两个 scheme 都已是 com.a2.panel;敏感值在报文里只剩 roxyAPIKeyConfigured 一个布尔"
+    },
+    {
+      "file": "invalid-url-router-status-half-merged-config.json",
+      "schema": "UrlRouterStatusResult",
+      "kind": "invalid",
+      "why": "配置来源三值词表封闭(defaults / file / unusable):没有 `partial` 这种「一半你的一半我的」中间态 —— 那种半态没人说得清自己设过的某一项到底生效没有(01 票的裁定,在契约层钉死)"
+    },
+    {
+      "file": "url-router-decide-roxy-cdp.json",
+      "schema": "UrlRouterDecideResult",
+      "kind": "valid",
+      "why": "只判不开(CLI `route --dry-run` 的落点):决策词带端口,URL 已脱敏(query 与 fragment 都换成 redacted,原文永不回显)"
+    },
+    {
+      "file": "invalid-url-router-decide-zero-port.json",
+      "schema": "UrlRouterDecideResult",
+      "kind": "invalid",
+      "why": "端口是正整数:没探到就**不给这个字段**,绝不写 0 冒充「没有」—— 0 会被下游当成一个真端口去连"
+    },
+    {
+      "file": "url-router-route-fell-back.json",
+      "schema": "UrlRouterRouteResult",
+      "kind": "valid",
+      "why": "运行期降级的形状:决策是 roxy-cdp,实际从 roxy-launcher 出去的。**降级不是失败**(ok 照旧),但 fellBack 与 steps 必须把发生过什么说出来,否则「每次都要多等两秒」永远查不出原因"
+    },
+    {
+      "file": "invalid-url-router-route-decision-word-as-action.json",
+      "schema": "UrlRouterRouteResult",
+      "kind": "invalid",
+      "why": "两张词表不许混用:`decision` 说的是「该走哪儿」(含 roxy-cdp:<port>),`action` 说的是「实际从哪儿出去的」(四值封闭,cdp 那一路叫 cdp-new-tab)"
+    },
+    {
+      "file": "url-router-handoff-already.json",
+      "schema": "UrlRouterHandoffResult",
+      "kind": "valid",
+      "why": "takeover/restore 的幂等直通(spec §3 判据):当前 handler 已经是目标 → ok + already,**不弹框、一个系统调用都不发**"
+    },
+    {
+      "file": "invalid-url-router-handler-third-truth.json",
+      "schema": "UrlRouterHandler",
+      "kind": "invalid",
+      "why": "matchesTarget 只有 true / false / null 三种真值,没有第四种:`null` 已经**就是**「未能判定」,再造一个 \"unknown\" 字符串等于让客户端为同一件事写两个分支"
     }
   ]
 }

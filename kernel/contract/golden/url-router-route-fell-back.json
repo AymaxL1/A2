@@ -1,0 +1,11 @@
+{
+  "url": "https://claude.ai/chat?redacted",
+  "decision": "roxy-cdp:50325",
+  "action": "roxy-launcher",
+  "target": "/Applications/RoxyBrowser.app",
+  "fellBack": true,
+  "steps": [
+    "decision=roxy-cdp:50325 url=https://claude.ai/chat?redacted",
+    "cdp-failed port=50325,降到 roxy launcher"
+  ]
+}

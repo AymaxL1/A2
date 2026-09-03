@@ -1,0 +1,28 @@
+{
+  "configPath": "/Users/me/.a2/url-router.json",
+  "configSource": "defaults",
+  "config": {
+    "fallbackBrowserBundleID": "com.apple.Safari",
+    "routedDomains": ["claude.ai", "claude.com", "anthropic.com"],
+    "roxyApplicationPath": "/Applications/RoxyBrowser.app",
+    "roxyProcessMatch": "/RoxyBrowser.app/Contents/MacOS/RoxyBrowser",
+    "roxyProfilePathMarker": "/browser-cache/",
+    "roxyProfileID": "",
+    "roxyAPIHost": null,
+    "roxyAPIOpenPath": "/browser/open",
+    "roxyAPITokenHeader": "token",
+    "roxyWorkspaceID": null,
+    "roxyForceOpen": false,
+    "roxyAPITimeoutSeconds": 5,
+    "roxyStartupAttempts": 10,
+    "roxyStartupDelaySeconds": 0.2,
+    "roxyAPIKeyConfigured": false
+  },
+  "panelBundleID": "com.a2.panel",
+  "handler": {
+    "http": null,
+    "https": null,
+    "matchesTarget": null,
+    "undetermined": "LaunchServices 里没有读到这个 scheme 的登记项 —— 多半意味着默认 handler 仍是系统出厂的那个。内核不猜,如实报未能判定。"
+  }
+}

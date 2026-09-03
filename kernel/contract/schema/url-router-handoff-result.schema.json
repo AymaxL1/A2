@@ -1,0 +1,64 @@
+{
+  "title": "UrlRouterHandoffResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "already": {
+      "type": "boolean"
+    },
+    "handler": {
+      "type": "object",
+      "properties": {
+        "http": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "https": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matchesTarget": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "undetermined": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "http",
+        "https",
+        "matchesTarget"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "target",
+    "already",
+    "handler"
+  ],
+  "additionalProperties": false
+}

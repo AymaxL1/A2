@@ -91,6 +91,11 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.pluginFailed:
     case ErrorCode.pluginTimeout:
     case ErrorCode.pluginLoadFailed:
+    // URL 分流面同档(02 票):决策与降级都走完了,是最后那步 `open` 没把链接交出去;
+    // 或者 takeover/restore 走到了该动手的地方,而执行器要到 04 票才接线。
+    // 两条都是"路走通了、事没办成" —— 参数一个字都不用改,改了也不会变。
+    case ErrorCode.urlRouterOpenFailed:
+    case ErrorCode.urlRouterExecutorUnwired:
       return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:
