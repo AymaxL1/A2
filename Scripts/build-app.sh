@@ -41,7 +41,16 @@
 #   最大那档真是 1024),APP13 验 template 两张(在、18/36 px —— 壳运行时按
 #   `A2MenuBarIcon.resourceName` 取它们;取不到就回落文字标题,那条路有测试)。
 #   这三个文件都是**资源、不是可执行**(644 无执行位),所以 **APP8 的可执行清单一个字不变**。
-#   于是本脚本的核验清单是 **APP1–APP13**。
+#
+# **url-router 05 票再加两条(默认浏览器的注册资格)**:Info.plist 里多了
+#   `CFBundleURLTypes`(http+https,LSHandlerRank Owner)与 `CFBundleDocumentTypes`
+#   (public.html / public.xhtml / public.url,Viewer + Owner)。这是 `.app` 能出现在
+#   「系统设置 → 默认网页浏览器」候选里的**实证组合**(01 票研究结论 3,逐字照抄参考项目
+#   /Users/Shared/Workspaces/claude-url-router-agent-kit/Info.plist;ad-hoc 签名与
+#   LSUIElement=true 都不碍事)。APP14 验 URL 类型(scheme **恰为** http+https),
+#   APP15 验文档类型(三个 UTI 齐)。两条都只是 plist 键、**不往包里加任何文件** ——
+#   所以 **APP8 的可执行清单照样一个字不变**。
+#   于是本脚本的核验清单是 **APP1–APP15**。
 #
 # **签名顺序变成先内后外**:先签 `Contents/Resources/a2`,再签 bundle(同一 identity)。
 # 12/15 票那套编排当年为随包 GPL 二进制而立、随它一起废除,现在为内嵌内核而回来,理由与当年同构。
@@ -290,6 +299,48 @@ cat > "$APP/Contents/Info.plist" <<PLIST || { echo "FAIL: 写 Info.plist 失败"
 	<true/>
 	<key>LSMinimumSystemVersion</key>
 	<string>$MIN_MACOS</string>
+	<!-- ================================================================
+	     默认浏览器的注册资格(url-router 05 票 / spec 7)
+	     ================================================================
+	     下面两组键是 A2 Panel 能出现在「系统设置 → 默认网页浏览器」候选里的**全部**条件
+	     (01 票实证:参考项目 claude-url-router-agent-kit 就是这个组合;ad-hoc 签名与
+	     LSUIElement=true 都不影响注册资格与弹框行为)。逐字照抄,别"优化" ——
+	     这两组的取值是 Launch Services 认的,不是我们能自己发挥的地方。
+
+	     声明**不等于**接管:光有它们,系统只是把这个 app 列进候选;真的成为默认 handler
+	     只有一条路 —— 用户在系统弹框上点头(a2 url-router takeover,spec 5)。
+	     LSHandlerRank Owner 说的是"这类内容我认领",不是"我抢过来"。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Web Page</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+				<string>public.xhtml</string>
+				<string>public.url</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
 PLIST
@@ -474,6 +525,41 @@ if [ "$MENUBAR_OK" = "1" ]; then
   v_ok "APP13 菜单栏 template 两档就位(Resources/$MENUBAR_ICON_NAME.png 18px + @2x 36px)"
 else
   v_bad "APP13 菜单栏 template 不对:$MENUBAR_DETAIL —— 壳会静默回落成文字标题,用户看不出来"
+fi
+
+# **默认浏览器的注册资格**(url-router 05 票 / spec 7 与 11)。这两条挡的是同一件事:
+#   plist 里那两组键被谁顺手改坏/删掉之后,`.app` **不会报任何错** —— 它只是从
+#   「系统设置 → 默认网页浏览器」的候选列表里**悄悄消失**,而 `a2 url-router takeover` 会在
+#   一个"系统弹框根本弹不出来"的地方失败。运行期看不见,只能在这里挡。
+#
+# 判据"恰为"而不是"包含":多一个 scheme(比如有人顺手加了 `ftp`)意味着这个 .app 在替用户
+#   认领它根本不处理的链接 —— 那是分流范围的静默扩张(spec 3 明写只有 http/https 两个)。
+#   `LSHandlerRank` 与 `CFBundleURLName` 一并逐字核:实证组合是整体成立的,不是"关键的那几个"。
+URL_SCHEME_0="$(plist_get 'CFBundleURLTypes:0:CFBundleURLSchemes:0')"
+URL_SCHEME_1="$(plist_get 'CFBundleURLTypes:0:CFBundleURLSchemes:1')"
+URL_SCHEME_EXTRA="$(plist_get 'CFBundleURLTypes:0:CFBundleURLSchemes:2')"
+URL_TYPE_EXTRA="$(plist_get 'CFBundleURLTypes:1')"
+URL_RANK="$(plist_get 'CFBundleURLTypes:0:LSHandlerRank')"
+URL_NAME="$(plist_get 'CFBundleURLTypes:0:CFBundleURLName')"
+if [ "$URL_SCHEME_0" = "http" ] && [ "$URL_SCHEME_1" = "https" ] \
+   && [ -z "$URL_SCHEME_EXTRA" ] && [ -z "$URL_TYPE_EXTRA" ] \
+   && [ "$URL_RANK" = "Owner" ] && [ "$URL_NAME" = "Web URL" ]; then
+  v_ok "APP14 CFBundleURLTypes:恰一组、scheme 恰为 http+https、LSHandlerRank=Owner(默认浏览器候选资格)"
+else
+  v_bad "APP14 CFBundleURLTypes 不对:schemes='$URL_SCHEME_0','$URL_SCHEME_1'(多出的第三个:'$URL_SCHEME_EXTRA';多出的第二组:'$URL_TYPE_EXTRA'),rank='$URL_RANK',name='$URL_NAME'"
+fi
+
+DOC_UTI_0="$(plist_get 'CFBundleDocumentTypes:0:LSItemContentTypes:0')"
+DOC_UTI_1="$(plist_get 'CFBundleDocumentTypes:0:LSItemContentTypes:1')"
+DOC_UTI_2="$(plist_get 'CFBundleDocumentTypes:0:LSItemContentTypes:2')"
+DOC_ROLE="$(plist_get 'CFBundleDocumentTypes:0:CFBundleTypeRole')"
+DOC_RANK="$(plist_get 'CFBundleDocumentTypes:0:LSHandlerRank')"
+if [ "$DOC_UTI_0" = "public.html" ] && [ "$DOC_UTI_1" = "public.xhtml" ] \
+   && [ "$DOC_UTI_2" = "public.url" ] \
+   && [ "$DOC_ROLE" = "Viewer" ] && [ "$DOC_RANK" = "Owner" ]; then
+  v_ok "APP15 CFBundleDocumentTypes:public.html / public.xhtml / public.url 三档齐(Viewer + Owner)"
+else
+  v_bad "APP15 CFBundleDocumentTypes 不对:UTI='$DOC_UTI_0','$DOC_UTI_1','$DOC_UTI_2',role='$DOC_ROLE',rank='$DOC_RANK'"
 fi
 
 # ---- 收口 ----------------------------------------------------------------------
