@@ -6,6 +6,7 @@
 import { arbitrationCapabilities } from "../capability/arbitration.ts";
 import { BUILTIN_CAPABILITIES } from "../capability/builtin.ts";
 import { proxyCapabilities } from "../capability/proxy.ts";
+import { urlRouterCapabilities } from "../capability/url-router.ts";
 import { CapabilityRegistry } from "../capability/registry.ts";
 import { PROTOCOL_VERSION, type KernelSnapshot, type StatusResult } from "../contract/wire.ts";
 import { restorePlugins } from "../plugin/host.ts";
@@ -80,10 +81,13 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
   void sweepStagingArtifacts(paths).catch(() => {});
   void sweepStaleBuildAreas().catch(() => []);
   const registry = new CapabilityRegistry([
-    // 内置自检样本 + 代理域真能力 + 仲裁面只读查询 + 已登记的插件工具。
+    // 内置自检样本 + 代理域真能力 + URL 分流域 + 仲裁面只读查询 + 已登记的插件工具。
     // **顺序即 `capabilities list` 的输出顺序**;插件排在最后(内置的位置永远不因装插件而变)。
     ...BUILTIN_CAPABILITIES,
     ...proxyCapabilities({ paths, env, supervisor }),
+    // url-router(02 票):不注入 ports/handlers —— 生产路径用真实现(`ps`/`lsof`/`open`/`defaults`,
+    // 路径可经 `A2_URL_ROUTER_*` 覆写,与 `A2_NETWORKSETUP` 同一档)。假件只在单测里注入。
+    ...urlRouterCapabilities({ paths, env }),
     ...arbitrationCapabilities({ paths, arbiter, audit }),
     ...plugins.capabilities,
   ]);

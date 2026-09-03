@@ -21,6 +21,8 @@ export const USAGE = `a2 ${KERNEL_VERSION} —— agent-first 的本机代理内
   capabilities …       能力面:list / describe <id> / call <id>(见 a2 capabilities --help)
   proxy …              代理控制面:on / off / status / mode / node / groups / ping / config /
                        subscription … / supervision(见 a2 proxy --help)
+  url-router …         URL 分流与默认浏览器接管:status / route <url> [--dry-run] / takeover /
+                       restore(见 a2 url-router --help)
   arbitration status   dangerous 三层仲裁面:确认器在不在场、在途确认、审计事件(见 a2 arbitration --help)
   service …            常驻服务:install / uninstall / start / stop / status(见 a2 service --help)
   mihomo …             内嵌代理内核:status / enable / disable / restart(见 a2 mihomo --help)
@@ -367,10 +369,46 @@ export const ABOUT_USAGE = `a2 about —— 版本、许可与外部程序声明
 
 退出码:0 成功 / 1 用法错 / 6 输出不合契约(内部错,正常永不出现)`;
 
+export const URL_ROUTER_USAGE = `a2 url-router —— URL 分流与默认浏览器接管(域子命令 = 能力调用的另一种 argv 写法)
+
+用法:
+  a2 [--json] url-router status                   分流现状:配置从哪儿来/有没有毛病 + 系统 http/https 默认 handler(safe)
+  a2 [--json] url-router route <url>              决策并打开(normal)
+  a2 [--json] url-router route <url> --dry-run    **只判不开** —— 等价于 url-router decide(safe)
+  a2 [--json] url-router decide --url <url>       同上的能力原名写法
+  a2 [--json] url-router takeover                 把 com.a2.panel 设为 http+https 默认 handler(dangerous)
+  a2 [--json] url-router restore [--to <bundleid>] 设回兜底浏览器(dangerous;--to 显式覆写目标)
+
+决策词表(五值,url-router decide 的输出):
+  fallback-browser     没命中分流域名 → 交兜底浏览器(配置 fallbackBrowserBundleID)
+  roxy-cdp:<port>      命中,且探到了目标 profile 正在听的 CDP 端口 → 在已开着的 Roxy 上开标签页
+  roxy-api             命中,没探到 CDP,但 Roxy 本地 API 三件套齐备 → 经 API 拉起 profile 再开
+  roxy-launcher        命中,前两条都不成立 → 直接拉起 Roxy 的 .app
+  unsupported          不是 http(s) → 同样交兜底浏览器(动作相同,但报文里分得开)
+
+三级降级是**运行期**的,不是一次决策定终身:CDP 开标签页失败会降到 launcher,API 没成也降到
+launcher。降级不是失败(ok 照旧、退出码 0),但 result 里的 fellBack 与 steps 会如实说发生过什么。
+
+同一件事的两种写法:
+  a2 url-router route <url>   ≡   a2 capabilities call url-router.route --input '{"url":"<url>"}'
+两者走的是**同一个** registry.invoke —— URL 全程作为独立 argv 传递,不拼字符串、不经 shell。
+
+配置:直接编辑 <A2_HOME>/url-router.json(V1 没有 config 子命令)。无文件 = 全缺省,是合法状态;
+文件用不了则**整份**退回缺省(不留半态),毛病由 url-router status 指名道姓地说。
+roxyAPIKey 是敏感值:只留本机文件,永不进报文、日志与快照(status 只报「设过没设过」)。
+
+接管/还原:改的是全系统的默认浏览器,所以是 dangerous —— 无确认器在场即 fail-closed 默拒。
+**本版内核只落到幂等判据**:当前 handler 已经是目标就直通(already: true,不弹框);否则如实报
+url_router_executor_unwired(退出码 5),因为改 handler 的唯一合法路径是内核下发指令帧、由
+A2 Panel 调系统 API 弹框确认,那条链尚未接线。内核宁可说「没做」,也不走任何替代路径。
+
+退出码:0 成功 / 1 用法错 / 2 dangerous 被拒 / 4 daemon 不可达 / 5 事没办成(链接没打开、执行器未接线) / 6 参数不成立`;
+
 /** 域名 → 该域的用法文本。域子命令面统一从这里取(没登记的域退回顶层帮助)。 */
 export const DOMAIN_USAGE: Record<string, string> = {
   proxy: PROXY_USAGE,
   arbitration: ARBITRATION_USAGE,
+  "url-router": URL_ROUTER_USAGE,
 };
 
 /** 帮助 = 一条成功包封(机读面无例外)+ 人类面原文。 */

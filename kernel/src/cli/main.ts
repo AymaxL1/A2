@@ -17,6 +17,7 @@ import { emitOutcome, type CommandOutcome } from "./outcome.ts";
 import { pluginCommand } from "./plugin.ts";
 import { serviceCommand } from "./service.ts";
 import { statusCommand } from "./status.ts";
+import { normalizeUrlRouterArgs } from "./url-router.ts";
 import { USAGE, helpOutcome, usageOutcome } from "./usage.ts";
 
 /** argv(不含 argv0/argv1)→ 结果。**不**碰进程状态,好让下面那三行决定怎么输出、怎么退出。 */
@@ -63,6 +64,12 @@ async function dispatch(argv: string[]): Promise<CommandOutcome> {
   // 08 票加了 `arbitration`(仲裁面只读查询),走的是同一个解析器。
   if (command === "proxy" || command === "arbitration") {
     return await domainCommand(command, args, resolvePaths());
+  }
+  // url-router(02 票)走的**也是**那个解析器,只是先过一次纯 argv 改写:spec §4 给它定的写法
+  // 带一个位置参数 URL 与一个 `--dry-run`(后者换的是能力,不是参数),与 `--名字 值` 不同形。
+  // 改写之后一切照旧 —— 别名匹配、仲裁、渲染、退出码,一条都没有第二份实现。
+  if (command === "url-router") {
+    return await domainCommand(command, normalizeUrlRouterArgs(args), resolvePaths());
   }
   if (command === "service") {
     return await serviceCommand(args, resolvePaths());
