@@ -1,0 +1,7 @@
+#!/bin/sh
+# 行为假件:把 $A2_URL_ROUTER_PS_FIXTURE 指的那份「ps 全表」原样吐出来;没指就吐空表
+# (= 这台机器上没有任何 Roxy 在跑,分流会落到 launcher 那一级)。
+if [ -n "$A2_URL_ROUTER_PS_FIXTURE" ] && [ -f "$A2_URL_ROUTER_PS_FIXTURE" ]; then
+  cat "$A2_URL_ROUTER_PS_FIXTURE"
+fi
+exit 0

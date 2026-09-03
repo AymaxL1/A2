@@ -29,6 +29,23 @@ const FORBIDDEN_NETWORKSETUP = path.resolve(
   "fake-networksetup/networksetup-forbidden",
 );
 
+/**
+ * **同一道防线,url-router 那四个外部程序的那一份**(02 票)。
+ *
+ * 理由与上面逐字相同,只是后果更露骨:`url-router.route` 的默认实现走 `/usr/bin/open`,
+ * 哪个测试忘了注入,门禁就会**真在跑测试的人脸上弹出一个浏览器窗口**;而 `/bin/ps` 那一路
+ * 更阴——它读的是真进程表,于是同一条测试在"开着 RoxyBrowser"和"没开"的机器上结论不同。
+ *
+ * 所以四个都默认指到一执行就失败的假件;要验行为的测试经 `fake-url-router/sandbox.ts` 显式覆写。
+ */
+const FORBIDDEN_URL_ROUTER = path.resolve(import.meta.dir, "fake-url-router/forbidden");
+const URL_ROUTER_GUARD: Record<string, string> = {
+  A2_URL_ROUTER_PS: FORBIDDEN_URL_ROUTER,
+  A2_URL_ROUTER_LSOF: FORBIDDEN_URL_ROUTER,
+  A2_URL_ROUTER_OPEN: FORBIDDEN_URL_ROUTER,
+  A2_URL_ROUTER_DEFAULTS: FORBIDDEN_URL_ROUTER,
+};
+
 /** 被测的 a2 命令行(编译产物或源码入口)。 */
 export function a2Command(): string[] {
   const bin = process.env.A2_TEST_BIN;
@@ -67,6 +84,7 @@ export async function runCli(
       ...process.env,
       A2_HOME: options.home,
       A2_NETWORKSETUP: FORBIDDEN_NETWORKSETUP,
+      ...URL_ROUTER_GUARD,
       ...options.env,
     },
     stdout: "pipe",
@@ -120,6 +138,7 @@ export async function startDaemon(
       ...process.env,
       A2_HOME: home,
       A2_NETWORKSETUP: FORBIDDEN_NETWORKSETUP,
+      ...URL_ROUTER_GUARD,
       ...env,
     },
     stdout: "pipe",

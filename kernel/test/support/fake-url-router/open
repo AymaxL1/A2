@@ -1,0 +1,15 @@
+#!/bin/sh
+# 行为假件:**不开任何东西**,只把 argv 逐行记进 $A2_URL_ROUTER_OPEN_LOG,
+# 让测试能断言「URL 是作为独立 argv 传进来的、且没有被脱敏改写过」。
+# 退出码可经 $A2_URL_ROUTER_OPEN_EXIT 覆写(验 open 失败那条路)。
+if [ -n "$A2_URL_ROUTER_OPEN_LOG" ]; then
+  for arg in "$@"; do
+    printf '%s\n' "$arg" >> "$A2_URL_ROUTER_OPEN_LOG"
+  done
+  printf -- '--\n' >> "$A2_URL_ROUTER_OPEN_LOG"
+fi
+if [ -n "$A2_URL_ROUTER_OPEN_EXIT" ] && [ "$A2_URL_ROUTER_OPEN_EXIT" != "0" ]; then
+  echo "fake open:按 A2_URL_ROUTER_OPEN_EXIT 演示一次失败" >&2
+  exit "$A2_URL_ROUTER_OPEN_EXIT"
+fi
+exit 0

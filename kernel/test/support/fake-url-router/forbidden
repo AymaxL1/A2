@@ -1,0 +1,14 @@
+#!/bin/sh
+# **兜底假件:一执行就大声失败。**
+#
+# url-router 的执行侧调四个外部程序,全部走**绝对路径**(/bin/ps、/usr/sbin/lsof、
+# /usr/bin/open、/usr/bin/defaults)—— 把 PATH 钉死那道防线对它们无效。
+# 于是只要哪个测试忘了注入行为假件,门禁就会:
+#   * 真去翻用户的进程表,并且行为取决于「用户此刻有没有开着 RoxyBrowser」(测试不可重复);
+#   * 真在用户脸上弹出一个浏览器窗口(`open`)。
+# 两条都不可接受,所以 harness.ts 默认把四个 A2_URL_ROUTER_* 都指到这里:
+# 谁忘了注入,谁当场拿到非零退出 + 这段话,而不是悄悄动用户的机器。
+echo "fake url-router 外部程序(兜底):这个测试没注入行为假件就想调真程序。" >&2
+echo "  收到的 argv:$*" >&2
+echo "  修法:经 test/support/fake-url-router/sandbox.ts 建沙盒(它会注入需要的那几个)。" >&2
+exit 97

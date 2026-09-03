@@ -1,0 +1,9 @@
+#!/bin/sh
+# 行为假件:把 $A2_URL_ROUTER_DEFAULTS_FIXTURE 指的那份 plist 原样吐出来;
+# 没指就非零退出(= LaunchServices 那份库读不出来 → handler 报「未能判定」)。
+if [ -n "$A2_URL_ROUTER_DEFAULTS_FIXTURE" ] && [ -f "$A2_URL_ROUTER_DEFAULTS_FIXTURE" ]; then
+  cat "$A2_URL_ROUTER_DEFAULTS_FIXTURE"
+  exit 0
+fi
+echo "fake defaults:没有 fixture,当作读不出来" >&2
+exit 1
