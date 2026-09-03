@@ -1,6 +1,6 @@
 # 04 执行指令帧 + takeover/restore 编排
 
-Status: open
+Status: claimed
 Blocked by: 03
 
 ## Question
