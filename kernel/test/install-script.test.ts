@@ -14,7 +14,11 @@
 // ============================================================================
 //   * 一律临时目录:安装落点、HOME、A2_HOME 全在 /tmp 下,用户的 `~/.local/bin` 一个字节不碰;
 //   * 不出网:`no_proxy` 钉死,资产只从回环或本地目录取;
-//   * 不 launchctl:卸载路径的"服务还挂着吗"判据是**文件在不在**,不调任何 supervisor。
+//   * 不 launchctl:卸载路径的"服务还挂着吗"判据是**文件在不在**,不调任何 supervisor;
+//   * **不读真的 LaunchServices**(url-router 05 票):第四条前置要跑 `defaults export`,
+//     而那会读跑测试这台机器**当前的默认浏览器** —— 于是同一条用例在"作者机器上装过 A2 Panel"
+//     与没装过时结论不同。所以 `defaults` 一律用 PATH 前置的假件(与假 `uname` 同一种手法:
+//     被测的仍是用户机器上跑的那条代码路径,只是那条路径问到的是我们摆好的答案)。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, symlinkSync } from "node:fs";
@@ -68,6 +72,67 @@ esac
 `;
 }
 
+/**
+ * 假 `defaults`:把给定的那份 LaunchServices 导出物原样吐出来。
+ *
+ * 被测的是脚本里那条**真的会在用户机器上跑**的命令
+ * (`defaults export com.apple.LaunchServices/com.apple.launchservices.secure -`),
+ * 只是这一次它问到的是我们摆好的答案 —— 与假 `uname` 同一种手法。
+ */
+function fakeDefaultsSource(exportBody: string): string {
+  return `#!/bin/sh
+# 假 defaults(install-script 夹具)—— 只实现脚本会用到的那一条子命令。
+case "$1" in
+  export)
+    cat <<'FIXTURE_PLIST'
+${exportBody}
+FIXTURE_PLIST
+    ;;
+  *) echo "假 defaults:未实现 $*" >&2; exit 1 ;;
+esac
+`;
+}
+
+/** 一台**从没换过默认浏览器**的机器:域在,但没有任何用户设定项(第四条前置该放行)。 */
+const LS_EXPORT_EMPTY = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSHandlers</key>
+	<array>
+		<dict>
+			<key>LSHandlerContentType</key>
+			<string>public.png</string>
+			<key>LSHandlerRoleAll</key>
+			<string>com.apple.Preview</string>
+		</dict>
+	</array>
+</dict>
+</plist>`;
+
+/** A2 Panel 被设成过 http handler:第四条前置该拒删 bin。 */
+const LS_EXPORT_PANEL = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSHandlers</key>
+	<array>
+		<dict>
+			<key>LSHandlerRoleAll</key>
+			<string>com.a2.panel</string>
+			<key>LSHandlerURLScheme</key>
+			<string>http</string>
+		</dict>
+		<dict>
+			<key>LSHandlerRoleAll</key>
+			<string>com.a2.panel</string>
+			<key>LSHandlerURLScheme</key>
+			<string>https</string>
+		</dict>
+	</array>
+</dict>
+</plist>`;
+
 interface ReleaseOptions {
   /** 要放哪些平台的内核 bin(默认本机那个平台键 darwin-arm64 + linux-x64)。 */
   platforms?: string[];
@@ -115,6 +180,12 @@ interface RunOptions {
   a2Home?: string;
   /** 假 uname 的输出(平台探测的被测面)。 */
   uname?: { s: string; m: string };
+  /**
+   * 假 `defaults export` 吐出来的那份 LaunchServices 导出物(url-router 05 票的第四条前置)。
+   * **缺省是"没有任何 A2 条目"的那份** —— 于是每条既有用例都在一台干净机器上跑,
+   * 而不是取决于作者本机此刻的默认浏览器是谁。
+   */
+  launchServicesExport?: string;
   /** 追加到 PATH 前面的目录。 */
   path?: string;
   extraEnv?: Record<string, string>;
@@ -134,6 +205,15 @@ interface RunResult {
  */
 async function runInstaller(args: string[], options: RunOptions = {}): Promise<RunResult> {
   let pathPrefix = options.path ?? "";
+  // 假 `defaults` **恒注入**(除非调用方整个换掉 PATH —— 那正是"这台机器上没有 defaults"那条用例)。
+  {
+    const dir = path.join(box, `defaults-${crypto.randomUUID()}`);
+    await mkdir(dir, { recursive: true });
+    const fake = path.join(dir, "defaults");
+    await writeFile(fake, fakeDefaultsSource(options.launchServicesExport ?? LS_EXPORT_EMPTY), "utf8");
+    chmodSync(fake, 0o755);
+    pathPrefix = pathPrefix.length > 0 ? `${pathPrefix}:${dir}` : dir;
+  }
   if (options.uname) {
     const dir = path.join(box, `uname-${crypto.randomUUID()}`);
     await mkdir(dir, { recursive: true });
@@ -407,6 +487,68 @@ test("卸载:没有挂在系统上的东西时删掉 bin,再跑一次是幂等�
   expect(second.stdout).toContain("未作改动");
   // 数据不替用户删,但要说清楚在哪。
   expect(first.stdout).toContain("rm -rf");
+});
+
+// MARK: - 第四条前置(url-router 05 票):还挂着默认浏览器就拒删 bin
+
+test("**卸载被默认浏览器挡下**:LS 用户设定表里有 com.a2.panel 时拒绝,并指向 a2 url-router restore", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  await runInstaller([], { base, uname: { s: "Darwin", m: "arm64" } });
+
+  const result = await runInstaller(["--uninstall"], { launchServicesExport: LS_EXPORT_PANEL });
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("com.a2.panel");
+  // 拒绝即指引:还原它的唯一入口就是这个马上要被删掉的 bin。
+  expect(result.stderr).toContain("a2 url-router restore");
+  // 删了 bin 就没有工具能还原默认浏览器了 —— 所以它必须还在。
+  expect(existsSync(installedBin())).toBe(true);
+});
+
+test("第四条前置的顺序即卸载序列:restore 排在 proxy off **之前**", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  await runInstaller([], { base, uname: { s: "Darwin", m: "arm64" } });
+
+  const result = await runInstaller(["--uninstall"], { launchServicesExport: LS_EXPORT_PANEL });
+
+  const restoreAt = result.stderr.indexOf("a2 url-router restore");
+  const proxyOffAt = result.stderr.indexOf("a2 proxy off");
+  expect(restoreAt).toBeGreaterThanOrEqual(0);
+  expect(proxyOffAt).toBeGreaterThan(restoreAt);
+});
+
+test("没有 A2 条目就照旧放行:一台从没换过默认浏览器的机器,卸载一路走到底", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  await runInstaller([], { base, uname: { s: "Darwin", m: "arm64" } });
+
+  const result = await runInstaller(["--uninstall"], { launchServicesExport: LS_EXPORT_EMPTY });
+
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(installedBin())).toBe(false);
+});
+
+test("**这台机器上没有 defaults**(Linux):当作「没有这回事」跳过,不拦卸载", async () => {
+  await writeRelease();
+  const base = serveRelease();
+  await runInstaller([], { base, uname: { s: "Darwin", m: "arm64" } });
+  // 一个只有"够跑这个脚本"的 PATH,**故意不给 defaults** —— 与 CR3 那条同一种造法。
+  const lean = path.join(box, "lean-no-defaults");
+  await mkdir(lean, { recursive: true });
+  for (const tool of [
+    "sh", "uname", "mktemp", "cp", "mv", "rm", "chmod", "mkdir", "grep", "sed",
+    "cut", "cat", "curl", "wc", "tr", "head", "shasum",
+  ]) {
+    const real = Bun.which(tool);
+    if (real) symlinkSync(real, path.join(lean, tool));
+  }
+
+  const result = await runInstaller(["--uninstall"], { extraEnv: { PATH: lean } });
+
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(installedBin())).toBe(false);
 });
 
 // MARK: - 13 票 CR 修复:两处会让"先看后删"与"校验"落空的洞

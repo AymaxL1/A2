@@ -15,8 +15,10 @@
 #      升级 = 你自己再跑一次这条命令(或直接换掉那个单文件)。
 #   ④ **不碰系统托管**。装完只**打印** `a2 service install`,绝不替你 launchctl / systemctl。
 #      系统状态的改变永远是用户显式发起的(ADR 0008 第 6 条)。
-#   ⑤ **卸载先看后删**。unit 文件还在、系统代理还被接管着的时候,脚本**拒绝**删 bin ——
-#      因为删完之后那两件事就没有工具能收拾了(它们的清理命令正是 a2 自己)。
+#   ⑤ **卸载先看后删**。unit 文件还在、系统代理还被接管着、**A2 Panel 还挂着默认浏览器**的时候,
+#      脚本**拒绝**删 bin —— 因为删完之后这几件事就没有工具能收拾了(它们的清理命令正是 a2 自己)。
+#      第三条(默认 handler)是 url-router 05 票加的,与前两条同构:`a2 url-router restore` 是把
+#      系统默认浏览器还原回去的唯一入口,而它就住在这个 bin 里。
 #
 # ============================================================================
 # POSIX sh,不用 jq
@@ -64,8 +66,8 @@ a2 安装脚本 —— 下载单文件内核 bin、校验 SHA-256、落 PATH
   -h, --help         打印本帮助
 
 升级:**没有静默更新**。重跑本脚本即升级;换了 bin 位置记得重跑 a2 service install。
-卸载:先 a2 proxy off、a2 service uninstall、a2 mihomo uninstall,再 --uninstall 删 bin,
-      最后按需 rm -rf ~/.a2(里面有插件工件、订阅、mihomo 自管目录)。
+卸载:先 a2 url-router restore、a2 proxy off、a2 service uninstall、a2 mihomo uninstall,
+      再 --uninstall 删 bin,最后按需 rm -rf ~/.a2(里面有插件工件、订阅、mihomo 自管目录)。
 USAGE
 }
 
@@ -159,12 +161,33 @@ do_uninstall() {
   [ -f "$a2_home/system-proxy.json" ] && blockers="$blockers  $a2_home/system-proxy.json(系统代理正被 a2 接管着)
 "
 
+  # 第四条前置(url-router 05 票):**A2 Panel 还挂着系统默认 handler 就拒删 bin**。
+  # 与前三条同构 —— 还原它的唯一入口(`a2 url-router restore`)正是这个马上要被删掉的 bin。
+  #
+  # **判据不依赖 daemon**:卸载的典型时刻恰恰是服务已经拆了、内核已经不跑了,
+  # 所以这里既不连 socket 也不跑 a2,只读 LaunchServices 那份**用户设定表**的投影:
+  #   defaults export com.apple.LaunchServices/com.apple.launchservices.secure -
+  # 判据取**保守的那一侧**:`com.a2.panel` 在这份表里出现即拒。这份表记的是用户**显式设过**的
+  # default handler(从没换过默认浏览器的机器里根本没有对应条目),所以它出现就说明用户把
+  # A2 Panel 设成过某种 handler。宁可宽(可能已经还原过、旧条目还留着 → 多问一句
+  # `a2 url-router restore`,那条命令是幂等的),不可漏(漏了就是删完再也还原不回去)——
+  # 与上面「两条都查」同一种哲学:判据宁可宽,不可漏。
+  # 没有 `defaults`(Linux)= 这台机器上根本没有这回事,跳过。
+  if command -v defaults >/dev/null 2>&1; then
+    if defaults export com.apple.LaunchServices/com.apple.launchservices.secure - 2>/dev/null \
+      | grep -q 'com\.a2\.panel'; then
+      blockers="$blockers  系统默认 handler 的用户设定表里有 com.a2.panel(A2 Panel 可能仍是默认浏览器)
+"
+    fi
+  fi
+
   if [ -n "$blockers" ]; then
     printf '拒绝卸载:还有东西挂在系统上,而收拾它们的工具正是 a2 自己。\n\n' >&2
     printf '%s\n' "$blockers" >&2
     cat >&2 <<'BLOCKED'
 先按顺序跑完这几条(每条都是幂等的),再回来卸载:
 
+  a2 url-router restore     把系统默认浏览器设回兜底浏览器(会弹系统确认框;这是唯一的还原入口)
   a2 proxy off              还原系统代理到接管前(「退出即还原」已废除,这是唯一的还原入口)
   a2 service uninstall      停掉并移除 com.a2.kernel
   a2 mihomo uninstall       停掉并移除 a2 自管的那份 mihomo(不动你自己装的那份)
@@ -310,7 +333,7 @@ info "几件要知道的事:"
 info "  * **升级永远显式**:重跑本脚本即升级;a2 不做静默更新、不后台自查版本。"
 info "  * **换了 bin 的位置就重跑 a2 service install** —— unit 里写的是当时那个绝对路径,"
 info "    重跑是幂等的,会把 unit 收敛到新位置。"
-info "  * 卸载:sh install.sh --uninstall(它会先检查服务与系统代理还挂没挂着)。"
+info "  * 卸载:sh install.sh --uninstall(它会先检查服务、系统代理与默认浏览器还挂没挂着)。"
 if [ "$ALREADY_INSTALLED" = "1" ]; then
   info "  * 本次是幂等重跑:没有下载、没有改动。"
 fi
