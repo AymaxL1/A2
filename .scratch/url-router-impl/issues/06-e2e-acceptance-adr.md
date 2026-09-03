@@ -60,3 +60,38 @@ spec §10/§11/§13:
 
 **环境备注**(不入库):新工作树要先在 `kernel/` 跑一次 `bun install`,否则 ⓪a/①/②b/⑤ 四步
 会因为解析不到 `zod` 而红(③④ 反而是绿的 —— bun 跑源码入口时会自动装,于是这种红最容易被误判)。
+
+### 收尾小施工:面板「设为默认浏览器」入口(2026-09-04,子代理;Status 仍 claimed)
+
+spec §9 与地图 04 票裁定的「面板入口按钮」在 01–05 施工里全无落点,本次按 spec §15
+修正案第 10 条补齐,分支 `feature/url-router-06-takeover-entry`,提交 **`29ca9fe`**
+(feat(panel):白名单 +1 + 菜单一项)。
+
+**产出**
+
+| 面 | 落点 |
+|---|---|
+| 白名单 | `A2BootstrapCommand.urlRouterTakeover` = `url-router takeover --json`(共十三条)。经内嵌 bin 子进程 —— 修正案第 3 条的死锁理由逐字沿用 restore 那条 |
+| 动作 | `A2BootstrapMenuAction.takeoverDefaultBrowser`,`confirmation == nil`(**壳侧不加框**:系统弹框就是确认器,再问一遍即双确认) |
+| 菜单 | `A2MenuModelBuilder.defaultBrowserItems`:一项「设为默认浏览器…」,挂在 mihomo 区段之后。可见性只看内嵌 bin 在不在,**不读也不存**「现在是不是已经默认」 |
+| 编排 | `A2BootstrapCoordinator.dispatch` 加一格,读 `commandSucceeded`(回执里的 `handler`/`already` 有意不读);**无前置序列** —— 卸载要先 restore 是因为它会删掉收拾残局的那条命令,接管不会 |
+| 在途/失败 | ⏳ 行说全「http/https 各一次、至多 120s」;失败走既有失败面,内核 `code` + `guidance` 逐条原样转达 |
+
+**测试**:`swift test` **283 → 296(+13)**——白名单三条逐字对照 + 单射 + 只有卸载带确认框;
+接管四路收场(confirmed / already 幂等 / denied / unavailable,夹具全是**真金标**);在途守卫;
+菜单项在场、每份带 bin 的装置里常驻、断连置灰、在途禁用 + ⏳ 行、失败行 + 指引、`⇒` 角标。
+九份含内嵌 bin 的 golden 各 +1 行(`AA_SNAPSHOT_RECORD=1` 重录,文本 diff 逐份核过)。
+bun 侧与 e2e 无白名单条数断言,故零改动。
+
+**门禁**:`bash Scripts/check.sh` **8 步全绿**(① bun test 655 / ② swift test 296 /
+③ 旗舰 e2e **90**(零回归)/ ④ 插件 e2e 50 / ⑤ .app 出包 APP1–APP15)。
+
+**偏差两处**
+
+1. **断连时置灰**(票面只要求 inFlight 期间的显示与 restore 一致)。理由:接管的编排全在
+   内核里(拉壳、下发指令帧、等 120s),内核没跑时点了只会等来「daemon 不可达」。
+   置灰口径**照抄同族的「重启代理内核」**(它也因「重启经内核服务」在断连时置灰),
+   不是新发明;可见性一如票面要求 —— 引导面就绪即显示,从不消失。
+2. **动了两处文档**(票面只说改代码与测试):ADR 0012 第 3 条加一条修订,把上一条
+   「takeover 不在白名单里、共十二条」明确作废(否则 ADR 0015 第 5 条与 0012 互相打架);
+   分发 runbook 的人工项 #13 与「五条白名单」那句随动。
