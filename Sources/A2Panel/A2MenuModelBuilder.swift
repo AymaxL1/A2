@@ -85,6 +85,7 @@ public enum A2MenuModelBuilder {
         //      「没连上,那我该怎么办?」10 票时这个问题的答案只能是"自己去敲 a2 service install"。
         items.append(contentsOf: bootstrapItems(state: state, bootstrap: bootstrap))
         items.append(contentsOf: mihomoItems(state: state, bootstrap: bootstrap))
+        items.append(contentsOf: defaultBrowserItems(state: state, bootstrap: bootstrap))
         items.append(.separator())
 
         // ---- ① 基础状态(04 In:内核运行状态 / 监听端口 / 当前模式与节点)----
@@ -343,9 +344,10 @@ public enum A2MenuModelBuilder {
         let busy = bootstrap.inFlight != nil
         let busyReason = bootstrap.inFlight.map { inFlight -> String in
             switch inFlight {
-            case .install:       return "安装中,请稍候"
-            case .uninstall:     return "卸载中,请稍候"
-            case .restartMihomo: return "重启代理内核中,请稍候"
+            case .install:                return "安装中,请稍候"
+            case .uninstall:              return "卸载中,请稍候"
+            case .restartMihomo:          return "重启代理内核中,请稍候"
+            case .takeoverDefaultBrowser: return "正在设为默认浏览器,请稍候"
             }
         }
 
@@ -388,6 +390,10 @@ public enum A2MenuModelBuilder {
             case .install:       items.append(.info("⏳ 安装中…(经包内内核 bin;装完面板会自动重连)"))
             case .uninstall:     items.append(.info("⏳ 卸载中…"))
             case .restartMihomo: items.append(.info("⏳ 重启代理内核中…(秒级瞬断)"))
+            case .takeoverDefaultBrowser:
+                // 这一条**会等人**:框由系统出、点不点由用户,所以这行要把"在等什么"说全 ——
+                //   否则用户看见的是一个卡了两分钟的菜单,而不是"轮到我点了"(至多 120s 是内核的窗)。
+                items.append(.info("⏳ 正在设为默认浏览器…(系统会为 http 与 https 各弹一次框;至多 120s)"))
             }
         }
         // 失败**如实一行**,含退出码语义。不重试、不掩饰:点了没成,用户有权知道内核说了什么。
@@ -471,6 +477,35 @@ public enum A2MenuModelBuilder {
             enabled: true,
             localAction: .copyInitializeA2Prompt))
         return items
+    }
+
+    /// 「设为默认浏览器…」这一项(url-router 06 票;spec §9 的接管旅程入口 + §15 修正案第 10 条)。
+    ///
+    /// **可见性只有一条判据:内嵌 bin 在不在**(与引导区段同一条隐藏纪律 —— 那份 bin 就是它的执行器)。
+    ///   刻意**不**问「现在是不是已经默认了」:那要多读一份系统状态,而它下一秒就会在系统设置里过期;
+    ///   takeover 本身幂等 —— 已经是默认时内核答 `already: true`,一个系统调用都不发、一个框都不弹,
+    ///   于是"已经是默认还点了一下"的代价恰好是零。判断留在有真值的那一侧(ADR 0008 第 5 条)。
+    ///
+    /// **点下去直接发命令,壳侧没有确认框**:系统那两个框(http/https 各一次)就是确认器,
+    ///   壳再问一遍就是双确认(地图 04 票裁定;理由写在 `A2BootstrapMenuAction.confirmation`)。
+    ///
+    /// 置灰口径**照抄同族的「重启代理内核」**:在途时不许并发第二条,断连时点了也只会等来
+    ///   「daemon 不可达」——接管的编排全在内核里(拉壳、下发指令帧、等 120s),内核没跑就没人编排。
+    ///   置灰而不隐藏,是为了让人看得见这件事存在、也看得见此刻为什么做不了。
+    static func defaultBrowserItems(state: A2PanelState,
+                                    bootstrap: A2BootstrapState) -> [A2MenuItemModel] {
+        guard bootstrap.embeddedBinAvailable else { return [] }
+        let reason: String? = {
+            if bootstrap.inFlight != nil { return "有引导操作在途" }
+            if case .disconnected = state.connection { return "内核未连接(接管经内核服务)" }
+            return nil
+        }()
+        return [A2MenuItemModel(
+            kind: .bootstrap,
+            title: "设为默认浏览器…",
+            enabled: reason == nil,
+            bootstrapAction: .takeoverDefaultBrowser,
+            disabledReason: reason)]
     }
 
     /// 「高级」子菜单。有内嵌 bin 就常驻 —— 能装就能卸(ADR 0012 第 6 条),

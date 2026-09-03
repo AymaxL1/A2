@@ -138,10 +138,11 @@ struct A2BootstrapMenuTests {
         #expect(upgrade.enabled)
     }
 
-    @Test("16 分支⑥已连 + 版本一致:引导区段只剩「高级 → 停止并卸载内核服务」")
+    @Test("16 分支⑥已连 + 版本一致:引导区段只剩「设为默认浏览器…」+「高级 → 停止并卸载内核服务」")
     func branchAdvancedOnly() throws {
         let m = model(A2PanelFixtures.bootstrapAdvanced)
-        #expect(bootstrapItems(m).map(\.bootstrapAction) == [.uninstall],
+        // 06 票起接管入口常驻(它不看版本、也不看服务态);安装/升级项仍然一个都不该出。
+        #expect(bootstrapItems(m).map(\.bootstrapAction) == [.takeoverDefaultBrowser, .uninstall],
                 "版本一致时不该出任何安装/升级项")
         let advanced = try #require(item(m, titled: "高级"))
         #expect(advanced.kind == .group)
@@ -154,6 +155,102 @@ struct A2BootstrapMenuTests {
             $0.kind == .info && $0.title.contains("只拆服务") && $0.title.contains("~/.a2")
                 && $0.title.contains("勾选")
         })
+    }
+
+    // ========================================================================
+    // 06 票(url-router):「设为默认浏览器…」那一项
+    // ========================================================================
+    //
+    // 可见性只有一条判据:内嵌 bin 在不在。「已经是默认了就藏起来」这条**有意不做** ——
+    //   壳为此要多读一份系统状态,而 takeover 幂等(已是默认时内核 `already: true` 安静收场)。
+
+    @Test("06 已连 + 有内嵌 bin:出「设为默认浏览器…」,可点,绑 takeover,**不绑能力 id**")
+    func takeoverEntryIsPresent() throws {
+        let m = model(A2PanelFixtures.bootstrapAdvanced)
+        let takeover = try #require(item(m, titled: "设为默认浏览器…"))
+        #expect(takeover.kind == .bootstrap)
+        #expect(takeover.enabled)
+        #expect(takeover.bootstrapAction == .takeoverDefaultBrowser)
+        #expect(takeover.capabilityID == nil, "它经内嵌 bin 起子进程,不是能力调用")
+        #expect(takeover.localAction == nil)
+        // 角标(tooltip / 文本快照)如实写出它会跑什么。
+        #expect(takeover.bootstrapAction?.badge == "a2 url-router takeover")
+    }
+
+    @Test("06 它在**每一份**有内嵌 bin 的装置里都在场(不随任何状态变形、不随状态消失)",
+          arguments: A2PanelFixtures.fixtures.map(\.name))
+    func takeoverEntryIsAlwaysThereWithEmbeddedBin(_ name: String) throws {
+        let fixture = try #require(A2PanelFixtures.fixtures.first { $0.name == name })
+        let m = model(fixture)
+        let takeover = item(m, titled: "设为默认浏览器…")
+        if fixture.bootstrap.embeddedBinAvailable {
+            #expect(takeover != nil, "有内嵌 bin 就该有入口:\(name)")
+            #expect(takeover?.bootstrapAction == .takeoverDefaultBrowser)
+        } else {
+            // 没有内嵌 bin = 没有执行器,不给一个点了必然失败的入口(与引导区段同一条纪律)。
+            #expect(takeover == nil, "没有内嵌 bin 却出了接管入口:\(name)")
+        }
+    }
+
+    @Test("06 断连时置灰并说清为什么(接管的编排全在内核里 —— 内核没跑就没人编排)")
+    func takeoverIsDisabledWhileDisconnected() throws {
+        let m = model(A2PanelFixtures.bootstrapNotInstalled)
+        let takeover = try #require(item(m, titled: "设为默认浏览器…"))
+        #expect(takeover.enabled == false)
+        #expect(takeover.disabledReason == "内核未连接(接管经内核服务)")
+    }
+
+    @Test("06 在途:项留着但禁用,另出一条把「在等什么」说全的 ⏳ 行(至多 120s 是内核的窗)")
+    func takeoverInFlightShowsTheWait() throws {
+        let m = A2MenuModelBuilder.build(
+            state: A2PanelFixtures.bootstrapAdvanced.state,
+            bootstrap: A2BootstrapState(embeddedBinAvailable: true,
+                                        embeddedKernelVersion: "0.1.0",
+                                        serviceState: .running,
+                                        inFlight: .takeoverDefaultBrowser))
+        let takeover = try #require(item(m, titled: "设为默认浏览器…"))
+        #expect(takeover.enabled == false)
+        #expect(takeover.disabledReason == "有引导操作在途")
+        let waiting = try #require(items(m).first { $0.title.hasPrefix("⏳ 正在设为默认浏览器…") })
+        #expect(waiting.kind == .info)
+        #expect(waiting.enabled == false)
+        #expect(waiting.title.contains("http 与 https"), "两个框各一次是 OS 行为,得事先说")
+        #expect(waiting.title.contains("120s"))
+        // 在途期间别的引导项一并禁用(在途守卫会丢弃第二次点击,菜单不该假装还能点)。
+        #expect(item(m, titled: "停止并卸载内核服务…")?.enabled == false)
+    }
+
+    @Test("06 接管失败(用户在系统框上点了取消):失败行 + 指引与既有失败面**同一条路**")
+    func takeoverFailureUsesTheSameFailureSurface() throws {
+        let m = A2MenuModelBuilder.build(
+            state: A2PanelFixtures.bootstrapAdvanced.state,
+            bootstrap: A2BootstrapState(
+                embeddedBinAvailable: true,
+                embeddedKernelVersion: "0.1.0",
+                serviceState: .running,
+                lastFailure: A2BootstrapFailure(
+                    code: "confirmation_denied",
+                    message: "url-router.takeover 的确认被拒绝,未执行。",
+                    exitCode: 2,
+                    guidance: A2Guidance(
+                        summary: "这次接管被拒绝了 —— 想接管请重新发起,并在系统弹框上点「使用 “A2 Panel”」。",
+                        steps: [A2GuidanceStep(description: "核实当前默认浏览器",
+                                               command: "a2 url-router status")]))))
+        let all = items(m)
+        let failureIndex = try #require(all.firstIndex { $0.title.hasPrefix("⚠️ 引导失败:") })
+        #expect(all[failureIndex].title.contains("confirmation_denied"))
+        #expect(all[failureIndex].title.contains("退出码 2"))
+        // 指引逐行原样摊开(壳不改写、不摘要 —— 与 purge 被拒那条同一条实现)。
+        #expect(all[failureIndex + 1].title.contains("这次接管被拒绝了"))
+        #expect(all.contains { $0.title.contains("a2 url-router status") })
+        // 失败之后那一项照样可点:takeover 幂等,重来一次的代价是零。
+        #expect(item(m, titled: "设为默认浏览器…")?.enabled == true)
+    }
+
+    @Test("06 文本快照带出接管那条命令(⇒ 角标,与能力项的 → 一眼可分)")
+    func textSnapshotCarriesTheTakeoverCommand() {
+        #expect(model(A2PanelFixtures.bootstrapAdvanced).textSnapshot
+            .contains("⇒ a2 url-router takeover"))
     }
 
     // ========================================================================

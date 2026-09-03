@@ -130,7 +130,9 @@ JSON 解析器）。这条约定有断言钉着（`kernel/test/release-manifest.
 - 15 票交付**内核侧机制**：`service install --copy-to-home`、`service status` 的 `binPath`；
 - 16 票交付**面板侧引导**：首启说明框（触发判据是纯函数，四输入全组合有断言）、
   菜单的「安装并启动内核 / 启动内核 / 升级内核 vX→vY」与「高级 → 停止并卸载内核服务」（带确认），
-  执行器只发 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 那五条白名单命令、只读机读 JSON。
+  执行器只发 [ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) 那份白名单里的命令
+  （16 票时四条，历次修订后为十三条，最后一条是 06 票菜单入口「设为默认浏览器…」发的
+  `url-router takeover`）、只读机读 JSON。
 
 门禁 ⑤ 步每次都在验：恰两个可执行、内嵌 bin 自报版本 = 本次构建的内核版本、arm64 单架构，
 外加 **APP11**——内嵌 bin 以一次性 `A2_HOME` 实跑一次 `service status --json`（**只读**），
@@ -329,7 +331,7 @@ a2 service install   # 幂等，会把 unit 收敛到新位置
 | 11 | **小白路径真机走一遍**：下载 → 打开 → 点「安装并启动」→ 内核起来 → 菜单能用 | **代码已就位**（16 票）；只差一台干净机器 + 真人点那几下。门禁**从不**真装服务（install/uninstall 会动 launchd），所以这一段永远只能由人验 | 本文 §2.0；[ADR 0012](../adr/0012-panel-self-sufficient-bootstrap.md) |
 | 12 | **真按一次回车**：在首启说明框、卸载确认框、dangerous 确认窗上各按一次 Return，确认落点分别是「稍后」「取消」「拒绝」——**都不改变系统状态** | 门禁只验得到 `keyEquivalent` 这个属性值（16 票 CR 后有断言），验不到「AppKit 把这个键真的派给了那个按钮」；真人按一下才算数 | 16 票 CR；[ADR 0005](../adr/0005-agent-first-interaction.md)「沉默不是同意」 |
 
-| 13 | **url-router 接管旅程真机三项**：`a2 url-router takeover` 弹框实感（http/https 两框、取消、超时、部分成功各走一遍）；`A2 Panel` 真的出现在「系统设置 → 默认网页浏览器」候选里；接管后点链接分流实走 | 干净真机 + 真人点框。门禁**绝不**真改 handler（全假件），这一段永远只能由人验 | [ADR 0015](../adr/0015-url-router-default-browser.md)；`.scratch/url-router-impl/issues/06` |
+| 13 | **url-router 接管旅程真机三项**：`a2 url-router takeover` **或面板菜单「设为默认浏览器…」**（06 票补的入口，经同一条内嵌 bin 命令）弹框实感（http/https 两框、取消、超时、部分成功各走一遍）；`A2 Panel` 真的出现在「系统设置 → 默认网页浏览器」候选里；接管后点链接分流实走 | 干净真机 + 真人点框。门禁**绝不**真改 handler（全假件），这一段永远只能由人验 | [ADR 0015](../adr/0015-url-router-default-browser.md)；`.scratch/url-router-impl/issues/06` |
 | 14 | **用户取消弹框的 NSError domain/code 实测回填**：拿到真值后壳侧 `A2URLRouterExecutorRunner.Ledger.record` 一处加判断、金标占位样本（`NSOSStatusErrorDomain/-10814`）转正，连同「谁来判」过一次 CR | #13 的真机弹框；04 票有意不编造 | `.scratch/url-router-impl/issues/04` Comments |
 | 15 | **悬空自动回落实测**：把默认 handler 的 .app 拖废纸篓后，系统点链接确实回落（预期 Safari）——research 01 的中置信度结论要真机钉死 | 真机 + 可牺牲的 handler 注册 | `docs/research/url-router-default-handler.md` |
 | 16 | **Roxy 实配**：`~/.a2/url-router.json` 填 profileID / APIKey / workspaceID，核对 `roxyProfilePathMarker` 与 RoxyBrowser 实跑命令行 | 用户的 Roxy 与 API key（敏感值只留本机，绝不入 git） | spec §8；`docs/research/url-router-ts-port-facts.md` 结论 4 |

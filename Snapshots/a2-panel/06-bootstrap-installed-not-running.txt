@@ -3,6 +3,7 @@
 [info disabled] 内核:未连接(内核未运行)— 仅本面板失联;内置代理内核随内核服务起落
 [bootstrap enabled] 启动内核  ⇒ a2 service install --copy-to-home
 [local enabled] 初始化 A2（添加到 AI 助手）  ⇢ local:copyInitializeA2Prompt
+[bootstrap disabled] 设为默认浏览器…  ⇒ a2 url-router takeover  (内核未连接(接管经内核服务))
 [separator]
 [group enabled] 高级
   [bootstrap enabled] 停止并卸载内核服务…  ⇒ a2 service uninstall

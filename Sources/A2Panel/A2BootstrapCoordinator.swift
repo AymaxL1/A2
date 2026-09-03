@@ -38,6 +38,17 @@
 // 一个字都不改写(ADR 0008 第 5 条)。
 //
 // ============================================================================
+// 接管入口:一条命令,没有前置(url-router 06 票)
+// ============================================================================
+// 菜单那条「设为默认浏览器…」走的是**同一个** `perform` 出口,只是它没有任何前置序列 ——
+//   直接发 `url-router takeover`。为什么这一条这么短,而卸载那条要先问再还原:
+//   卸载会把"收拾残局的那个命令"本身删掉(所以必须先确认残局不存在),接管不会。
+// 与 restore 共享的三件事:走内嵌 bin(同一个死锁理由)、会等人(至多 120s,期间引导面锁着)、
+//   失败原样转达(内核的 code + guidance 逐条进菜单)。
+// 壳**不先问一次 `url-router status`**:那会多一份立刻过期的系统状态副本,而 takeover 幂等 ——
+//   已经是默认时内核自己答 `already: true` 且一个框都不弹,判断留在有真值的那一侧。
+//
+// ============================================================================
 // 为什么两个调度器要能注入
 // ============================================================================
 // 门禁里**绝不许**真装服务、真碰 launchctl,所以引导链路的验证只能靠注入:
@@ -300,6 +311,20 @@ public final class A2BootstrapCoordinator {
                     self.state.mihomoFacts = facts
                     self.state.lastFailure = nil
                 case let .failure(failure):
+                    self.state.lastFailure = failure
+                }
+            case .takeoverDefaultBrowser:
+                // 06 票:面板只关心「成没成」。回执里的 `handler` / `already` **有意不读** ——
+                //   读了就等于壳自己存了一份"我现在是不是默认浏览器"的状态,而下一秒用户在
+                //   系统设置里改一下它就过期了。菜单里那一项因此**恒常在场、不随状态变形**
+                //   (takeover 幂等:已经是默认时内核 `already: true` 安静收场,一个框都不弹)。
+                switch A2BootstrapReading.commandSucceeded(output) {
+                case .success:
+                    self.state.lastFailure = nil
+                case let .failure(failure):
+                    // 原样转达:`confirmation_denied` / `confirmation_timeout` /
+                    //   `confirmation_unavailable` / `url_router_partial_takeover` 的下一步
+                    //   全写在内核给的 guidance 里,壳一个字不改写(与 restore 那条同一姿势)。
                     self.state.lastFailure = failure
                 }
             }

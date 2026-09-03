@@ -5,7 +5,8 @@
 // ============================================================================
 // 是:面板经 `.app` 里那份内嵌内核 bin 发起**白名单里那几条命令**、解析机读 JSON、把结果交出去。
 // 不是:第二条通往内核的路。壳与内核说话的正路仍是 UDS 长连接(`A2PanelSession`);
-//       本层只在**内核还没装/没跑**、**要换版本**或**要卸干净**的那几个时刻用得上,一共十二条,一条不多。
+//       本层只在**内核还没装/没跑**、**要换版本**、**要卸干净**或**要改系统默认浏览器**的那几个时刻
+//       用得上,一共十三条,一条不多。
 //
 // **白名单是硬的**(ADR 0012 第 3 条):`A2BootstrapCommand` 是全仓唯一构造 argv 的地方,
 //   没有 `run(arbitrary:)` 之类的口子。想多发一条命令就得改这个枚举 —— 那会当场撞上
@@ -34,11 +35,12 @@ import Foundation
 import A2Contract
 
 // ============================================================================
-// ① 白名单:十二条,一条不多
+// ① 白名单:十三条,一条不多
 // ============================================================================
 
-/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条;十二条 —— 17 票五条、14 票 +2、
-/// 2026-08-22 生命周期 +3,url-router 05 票 +2:卸载序列的 restore 前置)。
+/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条;十三条 —— 17 票五条、14 票 +2、
+/// 2026-08-22 生命周期 +3,url-router 05 票 +2(卸载序列的 restore 前置)、06 票 +1
+/// (菜单那条「设为默认浏览器…」的 takeover;spec §15 修正案第 3/10 条,ADR 0015 第 5 条))。
 ///
 /// 每一条都带 `--json`:壳只看机读面,人类面的散文一个字都不解析
 /// (散文会为了好读而改,机读包封改一次就要动契约与金标)。
@@ -83,6 +85,17 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     /// 走**内嵌 bin** 而不是 UDS 会话,理由见 `A2BootstrapCoordinator` 的卸载前置那一节
     /// (壳自己就是这条命令的机械执行器,同一条连接上自调会与执行器角色互等)。
     case urlRouterRestore
+    /// 把 A2 Panel 设成 http+https 的默认 handler(06 票:菜单那条「设为默认浏览器…」)。
+    ///
+    /// 与 restore **同族同纪律**:同一条内嵌 bin 通道、同样会等人(系统弹框 http/https 各一次,
+    /// 内核那侧的窗 120s)、同样在等待期间把引导面锁住。走内嵌 bin 的理由与 restore 逐字相同 ——
+    /// 壳自己就是这条命令的机械执行器,经会话自发起会与内核的反向指令帧互等死锁(05 票实证)。
+    ///
+    /// **壳侧不加确认框**:系统那两个框就是确认器(ADR 0015 可复用确认器原则),
+    /// 壳再问一遍就是双确认 —— 地图 04 票裁定否掉的正是它。
+    /// **也不做「已是默认就隐藏」的状态判断**:takeover 幂等,已经是默认时内核直接
+    /// `already: true` 收场(一个系统调用都不发、一个框都不弹),壳不为此多读一份系统状态。
+    case urlRouterTakeover
 
     /// 传给内嵌 bin 的 argv。**全仓唯一构造引导 argv 的地方**。
     public var arguments: [String] {
@@ -99,6 +112,7 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
         case .proxyOff:              return ["proxy", "off", "--json"]
         case .urlRouterStatus:       return ["url-router", "status", "--json"]
         case .urlRouterRestore:      return ["url-router", "restore", "--json"]
+        case .urlRouterTakeover:     return ["url-router", "takeover", "--json"]
         }
     }
 

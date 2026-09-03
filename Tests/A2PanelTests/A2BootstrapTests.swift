@@ -77,7 +77,7 @@ enum BootstrapGolden {
 // ① 白名单
 // ============================================================================
 
-@Suite("16/17/14 引导白名单(ADR 0012 第 3 条:七条,一条不多)")
+@Suite("16/17/14/05/06 引导白名单(ADR 0012 第 3 条:十三条,一条不多)")
 struct A2BootstrapWhitelistTests {
 
     @Test("生命周期白名单逐字对照 —— 多一条少一条都要在这里当场红")
@@ -96,22 +96,28 @@ struct A2BootstrapWhitelistTests {
             ["proxy", "off", "--json"],
             ["url-router", "status", "--json"],
             ["url-router", "restore", "--json"],
+            ["url-router", "takeover", "--json"],
         ])
     }
 
-    @Test("生命周期白名单只有十二条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
-    func whitelistHasTwelveEntries() {
-        #expect(A2BootstrapCommand.allCases.count == 12)
+    @Test("生命周期白名单只有十三条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
+    func whitelistHasThirteenEntries() {
+        #expect(A2BootstrapCommand.allCases.count == 13)
     }
 
-    @Test("05 url-router 域恰两条:status(只读)与 restore —— **takeover 不在白名单里**")
-    func urlRouterSurfaceIsRestoreOnly() {
+    @Test("05/06 url-router 域恰三条:status(只读)+ restore(卸载前置)+ takeover(菜单入口)")
+    func urlRouterSurfaceHasThreeEntries() throws {
         let urlRouter = A2BootstrapCommand.allCases.filter { $0.arguments[0] == "url-router" }
-        #expect(urlRouter == [.urlRouterStatus, .urlRouterRestore])
-        // 接管是用户主动发起的事(菜单/CLI 各有各的入口),卸载序列只需要**还原**那一半。
-        // 把 takeover 放进这份名单等于让卸载路径拥有一个它永远不该用的能力。
+        #expect(urlRouter == [.urlRouterStatus, .urlRouterRestore, .urlRouterTakeover])
+        // 06 票(spec §15 修正案第 3/10 条 + ADR 0015 第 5 条):接管由面板发起时也**必须**
+        //   经内嵌 bin 起子进程 —— 壳自己就是这条命令的机械执行器,经会话自发起会与内核
+        //   反向推来的执行指令帧互等死锁。所以它在这份名单里,而且**只**有这一条 argv 形态。
+        #expect(A2BootstrapCommand.urlRouterTakeover.arguments == ["url-router", "takeover", "--json"])
+        // 三条各占一个枚举成员,没有"同一条命令加个布尔参数"的写法(与 --purge 同一条规矩)。
+        #expect(Set(urlRouter).count == 3)
+        // 一条都不带 `--to`:显式覆写还原目标是 CLI/agent 的事,面板只发不带参数的那两条。
         for command in urlRouter {
-            #expect(command.arguments.contains("takeover") == false)
+            #expect(command.arguments.contains("--to") == false)
         }
     }
 
@@ -151,6 +157,7 @@ struct A2BootstrapWhitelistTests {
     func badgeShowsTheRealCommand() {
         #expect(A2BootstrapMenuAction.install.badge == "a2 service install --copy-to-home")
         #expect(A2BootstrapMenuAction.uninstall.badge == "a2 service uninstall")
+        #expect(A2BootstrapMenuAction.takeoverDefaultBrowser.badge == "a2 url-router takeover")
     }
 
     @Test("17 菜单动作 → 命令:装恒是幂等 install;卸按那一格分两条(默认那条不删数据)")
@@ -160,6 +167,17 @@ struct A2BootstrapWhitelistTests {
         #expect(A2BootstrapMenuAction.install.command(purge: true) == .serviceInstall)
         #expect(A2BootstrapMenuAction.uninstall.command(purge: false) == .serviceUninstall)
         #expect(A2BootstrapMenuAction.uninstall.command(purge: true) == .serviceUninstallPurge)
+        // 06 票:接管那一项与"勾选"更无关系 —— 两种传法都是同一条 takeover。
+        #expect(A2BootstrapMenuAction.takeoverDefaultBrowser.command(purge: false) == .urlRouterTakeover)
+        #expect(A2BootstrapMenuAction.takeoverDefaultBrowser.command(purge: true) == .urlRouterTakeover)
+    }
+
+    @Test("06 菜单动作 → 命令是**单射**:四个动作各落到自己那条,没有两项发同一条命令")
+    func everyMenuActionHasItsOwnCommand() {
+        let commands = A2BootstrapMenuAction.allCases.map { $0.command(purge: false) }
+        #expect(Set(commands).count == A2BootstrapMenuAction.allCases.count)
+        // 而且每一条都真的在白名单里(枚举本身就是名单,这条断言防的是有人另开构造 argv 的口子)。
+        #expect(commands.allSatisfy { A2BootstrapCommand.allCases.contains($0) })
     }
 
     @Test("17 角标画的是**默认**那条(菜单项本身永远不是删数据的那一条)")
@@ -183,6 +201,15 @@ struct A2BootstrapConfirmationTests {
     @Test("17 装那一项没有确认框(首启说明框已经问过一次,菜单项是用户自己去点的)")
     func installHasNoConfirmation() {
         #expect(A2BootstrapMenuAction.install.confirmation == nil)
+    }
+
+    @Test("06 接管那一项**也没有**壳侧确认框 —— 系统弹框就是确认器,壳再问一遍就是双确认")
+    func takeoverHasNoShellConfirmation() {
+        // 地图 04 票裁定 / ADR 0015 可复用确认器原则:OS 强制呈现、不可伪造、结果可感知。
+        // 这条断言守的是"别有人好心加一个框" —— 加了当场红,而红的理由写在动作自己的注释里。
+        #expect(A2BootstrapMenuAction.takeoverDefaultBrowser.confirmation == nil)
+        // 反面对照:真正需要壳侧确认的只有卸载那一条(它删的东西系统不会替你问)。
+        #expect(A2BootstrapMenuAction.allCases.filter { $0.confirmation != nil } == [.uninstall])
     }
 
     @Test("17 勾选框在,而且**默认不勾** —— 破坏性的那一侧绝不预勾")
@@ -770,6 +797,100 @@ struct A2BootstrapCoordinatorTests {
 
         #expect(runner.issued == [.urlRouterStatus, .urlRouterRestore, .serviceUninstallPurge,
                                   .serviceStatus, .mihomoStatus])
+    }
+
+    // ========================================================================
+    // 06 接管入口:一条命令,没有前置(spec §9 / §15 修正案第 10 条)
+    // ========================================================================
+
+    @Test("06 点「设为默认浏览器…」:发的是 `url-router takeover`,**不先问一次 status**")
+    func takeoverIssuesTheWhitelistedCommand() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterTakeover] =
+            try BootstrapGolden.success("url-router-handoff-confirmed.json")
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        #expect(coordinator.perform(.takeoverDefaultBrowser) == true)
+
+        // 前置只挂在卸载上:接管这条不多问一句(status 只会给壳一份立刻过期的系统状态副本)。
+        #expect(runner.issued == [.urlRouterTakeover, .serviceStatus, .mihomoStatus])
+        #expect(runner.issued.contains(.urlRouterStatus) == false)
+        #expect(runner.issued.contains(.urlRouterRestore) == false, "接管绝不能反手发还原")
+        #expect(coordinator.state.inFlight == nil)
+        #expect(coordinator.state.lastFailure == nil)
+    }
+
+    @Test("06 幂等那一格(内核答 `already: true`):壳照样安静成功,不额外说一句话")
+    func takeoverAlreadyIsASilentSuccess() throws {
+        let runner = RecordingRunner()
+        // 金标这一份没有 outcome/perScheme —— 一个系统调用都没发、一个框都没弹的那种收场。
+        runner.responses[.urlRouterTakeover] =
+            try BootstrapGolden.success("url-router-handoff-already.json")
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.takeoverDefaultBrowser)
+
+        #expect(coordinator.state.lastFailure == nil)
+        #expect(runner.issued.filter { $0 == .urlRouterTakeover }.count == 1, "幂等 ≠ 重试")
+    }
+
+    @Test("06 用户在系统框上点了取消:失败**原样**落地,内核的 guidance 逐条转达")
+    func takeoverDeniedIsRelayedVerbatim() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterTakeover] =
+            try BootstrapGolden.failure("response-confirmation-denied.json", exitCode: 2)
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.takeoverDefaultBrowser)
+
+        let failure = try #require(coordinator.state.lastFailure)
+        #expect(failure.code == "confirmation_denied")
+        #expect(failure.exitCode == 2)
+        #expect(failure.guidanceLines.isEmpty == false, "拒绝即指引:内核给的下一步不许被吞")
+        // 失败不重试(点一次取消不该换来第二个框),引导面照样放开。
+        #expect(runner.issued.filter { $0 == .urlRouterTakeover }.count == 1)
+        #expect(coordinator.state.inFlight == nil)
+    }
+
+    @Test("06 没人能确认(无 GUI 会话 / 壳不可用):同一条路,内核的 code 与指引原样呈现")
+    func takeoverUnavailableIsRelayed() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterTakeover] =
+            try BootstrapGolden.failure("response-confirmation-unavailable.json", exitCode: 2)
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.takeoverDefaultBrowser)
+
+        let failure = try #require(coordinator.state.lastFailure)
+        #expect(failure.code == "confirmation_unavailable")
+        #expect(failure.guidanceLines.isEmpty == false)
+    }
+
+    @Test("06 在途守卫对接管一视同仁:等人点框的那段时间里,别的引导项一条都发不出去")
+    func takeoverHoldsTheInFlightGuard() throws {
+        var pending: [() -> Void] = []
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterTakeover] =
+            try BootstrapGolden.success("url-router-handoff-confirmed.json")
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let coordinator = A2BootstrapCoordinator(
+            runner: runner, socketPath: nil,
+            execute: { work in pending.append(work) }, deliver: Self.inline,
+            onChange: { _ in })
+
+        #expect(coordinator.perform(.takeoverDefaultBrowser) == true)
+        #expect(coordinator.state.inFlight == .takeoverDefaultBrowser)
+        #expect(coordinator.perform(.install) == false)
+        #expect(coordinator.perform(.uninstall) == false)
+        #expect(coordinator.perform(.takeoverDefaultBrowser) == false)
+
+        while !pending.isEmpty { pending.removeFirst()() }
+        #expect(coordinator.state.inFlight == nil)
+        #expect(coordinator.perform(.takeoverDefaultBrowser) == true)
     }
 
     @Test("17 缺省不勾:`perform(.uninstall)` 发的仍是不删数据的那条(默认值不许漂)")

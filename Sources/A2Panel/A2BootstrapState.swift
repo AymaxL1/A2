@@ -37,6 +37,11 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
     case uninstall
     /// 「重启代理内核」(14 票):改完配置让它生效、故障态清零复活。经 daemon(子进程是它的孩子)。
     case restartMihomo
+    /// 「设为默认浏览器…」(url-router 06 票 / spec §9 的接管旅程入口)。
+    ///
+    /// 与前三条同一条通道(内嵌 bin 起子进程),只是这一条**会等人**:系统为 http 与 https
+    /// 各弹一次框,内核那侧的窗是 120s —— 与卸载序列里的 restore 同族同纪律。
+    case takeoverDefaultBrowser
 
     /// 本动作发的那条白名单命令。
     ///
@@ -44,9 +49,10 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
     /// (17 票:默认不勾)——菜单项本身永远是不勾的那条,角标也照不勾的那条画。
     public func command(purge: Bool) -> A2BootstrapCommand {
         switch self {
-        case .install:       return .serviceInstall
-        case .uninstall:     return purge ? .serviceUninstallPurge : .serviceUninstall
-        case .restartMihomo: return .mihomoRestart
+        case .install:                return .serviceInstall
+        case .uninstall:              return purge ? .serviceUninstallPurge : .serviceUninstall
+        case .restartMihomo:          return .mihomoRestart
+        case .takeoverDefaultBrowser: return .urlRouterTakeover
         }
     }
 
@@ -65,6 +71,13 @@ public enum A2BootstrapMenuAction: String, Sendable, Equatable, CaseIterable {
             return nil
         case .restartMihomo:
             // 重启:秒级瞬断、随时可再点,弹框只会把一次点击变成两次。
+            return nil
+        case .takeoverDefaultBrowser:
+            // **有意为之,不是漏了**(地图 04 票裁定 / ADR 0015 可复用确认器原则):
+            //   系统那两个框(http 与 https 各一次)就是这条 dangerous 命令的确认器 ——
+            //   OS 强制呈现、壳伪造不了、结果经 completion 可感知。壳再问一遍就是**双确认**:
+            //   同一件事让用户点两次头,而第二次头点在一个安全性为零的框上。
+            //   点错了的补偿也在手边:菜单里的卸载序列会先 restore,CLI 还有 `a2 url-router restore`。
             return nil
         case .uninstall:
             return A2BootstrapConfirmation(
