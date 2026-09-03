@@ -183,3 +183,26 @@ a2 url-router restore [--to <bundleid>] --json
 golden → ③ 快照 `urlRouter` 节 + 壳转发/兜底/通知 → ④ 执行指令帧 + takeover/restore 编排
 → ⑤ Info.plist/门禁断言 + 卸载双路径前置 → ⑥ e2e + 真机验收 + ADR 落笔。
 每步可合并、门禁绿(沿 kernel-bin-recharter 六步纪律)。
+
+## 15. 施工修正案(2026-09-04,施工 CR 逐条裁定;正文不回改,以此节为准)
+
+实施台账 `.scratch/url-router-impl/`。以下各条均已过双轴 CR 追认,与正文冲突处以本节为准:
+
+1. **§7 兜底扩为三级 + 两道机械闸**:快照兜底 → 硬编码 Safari → 系统缺省 handler;
+   末级带 10s 熄火窗(A2 Panel 自己是默认浏览器时防打转 —— 正文漏掉的必需安全阀);
+   kAEGetURL 与 `application(_:open:)` 双投递按字符串去重(0.5s)。全部内容盲。(03 票)
+2. **§2/§7 兜底触发口扩**:「内核不可达」之外,**内核如实答复『没能把链接交出去』也兜底**
+   (链接永远打得开);节流通知仅限不可达一种收场。ADR 0008 修订措辞已按此落。(03 票)
+3. **§5/§6.3 壳发起走内嵌 bin**:壳自发起 takeover/restore 会与反向指令帧互等死锁,
+   面板侧一律经内嵌 bin 白名单以子进程发起(白名单 +3:status/restore/takeover)。(05/06 票)
+4. **§5 denied 分辨暂缺真机事实**:用户取消的 NSError domain/code 未编造,壳暂只产出
+   confirmed/error;denied/timeout 词表与内核映射就位,真机回填后壳一处加判断 + CR。(04 票)
+5. **§3 route result 增 `steps`**(脱敏):正文不设 logPath 的直接后果,母本日志的话进报文。(02 票)
+6. **§3/§8 使用侧钳制加上限**:attempts≤100、delay≤5s、API timeout≤120s(常驻内核
+   不许被一份写歪的配置挂死;下限照母本)。(02 票)
+7. **§5 错误码收敛**:「一个都没成」复用 `capability_failed`(5),仅 partial 有专码。(04 票)
+8. **§3 status 悬空诊断 fail-open**:mdfind + Finder 对照探询,只报确知悬空,
+   Spotlight 不答话报「未能判定」;诊断只在 status,不进 takeover/restore 回执。(05 票)
+9. **§9 install.sh 第四条前置的判据**:`defaults export` LS 用户设定表 grep `com.a2.panel`,
+   宁宽勿漏、不依赖 daemon;purge ⓪e 门只拦确知。(05 票)
+10. **§9 面板接管入口**:经内嵌 bin(修正案 3),06 票补施工;正文「面板入口按钮」语义不变。
