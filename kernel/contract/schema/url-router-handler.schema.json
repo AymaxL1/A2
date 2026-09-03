@@ -35,6 +35,34 @@
     },
     "undetermined": {
       "type": "string"
+    },
+    "dangling": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scheme": {
+            "type": "string",
+            "enum": [
+              "http",
+              "https"
+            ]
+          },
+          "bundleID": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "scheme",
+          "bundleID"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "danglingFix": {
+      "type": "string"
     }
   },
   "required": [

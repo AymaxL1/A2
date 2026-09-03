@@ -1,0 +1,22 @@
+#!/bin/sh
+# 行为假件(05 票的悬空诊断):这台机器上"装着"哪些 bundle id,由
+# $A2_URL_ROUTER_MDFIND_PRESENT(逗号分隔的白名单)说了算。
+#   * 命中 → 吐一行假路径(= 找得到);
+#   * 没命中 → 零行 + 退出 0(= Spotlight 答了话,但这台机器上没有它);
+#   * $A2_URL_ROUTER_MDFIND_EXIT 非空 → 按它非零退出(= mdfind 不在/出错 → 未能判定)。
+#
+# 想造出「Spotlight 根本不答话」那一格:把白名单里的 com.apple.finder 去掉即可 ——
+# 生产实现会拿它当**对照探询**,连 Finder 都查不到就说明问题出在索引,而不是那个 app 真的没了。
+#
+# **只用 shell 内建命令**(理由同 fake defaults:有些沙盒把 PATH 钉死成假件目录)。
+if [ -n "$A2_URL_ROUTER_MDFIND_EXIT" ]; then
+  echo "fake mdfind:按剧本非零退出" >&2
+  exit "$A2_URL_ROUTER_MDFIND_EXIT"
+fi
+# 查询串形如:kMDItemCFBundleIdentifier == 'com.a2.panel'
+rest="${1#*\'}"
+id="${rest%\'*}"
+case ",${A2_URL_ROUTER_MDFIND_PRESENT}," in
+  *",$id,"*) printf '/Applications/%s.app\n' "$id" ;;
+esac
+exit 0

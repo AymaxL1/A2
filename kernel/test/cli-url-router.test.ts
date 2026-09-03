@@ -68,16 +68,39 @@ async function writeConfig(text: string): Promise<void> {
   await writeFile(path.join(home, "url-router.json"), text, "utf8");
 }
 
-/** 注入行为假件:`open` 只记 argv 不开东西,`ps` 吐空表(= 本机没跑 Roxy)。 */
+/**
+ * 注入行为假件:`open` 只记 argv 不开东西,`ps` 吐空表(= 本机没跑 Roxy),
+ * `mdfind` 按白名单回答"装着吗"(05 票的悬空诊断;**绝不去问真 Spotlight 这台机器上装了什么**)。
+ */
 function sandboxEnv(overrides: Record<string, string> = {}): Record<string, string> {
   return {
     A2_URL_ROUTER_OPEN: path.join(FAKES, "open"),
     A2_URL_ROUTER_PS: path.join(FAKES, "ps"),
     A2_URL_ROUTER_LSOF: path.join(FAKES, "ps"),
     A2_URL_ROUTER_DEFAULTS: path.join(FAKES, "defaults"),
+    A2_URL_ROUTER_MDFIND: path.join(FAKES, "mdfind"),
     A2_URL_ROUTER_OPEN_LOG: openLog,
     ...overrides,
   };
+}
+
+/** 写一份 LaunchServices 导出物(假 `defaults` 会把它原样吐出来),返回文件路径。 */
+async function writeLaunchServices(handlers: Record<string, string>): Promise<string> {
+  const entries = Object.entries(handlers)
+    .map(
+      ([scheme, bundleID]) =>
+        `    <dict>\n      <key>LSHandlerRoleAll</key>\n      <string>${bundleID}</string>\n` +
+        `      <key>LSHandlerURLScheme</key>\n      <string>${scheme}</string>\n    </dict>`,
+    )
+    .join("\n");
+  const file = path.join(home, "launch-services.plist");
+  await writeFile(
+    file,
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n` +
+      `  <key>LSHandlers</key>\n  <array>\n${entries}\n  </array>\n</dict>\n</plist>\n`,
+    "utf8",
+  );
+  return file;
 }
 
 async function boot(overrides: Record<string, string> = {}): Promise<Record<string, string>> {
@@ -196,6 +219,44 @@ test("`url-router status`:没有配置文件就报全缺省,handler 读不出来
   expect(parsed.handler.matchesTarget).toBeNull();
   expect(parsed.panelBundleID).toBe("com.a2.panel");
 });
+
+test("`url-router status`:**悬空诊断**——登记指着一个本机找不到的 app 时,如实报 + 给修复命令", async () => {
+  // 用户把 A2 Panel.app 拖进了废纸篓:LaunchServices 里那两条登记还在,而 app 已经没了。
+  // Spotlight 是在答话的(对照探询查得到 Finder)—— 所以这个"找不到"是**确知**的。
+  const lsExport = await writeLaunchServices({ http: "com.a2.panel", https: "com.a2.panel" });
+  const env = await boot({
+    A2_URL_ROUTER_DEFAULTS_FIXTURE: lsExport,
+    A2_URL_ROUTER_MDFIND_PRESENT: "com.apple.finder",
+  });
+
+  const result = await runCli(["url-router", "status", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(0);
+  const parsed = UrlRouterStatusResultSchema.parse(parseJsonStdout(result).result.output);
+  expect(parsed.handler.dangling).toEqual([
+    { scheme: "http", bundleID: "com.a2.panel" },
+    { scheme: "https", bundleID: "com.a2.panel" },
+  ]);
+  // 诊断也给命令(拒绝即指引的同构),而且目标来自配置里的兜底浏览器。
+  expect(parsed.handler.danglingFix).toContain("a2 url-router restore --to com.apple.Safari");
+  // **只诊断不动手**:一趟 open 都没有,系统状态一个字节都没被改(05 票裁定第 3 条)。
+  expect(await openedArgv()).toEqual([]);
+}, 20000);
+
+test("`url-router status`:Spotlight 不答话时**不报悬空**(未能判定就是未能判定)", async () => {
+  // 索引关了的机器:连 Finder 都查不到 —— 这时报「你的默认浏览器坏了」是纯粹的假警报。
+  const lsExport = await writeLaunchServices({ http: "com.a2.panel", https: "com.a2.panel" });
+  const env = await boot({
+    A2_URL_ROUTER_DEFAULTS_FIXTURE: lsExport,
+    A2_URL_ROUTER_MDFIND_PRESENT: "",
+  });
+
+  const result = await runCli(["url-router", "status", "--json"], { home, env });
+
+  const parsed = UrlRouterStatusResultSchema.parse(parseJsonStdout(result).result.output);
+  expect(parsed.handler.matchesTarget).toBe(true);
+  expect(parsed.handler.dangling).toBeUndefined();
+}, 20000);
 
 test("`url-router route <url> --dry-run`:只判不开 —— 一趟 open 都没发生", async () => {
   const env = await boot();

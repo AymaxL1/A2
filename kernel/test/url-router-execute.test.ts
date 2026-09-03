@@ -72,7 +72,13 @@ function makeFake(options: FakeOptions = {}): Fake {
   const calls: FakeCall[] = [];
   const slept: number[] = [];
   const ports: UrlRouterPorts = {
-    bin: { ps: "/fake/ps", lsof: "/fake/lsof", open: "/fake/open", defaults: "/fake/defaults" },
+    bin: {
+      ps: "/fake/ps",
+      lsof: "/fake/lsof",
+      open: "/fake/open",
+      defaults: "/fake/defaults",
+      mdfind: "/fake/mdfind",
+    },
     async run(cmd) {
       calls.push({ cmd: [...cmd] });
       const canned = options.run?.[cmd[0] as string];

@@ -1233,20 +1233,48 @@ export const UrlRouterConfigViewSchema = z.object({
 });
 export type UrlRouterConfigView = z.infer<typeof UrlRouterConfigViewSchema>;
 
+/** 能被接管的两个 scheme —— 只有这两个(spec §3/§5)。 */
+export const UrlRouterSchemeSchema = z.enum(["http", "https"]);
+export type UrlRouterScheme = z.infer<typeof UrlRouterSchemeSchema>;
+
+/**
+ * 一条**悬空**的登记(05 票):这个 scheme 的默认 handler 指着一个本机找不到的 bundle id。
+ *
+ * 典型来路是「用户把 A2 Panel.app 直接拖进废纸篓」——LaunchServices 里那条登记还在,
+ * 而它指向的 app 已经没了。这时系统会自己回落到某个能开链接的东西(01 票中置信度,
+ * 真机断言归 06 票),但**登记本身仍然是坏的**,而内核不替人动手改它(05 票裁定第 3 条:
+ * 野路径只诊断不动手,系统状态永远显式发起)。
+ */
+export const UrlRouterDanglingHandlerSchema = z.object({
+  scheme: UrlRouterSchemeSchema,
+  /** 登记里写着的那个 bundle id(找不到的正是它)。 */
+  bundleID: z.string().min(1),
+});
+export type UrlRouterDanglingHandler = z.infer<typeof UrlRouterDanglingHandlerSchema>;
+
 /**
  * 系统默认 handler 的现状。
  *
  * 三个字段都可能是 `null`,且 `null` 是**一句真话而不是缺省值**:LaunchServices 那份库里
  * 一台从没换过默认浏览器的机器根本没有对应条目。报 `null` + `undetermined` 说清"未能判定",
  * 好过猜一个 —— 猜错会让 `takeover` 的幂等判据多出一个错误答案。
+ *
+ * `dangling` / `danglingFix` 是 05 票的**悬空诊断**,只有 `url-router.status` 会填
+ * (takeover/restore 的回执里那份 handler 不带它们:那两条命令刚刚才动过系统状态,
+ * 此刻去问 Spotlight 只会得到一个正在变的答案)。**没有悬空就没有这两个字段** ——
+ * 空数组会让"这台机器诊断过、干净"与"这条报文压根没做诊断"看起来一样。
  */
 export const UrlRouterHandlerSchema = z.object({
   http: z.string().nullable(),
   https: z.string().nullable(),
   /** 两个 scheme **都**是目标才算是;有一个读不出来就是 `null`。 */
   matchesTarget: z.boolean().nullable(),
-  /** 读不出来时说清为什么(如实说「未能判定」)。完整的悬空诊断归 05 票。 */
+  /** 读不出来时说清为什么(如实说「未能判定」)。 */
   undetermined: z.string().optional(),
+  /** 悬空的那些 scheme(05 票)。**只报确知的悬空** —— 判不出来的一条都不进这里。 */
+  dangling: z.array(UrlRouterDanglingHandlerSchema).min(1).optional(),
+  /** 悬空时的一句人话 + **精确修复命令**(诊断也给命令,与"拒绝即指引"同构)。 */
+  danglingFix: z.string().optional(),
 });
 export type UrlRouterHandler = z.infer<typeof UrlRouterHandlerSchema>;
 
@@ -1301,10 +1329,6 @@ export const UrlRouterRouteResultSchema = z.object({
   steps: z.array(z.string()),
 });
 export type UrlRouterRouteResult = z.infer<typeof UrlRouterRouteResultSchema>;
-
-/** 能被接管的两个 scheme —— 只有这两个(spec §3/§5)。 */
-export const UrlRouterSchemeSchema = z.enum(["http", "https"]);
-export type UrlRouterScheme = z.infer<typeof UrlRouterSchemeSchema>;
 
 /**
  * 一个 scheme 上系统 API 回来的原样错误(04 票)。

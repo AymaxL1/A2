@@ -35,9 +35,12 @@ import { URL_ROUTER_CONFIG_NAME } from "../src/url-router/config.ts";
 import type { CommandResult, UrlRouterPorts } from "../src/url-router/execute.ts";
 import {
   A2_PANEL_BUNDLE_ID,
+  createInstalledAppLookup,
   parseLaunchServicesHandler,
+  SPOTLIGHT_CONTROL_BUNDLE_ID,
   type DefaultHandlerReader,
   type HandlerScheme,
+  type InstalledAppLookup,
 } from "../src/url-router/handler.ts";
 
 const SECRET_KEY = "roxy-key-绝密-能力面";
@@ -57,7 +60,13 @@ afterEach(async () => {
 /** 什么都不肯做的进程/HTTP/时钟口:默认世界里 Roxy 没跑、网络不通、open 成功。 */
 function fakePorts(overrides: Partial<UrlRouterPorts> = {}): UrlRouterPorts {
   return {
-    bin: { ps: "/fake/ps", lsof: "/fake/lsof", open: "/fake/open", defaults: "/fake/defaults" },
+    bin: {
+      ps: "/fake/ps",
+      lsof: "/fake/lsof",
+      open: "/fake/open",
+      defaults: "/fake/defaults",
+      mdfind: "/fake/mdfind",
+    },
     async run(): Promise<CommandResult> {
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -72,6 +81,24 @@ function fakePorts(overrides: Partial<UrlRouterPorts> = {}): UrlRouterPorts {
 /** 两个 scheme 各报一个 bundle id(`null` = 读不出来)。 */
 function fakeHandlers(http: string | null, https: string | null): DefaultHandlerReader {
   return { async read(scheme: HandlerScheme) { return scheme === "http" ? http : https; } };
+}
+
+/**
+ * 假的「这个 bundle id 装着吗」(05 票)。三值照抄真实现的语义:
+ * `true` 找得到 / `false` 确知找不到 / `null` 未能判定。
+ * 真实现会去问 Spotlight —— 那会让同一条测试在不同机器上结论不同,所以这里注入答案。
+ */
+function fakeInstalled(answers: Record<string, boolean | null>, fallback: boolean | null = null) {
+  const asked: string[] = [];
+  return {
+    asked,
+    lookup: {
+      async exists(bundleID: string) {
+        asked.push(bundleID);
+        return bundleID in answers ? (answers[bundleID] as boolean | null) : fallback;
+      },
+    },
+  };
 }
 
 /**
@@ -124,6 +151,7 @@ const FAKE_NSERROR = {
 function capabilities(options: {
   ports?: UrlRouterPorts;
   handlers?: DefaultHandlerReader;
+  installed?: InstalledAppLookup;
   executor?: UrlRouterExecutorPort | null;
 } = {}): Map<string, Capability> {
   const list = urlRouterCapabilities({
@@ -131,6 +159,8 @@ function capabilities(options: {
     env: {},
     ports: options.ports ?? fakePorts(),
     handlers: options.handlers ?? fakeHandlers(null, null),
+    // 缺省"什么都判不出来"= 一条悬空都不报(与真实现在没有 Spotlight 时的行为一致)。
+    installed: options.installed ?? fakeInstalled({}).lookup,
     // `null` = 这份内核没有执行器面(单独一条路,见"没有执行器面"那个用例)。
     ...(options.executor === null ? {} : { executor: options.executor ?? fakeExecutor() }),
   });
@@ -264,6 +294,142 @@ test("status:两个 scheme 都是 com.a2.panel 才算接管(大小写不敏感 �
     await call("url-router.status", {}, { handlers: fakeHandlers("com.a2.panel", null) }),
   );
   expect(partial.handler.matchesTarget).toBeNull();
+});
+
+// MARK: - status 的悬空诊断(05 票,spec §3/§9「野路径」)
+//
+// 这一族全部围着同一条判据转:**只报确知的悬空**。假警报的代价在这里格外高 ——
+// 它会让用户去跑一条改系统状态的命令,而他的机器其实什么毛病都没有。
+
+test("悬空:handler 指着一个本机找不到的 bundle id → 报出来,并给**精确修复命令**", async () => {
+  const installed = fakeInstalled({ "com.a2.panel": false });
+
+  const parsed = UrlRouterStatusResultSchema.parse(
+    await call(
+      "url-router.status",
+      {},
+      { handlers: fakeHandlers("com.a2.panel", "com.a2.panel"), installed: installed.lookup },
+    ),
+  );
+
+  expect(parsed.handler.dangling).toEqual([
+    { scheme: "http", bundleID: "com.a2.panel" },
+    { scheme: "https", bundleID: "com.a2.panel" },
+  ]);
+  // 拒绝即指引的同构:诊断也给命令,而且**带 --to**(目标从配置里的兜底浏览器来,不让人自己猜)。
+  expect(parsed.handler.danglingFix).toContain("a2 url-router restore --to com.apple.Safari");
+  // 同一个 bundle id 只问一次 —— 两个 scheme 指着同一个 app 是常态。
+  expect(installed.asked).toEqual(["com.a2.panel"]);
+});
+
+test("悬空:**未能判定的一条都不报**(Spotlight 答不出来时不该有假警报)", async () => {
+  const parsed = UrlRouterStatusResultSchema.parse(
+    await call(
+      "url-router.status",
+      {},
+      {
+        handlers: fakeHandlers("com.a2.panel", "com.a2.panel"),
+        installed: fakeInstalled({ "com.a2.panel": null }).lookup,
+      },
+    ),
+  );
+
+  expect(parsed.handler.dangling).toBeUndefined();
+  expect(parsed.handler.danglingFix).toBeUndefined();
+});
+
+test("悬空:一个 scheme 悬空、另一个好着 —— 只报那一个", async () => {
+  const parsed = UrlRouterStatusResultSchema.parse(
+    await call(
+      "url-router.status",
+      {},
+      {
+        handlers: fakeHandlers("com.a2.panel", "com.apple.safari"),
+        installed: fakeInstalled({ "com.a2.panel": false, "com.apple.safari": true }).lookup,
+      },
+    ),
+  );
+
+  expect(parsed.handler.dangling).toEqual([{ scheme: "http", bundleID: "com.a2.panel" }]);
+});
+
+test("悬空诊断**只在 status**:takeover/restore 的回执里不带它(那一刻的系统状态正在变)", async () => {
+  const installed = fakeInstalled({ "com.google.chrome": false });
+
+  const parsed = UrlRouterHandoffResultSchema.parse(
+    await call(
+      "url-router.restore",
+      { to: "com.google.chrome" },
+      { handlers: fakeHandlers("com.google.chrome", "com.google.chrome"), installed: installed.lookup },
+    ),
+  );
+
+  expect(parsed.already).toBe(true);
+  expect(parsed.handler.dangling).toBeUndefined();
+  // 一次都没问过 Spotlight —— 这两条命令不做诊断。
+  expect(installed.asked).toEqual([]);
+});
+
+// MARK: - 「这个 app 装着吗」的三值判据(生产实现,喂假 mdfind)
+
+/** 造一个只会跑 `mdfind` 的假 ports:按剧本回答那条查询。 */
+function mdfindPorts(script: {
+  present?: string[];
+  exitCode?: number;
+}): { ports: UrlRouterPorts; queries: string[] } {
+  const queries: string[] = [];
+  const ports = fakePorts({
+    async run(cmd) {
+      queries.push(cmd[1] as string);
+      if (script.exitCode !== undefined && script.exitCode !== 0) {
+        return { exitCode: script.exitCode, stdout: "", stderr: "mdfind 说不" };
+      }
+      const found = (script.present ?? []).some((id) => (cmd[1] as string).includes(`'${id}'`));
+      return { exitCode: 0, stdout: found ? "/Applications/Something.app\n" : "", stderr: "" };
+    },
+  });
+  return { ports, queries };
+}
+
+test("装着吗:mdfind 吐出路径 = 找得到(true),而且查询串里是那个 bundle id", async () => {
+  const { ports, queries } = mdfindPorts({ present: ["com.apple.safari"] });
+
+  expect(await createInstalledAppLookup(ports, "darwin").exists("com.apple.safari")).toBe(true);
+  expect(queries).toEqual(["kMDItemCFBundleIdentifier == 'com.apple.safari'"]);
+});
+
+test("装着吗:空结果 + **对照探询答得上** = 确知找不到(false)", async () => {
+  // Spotlight 在答话(Finder 查得到),它说这台机器上没有那个 id —— 这才算数。
+  const { ports, queries } = mdfindPorts({ present: [SPOTLIGHT_CONTROL_BUNDLE_ID] });
+
+  expect(await createInstalledAppLookup(ports, "darwin").exists("com.a2.panel")).toBe(false);
+  expect(queries).toHaveLength(2);
+  expect(queries[1]).toContain(SPOTLIGHT_CONTROL_BUNDLE_ID);
+});
+
+test("装着吗:空结果 + **连 Finder 都查不到** = Spotlight 不答话(null,不是「找不到」)", async () => {
+  // 索引关了/刚重建的机器就长这样。报 false 会让每一台这样的机器都收到一次假的「悬空」警报。
+  const { ports } = mdfindPorts({ present: [] });
+
+  expect(await createInstalledAppLookup(ports, "darwin").exists("com.a2.panel")).toBeNull();
+});
+
+test("装着吗:mdfind 非零退出 → null;非 macOS → null(**一次查询都不发**)", async () => {
+  const failing = mdfindPorts({ exitCode: 1 });
+  expect(await createInstalledAppLookup(failing.ports, "darwin").exists("com.a2.panel")).toBeNull();
+
+  const linux = mdfindPorts({ present: ["com.a2.panel"] });
+  expect(await createInstalledAppLookup(linux.ports, "linux").exists("com.a2.panel")).toBeNull();
+  expect(linux.queries).toEqual([]);
+});
+
+test("装着吗:形状可疑的 bundle id **不查**(查询语法面归零,argv 本来就不经 shell)", async () => {
+  const { ports, queries } = mdfindPorts({ present: [SPOTLIGHT_CONTROL_BUNDLE_ID] });
+  const lookup = createInstalledAppLookup(ports, "darwin");
+
+  expect(await lookup.exists("com.a2.panel' || 1 == 1")).toBeNull();
+  expect(await lookup.exists("")).toBeNull();
+  expect(queries).toEqual([]);
 });
 
 // MARK: - decide / route

@@ -10,7 +10,8 @@
 //   2. **读不出来就是 `null`,绝不猜**。LaunchServices 那份库是私有格式、随版本改;`defaults export` 读到的
 //      是它的一份投影,一台从没换过默认浏览器的机器上**根本没有对应条目**。那时的真话是
 //      「未能判定」,不是「是 Safari」—— 后者会让 `takeover` 的幂等判据凭空多出一个错误答案。
-//   3. **悬空诊断(handler 指向一个已经不在的 app)归 05 票**。本票只把口子留在 `undetermined` 上。
+//   3. **悬空诊断(handler 指向一个已经不在的 app)是 05 票补上的**,落点在本文件末尾那一节:
+//      同样只读、同样不猜,而且**只报确知的悬空**(见 `InstalledAppLookup` 的头注)。
 //
 // 解析器是纯函数(`parseLaunchServicesHandler`),因为它是这段里唯一会悄悄错掉的地方:
 // `LSHandlers` 的条目里嵌着 `LSHandlerPreferredVersions` 这样的**子字典**,按 `<dict>` 裸切会切歪。
@@ -189,4 +190,97 @@ export async function readHandlerSnapshot(
         ? null
         : sameBundleID(http, target) && sameBundleID(https, target),
   };
+}
+
+// MARK: - 悬空诊断(05 票):handler 指着一个已经不在的 app
+
+/**
+ * 「这个 bundle id 在本机还找得到一份装着的 app 吗」——**只读**。
+ *
+ * 三值,不是布尔:`true` 找得到 / `false` **确知**找不到 / `null` 未能判定。
+ * 这一格是整条诊断的分水岭:报一次"悬空"等于告诉用户"你的默认浏览器坏了、去跑这条命令修",
+ * 而那句话若来自一台只是**关掉了 Spotlight** 的机器,就是纯粹的假警报。
+ * 所以判据只认**确知**的两侧,拿不准一律 `null`(fail-open 的诊断:只报确知的悬空)。
+ */
+export interface InstalledAppLookup {
+  exists(bundleID: string): Promise<boolean | null>;
+}
+
+/**
+ * 「Spotlight 此刻答不答话」的**对照探询**:每台 macOS 都必然装着 Finder,
+ * 所以连它都查不到,就说明查不到的原因是索引而不是那个 app 真的不在。
+ */
+export const SPOTLIGHT_CONTROL_BUNDLE_ID = "com.apple.finder";
+
+/** 能安全塞进 mdfind 查询串的 bundle id 形状(LaunchServices 里的取值本来就在这个集合内)。 */
+const SAFE_BUNDLE_ID = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * 生产实现:`mdfind "kMDItemCFBundleIdentifier == '<id>'"`(Spotlight,**零副作用**)。
+ *
+ * 三条纪律:
+ *   1. **绝不用 `open -b <id>`** —— 那条能准确回答"在不在",代价是**真把 app 拉起来**。
+ *      一条 `status` 查询不该在用户屏幕上打开任何东西。
+ *   2. **空结果不等于"不在"**。索引关了、刚重建、被排除目录,mdfind 都会安静地吐零行 + 退出 0。
+ *      于是空结果要再问一次对照探询(Finder):它也查不到 → Spotlight 不答话 → `null`。
+ *   3. **查询串里只放白名单字符**。bundle id 来自 LaunchServices 那份库(不是用户输入),
+ *      但它终究是外部数据 —— 形状不对就**不查**(返回 `null`),而不是拼一条我们没想过的查询。
+ *      argv 本来就不经 shell(`ports.run`),这一条挡的是 mdfind **自己的查询语法**。
+ */
+export function createInstalledAppLookup(
+  ports: UrlRouterPorts,
+  platform: string = process.platform,
+): InstalledAppLookup {
+  async function query(bundleID: string): Promise<{ found: boolean } | undefined> {
+    const result = await ports.run(
+      [ports.bin.mdfind, `kMDItemCFBundleIdentifier == '${bundleID}'`],
+      PROCESS_TIMEOUT_MS,
+    );
+    if (result.exitCode !== 0) return undefined;
+    return { found: result.stdout.split("\n").some((line) => line.trim().length > 0) };
+  }
+
+  return {
+    async exists(bundleID) {
+      // 非 macOS 上没有 LaunchServices、也没有 Spotlight —— 这不是故障,是"没有这回事"。
+      if (platform !== "darwin") return null;
+      if (!SAFE_BUNDLE_ID.test(bundleID)) return null;
+      const answer = await query(bundleID);
+      if (answer === undefined) return null;
+      if (answer.found) return true;
+      // 空结果的两种来路要分开(见纪律 2):对照探询答得上来,这个"没找到"才算数。
+      const control = await query(SPOTLIGHT_CONTROL_BUNDLE_ID);
+      if (control === undefined || !control.found) return null;
+      return false;
+    },
+  };
+}
+
+/** 一条悬空的登记:哪个 scheme、指着哪个找不到的 bundle id。 */
+export interface DanglingHandler {
+  scheme: HandlerScheme;
+  bundleID: string;
+}
+
+/**
+ * 快照里哪些 scheme 是悬空的(**只报确知的那些**)。
+ *
+ * 同一个 bundle id 只问一次:两个 scheme 指着同一个 app 是常态,问两遍只是多起一次进程。
+ */
+export async function findDanglingHandlers(
+  snapshot: HandlerSnapshot,
+  lookup: InstalledAppLookup,
+): Promise<DanglingHandler[]> {
+  const verdicts = new Map<string, boolean | null>();
+  const dangling: DanglingHandler[] = [];
+  for (const scheme of HANDLER_SCHEMES) {
+    const bundleID = snapshot[scheme];
+    if (bundleID === null || bundleID.trim().length === 0) continue;
+    const key = bundleID.trim();
+    if (!verdicts.has(key)) {
+      verdicts.set(key, await lookup.exists(key).catch(() => null));
+    }
+    if (verdicts.get(key) === false) dangling.push({ scheme, bundleID: key });
+  }
+  return dangling;
 }

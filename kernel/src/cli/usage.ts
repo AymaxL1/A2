@@ -397,6 +397,12 @@ launcher。降级不是失败(ok 照旧、退出码 0),但 result 里的 fellBac
 文件用不了则**整份**退回缺省(不留半态),毛病由 url-router status 指名道姓地说。
 roxyAPIKey 是敏感值:只留本机文件,永不进报文、日志与快照(status 只报「设过没设过」)。
 
+悬空诊断(status 的 handler.dangling / handler.danglingFix):默认 handler 指着一个**本机找不到**的
+bundle id 时(典型来路:.app 被直接拖进了废纸篓),status 会指名道姓报出来并给出精确修复命令。
+**只诊断不动手** —— 系统状态永远显式发起,改不改由你决定。判据是只读的 Spotlight 查询
+(mdfind,零副作用;**不会用 open -b,那会真把 app 拉起来**);Spotlight 答不出来时如实
+「未能判定」、不报悬空 —— 只报确知的那些,免得给一台关了索引的机器发假警报。
+
 接管/还原:改的是全系统的默认浏览器,所以是 dangerous。但它们的确认**不走确认器**,而是由
 **操作系统自己的弹框**承载(manifest 上标着 confirmation: os-dialog):内核经 UDS 把执行指令帧
 下发给 A2 Panel,壳调 NSWorkspace 的新 API,OS 弹框、你亲自点头,结果原样回到内核。

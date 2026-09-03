@@ -35,8 +35,9 @@ const FORBIDDEN_NETWORKSETUP = path.resolve(
  * 理由与上面逐字相同,只是后果更露骨:`url-router.route` 的默认实现走 `/usr/bin/open`,
  * 哪个测试忘了注入,门禁就会**真在跑测试的人脸上弹出一个浏览器窗口**;而 `/bin/ps` 那一路
  * 更阴——它读的是真进程表,于是同一条测试在"开着 RoxyBrowser"和"没开"的机器上结论不同。
+ * `mdfind`(05 票的悬空诊断)属于后一类:它问的是"这台机器上装了什么"。
  *
- * 所以四个都默认指到一执行就失败的假件;要验行为的测试经 `fake-url-router/sandbox.ts` 显式覆写。
+ * 所以五个都默认指到一执行就失败的假件;要验行为的测试经 `fake-url-router/sandbox.ts` 显式覆写。
  */
 const FORBIDDEN_URL_ROUTER = path.resolve(import.meta.dir, "fake-url-router/forbidden");
 const URL_ROUTER_GUARD: Record<string, string> = {
@@ -44,6 +45,7 @@ const URL_ROUTER_GUARD: Record<string, string> = {
   A2_URL_ROUTER_LSOF: FORBIDDEN_URL_ROUTER,
   A2_URL_ROUTER_OPEN: FORBIDDEN_URL_ROUTER,
   A2_URL_ROUTER_DEFAULTS: FORBIDDEN_URL_ROUTER,
+  A2_URL_ROUTER_MDFIND: FORBIDDEN_URL_ROUTER,
 };
 
 /** 被测的 a2 命令行(编译产物或源码入口)。 */

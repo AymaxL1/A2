@@ -693,6 +693,18 @@
       "why": "另一端:配置文件用不了(整份退回缺省 + problem 指名道姓,**绝不带原文片段** —— 那份文件里躺着 roxyAPIKey),而 handler 两个 scheme 都已是 com.a2.panel;敏感值在报文里只剩 roxyAPIKeyConfigured 一个布尔"
     },
     {
+      "file": "url-router-status-dangling.json",
+      "schema": "UrlRouterStatusResult",
+      "kind": "valid",
+      "why": "05 票的悬空诊断:登记还指着 com.a2.panel,而那个 .app 已经被拖进废纸篓 —— 报文如实说哪几个 scheme 悬空,并给出**精确修复命令**(诊断也给命令,与拒绝即指引同构);内核只诊断不动手,改不改由人决定"
+    },
+    {
+      "file": "invalid-url-router-handler-empty-dangling.json",
+      "schema": "UrlRouterHandler",
+      "kind": "invalid",
+      "why": "`dangling` 要么不出现,要么至少有一条:空数组会让「诊断过、干净」与「这条报文压根没做诊断」在机读面上长得一模一样 —— 那是 agent 分不开的两件事"
+    },
+    {
       "file": "invalid-url-router-status-half-merged-config.json",
       "schema": "UrlRouterStatusResult",
       "kind": "invalid",

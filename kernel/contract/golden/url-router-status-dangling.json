@@ -1,0 +1,32 @@
+{
+  "configPath": "/Users/me/.a2/url-router.json",
+  "configSource": "defaults",
+  "config": {
+    "fallbackBrowserBundleID": "com.apple.Safari",
+    "routedDomains": ["claude.ai", "claude.com", "anthropic.com"],
+    "roxyApplicationPath": "/Applications/RoxyBrowser.app",
+    "roxyProcessMatch": "/RoxyBrowser.app/Contents/MacOS/RoxyBrowser",
+    "roxyProfilePathMarker": "/browser-cache/",
+    "roxyProfileID": "",
+    "roxyAPIHost": null,
+    "roxyAPIOpenPath": "/browser/open",
+    "roxyAPITokenHeader": "token",
+    "roxyWorkspaceID": null,
+    "roxyForceOpen": false,
+    "roxyAPITimeoutSeconds": 5,
+    "roxyStartupAttempts": 10,
+    "roxyStartupDelaySeconds": 0.2,
+    "roxyAPIKeyConfigured": false
+  },
+  "panelBundleID": "com.a2.panel",
+  "handler": {
+    "http": "com.a2.panel",
+    "https": "com.a2.panel",
+    "matchesTarget": true,
+    "dangling": [
+      { "scheme": "http", "bundleID": "com.a2.panel" },
+      { "scheme": "https", "bundleID": "com.a2.panel" }
+    ],
+    "danglingFix": "http 的默认 handler 指着 com.a2.panel;https 的默认 handler 指着 com.a2.panel —— 这台机器上找不到这个 bundle id 对应的 app(多半是它被删了/被拖进了废纸篓)。系统此刻会自己找个能开链接的东西顶上,但这条登记本身是坏的;内核不替你改系统状态,要修就显式跑一次:a2 url-router restore --to com.apple.Safari"
+  }
+}

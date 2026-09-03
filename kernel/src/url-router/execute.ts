@@ -28,6 +28,13 @@ export interface UrlRouterBinaries {
   open: string;
   /** 读 LaunchServices 里登记的默认 handler(只读,见 `handler.ts`)。 */
   defaults: string;
+  /**
+   * 问 Spotlight「这个 bundle id 在本机有没有一份装着的 app」(只读,悬空诊断用,05 票)。
+   *
+   * **为什么不是 `open -b`**:那条会**真的把 app 拉起来** —— 一条 `status` 查询绝不能有这种副作用。
+   * `mdfind` 只查索引,零副作用;代价是索引关掉/没建好时它答不出来,那时我们如实报「未能判定」。
+   */
+  mdfind: string;
 }
 
 export const DEFAULT_URL_ROUTER_BINARIES: UrlRouterBinaries = {
@@ -35,6 +42,7 @@ export const DEFAULT_URL_ROUTER_BINARIES: UrlRouterBinaries = {
   lsof: "/usr/sbin/lsof",
   open: "/usr/bin/open",
   defaults: "/usr/bin/defaults",
+  mdfind: "/usr/bin/mdfind",
 };
 
 /** 覆写用的环境变量名(仅测试与诊断用,与 `A2_NETWORKSETUP` 同一档)。 */
@@ -43,6 +51,7 @@ export const BINARY_ENV: Record<keyof UrlRouterBinaries, string> = {
   lsof: "A2_URL_ROUTER_LSOF",
   open: "A2_URL_ROUTER_OPEN",
   defaults: "A2_URL_ROUTER_DEFAULTS",
+  mdfind: "A2_URL_ROUTER_MDFIND",
 };
 
 /** 跑完一条命令得到的三样(判断只需要这三样)。 */

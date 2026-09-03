@@ -1,0 +1,6 @@
+{
+  "http": "com.apple.safari",
+  "https": "com.apple.safari",
+  "matchesTarget": false,
+  "dangling": []
+}

@@ -51,9 +51,12 @@ import {
 import {
   A2_PANEL_BUNDLE_ID,
   createDefaultHandlerReader,
+  createInstalledAppLookup,
+  findDanglingHandlers,
   readHandlerSnapshot,
   type DefaultHandlerReader,
   type HandlerSnapshot,
+  type InstalledAppLookup,
 } from "../url-router/handler.ts";
 import { performHandoff, type UrlRouterExecutorPort } from "../url-router/takeover.ts";
 import { CapabilityFailedError, type Capability } from "./registry.ts";
@@ -70,6 +73,12 @@ export interface UrlRouterContext {
   env: Record<string, string | undefined>;
   ports?: UrlRouterPorts;
   handlers?: DefaultHandlerReader;
+  /**
+   * 「这个 bundle id 在本机装着吗」的只读探询(05 票的悬空诊断)。缺省是 Spotlight
+   * (`mdfind`,零副作用);测试注入假件 —— 于是悬空诊断能在函数缝上验全,
+   * 而**永远不会去问跑测试这台机器上装了些什么**。
+   */
+  installed?: InstalledAppLookup;
   /**
    * 机械执行器那一侧(04 票)。**缺省不带 = 这份内核没有执行器面** ——
    * 那时 takeover/restore 的非幂等路径一律报「没人能替你确认」,与壳没装是同一种收场。
@@ -117,7 +126,9 @@ async function statusResult(context: UrlRouterContext): Promise<UrlRouterStatusR
     ...(load.problem === undefined ? {} : { problem: load.problem }),
     config: redactUrlRouterConfig(load.config),
     panelBundleID: A2_PANEL_BUNDLE_ID,
-    handler: handlerView(snapshot),
+    // **只有 status 做悬空诊断**(05 票):它是诊断面,而 takeover/restore 的回执里那份 handler
+    // 是"刚动完系统状态之后现读的一帧" —— 那一刻去问 Spotlight,问到的是一个正在变的答案。
+    handler: await diagnosedHandlerView(context, snapshot, load.config.fallbackBrowserBundleID),
   };
 }
 
@@ -135,9 +146,39 @@ function handlerView(snapshot: HandlerSnapshot): UrlRouterHandler {
       ? {
           undetermined:
             "LaunchServices 里没有读到这个 scheme 的登记项 —— 多半意味着默认 handler 仍是系统出厂的那个" +
-            "(从没换过就不会有条目)。内核不猜,如实报未能判定;悬空 handler 的完整诊断归 05 票。",
+            "(从没换过就不会有条目)。内核不猜,如实报未能判定。",
         }
       : {}),
+  };
+}
+
+/**
+ * `status` 那一份 handler 视图:在现状之外再答一个问题 ——
+ * **登记里写的那个 app,这台机器上还有吗?**(05 票的悬空诊断,spec §3/§9「野路径」)
+ *
+ * 悬空的来路只有一条,而且不罕见:用户把 `.app` 直接拖进了废纸篓。那时 LaunchServices 的登记还在,
+ * 点链接会由系统自己回落(01 票中置信度),于是这件事**在用户那边是看不见的** ——
+ * 它只在"为什么我的链接不再进 Roxy 了"这种问题里露头。诊断因此值得,而动手不值得:
+ * **只诊断不动手**(05 票裁定第 3 条),报文里给出精确的修复命令,按不按由人决定。
+ *
+ * 判不出来的一条都不报(见 `InstalledAppLookup` 头注):一台关了 Spotlight 的机器不该收到假警报。
+ */
+async function diagnosedHandlerView(
+  context: UrlRouterContext,
+  snapshot: HandlerSnapshot,
+  fallbackBundleID: string,
+): Promise<UrlRouterHandler> {
+  const view = handlerView(snapshot);
+  const dangling = await findDanglingHandlers(snapshot, installedLookup(context));
+  if (dangling.length === 0) return view;
+  return {
+    ...view,
+    dangling,
+    danglingFix:
+      `${dangling.map((entry) => `${entry.scheme} 的默认 handler 指着 ${entry.bundleID}`).join(";")}` +
+      " —— 这台机器上找不到这个 bundle id 对应的 app(多半是它被删了/被拖进了废纸篓)。" +
+      "系统此刻会自己找个能开链接的东西顶上,但这条登记本身是坏的;内核不替你改系统状态," +
+      `要修就显式跑一次:a2 url-router restore --to ${fallbackBundleID}`,
   };
 }
 
@@ -343,6 +384,10 @@ function ports(context: UrlRouterContext): UrlRouterPorts {
 
 function handlerReader(context: UrlRouterContext): DefaultHandlerReader {
   return context.handlers ?? createDefaultHandlerReader(ports(context));
+}
+
+function installedLookup(context: UrlRouterContext): InstalledAppLookup {
+  return context.installed ?? createInstalledAppLookup(ports(context));
 }
 
 /**
