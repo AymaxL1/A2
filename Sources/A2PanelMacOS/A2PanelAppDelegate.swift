@@ -27,6 +27,15 @@
 // 反过来,**隐式那条仍然禁止**:没有"发现连不上就悄悄装一个"、没有定时自查、没有静默升级。
 //
 // ============================================================================
+// URL 分流(03 票):壳在这条路上只是一根管子
+// ============================================================================
+// 系统把链接交给 A2 Panel(它注册成了默认浏览器,注册本身归 05 票的 Info.plist)——
+// 两条投递路都挂着:`kAEGetURL` 苹果事件(拿得到**原样字符串**)与 `application(_:open:)`
+// (AppKit 已经装成 `URL` 的那条)。谁先谁后由 AppKit 定,同一条 URL 的重复投递由
+// `A2URLForwarder` 按字符串相等去重。
+// 收到之后这里**一个字节都不解析**,直接交给 `A2URLForwarder`(纯逻辑,四条硬边界的落点)。
+//
+// ============================================================================
 // 线程纪律
 // ============================================================================
 // 会话跑在自己的线程上;它的回调**可能在任何线程**。所以这里每个回调都立刻 `DispatchQueue.main.async`
@@ -45,6 +54,8 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: A2MenuBarController?
     private var confirmations: A2ConfirmationPresenter?
     private let about = A2AboutWindow()
+    /// URL 转发与降级兜底(03 票)。会话在时转发经它入队,会话不在时它自己走兜底。
+    private var urlForwarder: A2URLForwarder?
 
     /// 引导执行器的编排者。没有内嵌 bin 时它也在,只是**什么都不做**(`runner == nil`)。
     private var bootstrap: A2BootstrapCoordinator?
@@ -108,8 +119,44 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
         self.session = session
         session.start()
 
+        // URL 分流(03 票)。装配就三行:转发走会话、兜底走 NSWorkspace、通知走 UNUserNotificationCenter。
+        //   判断一条都不在这里 —— 全在 `A2URLForwarder`(纯逻辑,四条硬边界有断言守着)。
+        urlForwarder = A2URLForwarder(
+            router: session,
+            opener: A2WorkspaceFallbackBrowser(),
+            notifier: A2UserNotificationNotifier(),
+            defaults: A2UserDefaultsURLRouterStore(),
+            log: { [weak self] line in self?.writeLog(line) })
+        // 两条投递路都挂上(见文件头「URL 分流」一节)。`kAEGetURL` 这条拿得到**原样字符串**,
+        //   所以它是首选;`application(_:open:)` 那条由 AppKit 决定要不要走,重复投递会被去重。
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLAppleEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+
         // 问内嵌 bin 的版本 + 服务态,**各一次**(不轮询)。答案回来时再决定首启弹不弹。
         bootstrap.probe()
+    }
+
+    // MARK: - URL 事件(两条投递路,同一个出口)
+
+    /// `kAEGetURL`:拿到的是**原样字符串**,原样往下传 —— 不解析、不改写、不记内容。
+    @objc private func handleGetURLAppleEvent(_ event: NSAppleEventDescriptor,
+                                              withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let url = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else {
+            writeLog("收到一条 URL 事件,但取不出直接参数 —— 丢弃")
+            return
+        }
+        urlForwarder?.handle(url)
+    }
+
+    /// LaunchServices 那条路(AppKit 已经把它装成 `URL`)。
+    ///
+    /// 这里只能拿到 `absoluteString`(原样字符串在 AppKit 里已经过了一手)—— 壳仍然不解析、不改写,
+    /// 只是把手里这一份原样交出去。
+    public func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { urlForwarder?.handle(url.absoluteString) }
     }
 
     // MARK: - 引导(全部在主线程)
@@ -256,6 +303,9 @@ extension A2PanelAppDelegate: A2PanelSessionDelegate {
                 previous: self.panelState.connection, current: state.connection)
             self.panelState = state
             self.render()
+            // 03 票:快照里的兜底浏览器**顺手落盘**,并在"断→连"那一帧重置通知节流位。
+            //   两件事都在 `A2URLForwarder` 里判(纯逻辑、幂等),这里只负责每次都喂给它。
+            self.urlForwarder?.observe(state)
             if shouldRefresh { self.bootstrap?.refreshServiceStatus() }
         }
     }
@@ -273,10 +323,21 @@ extension A2PanelAppDelegate: A2PanelSessionDelegate {
     }
 
     nonisolated public func panelSession(_ session: A2PanelSession, log line: String) {
-        // 壳的日志只写 stderr。**事件的权威落点在内核**(NDJSON 审计日志 + `a2 arbitration log` 可查)——
-        //   壳缺席时那边照样记(08 票已实现),所以这里没有也不该有第二份日志文件。
+        A2PanelAppDelegate.writeLogLine(line)
+    }
+}
+
+extension A2PanelAppDelegate {
+    /// 壳的日志只写 stderr。**事件的权威落点在内核**(NDJSON 审计日志 + `a2 arbitration log` 可查)——
+    /// 壳缺席时那边照样记(08 票已实现),所以这里没有也不该有第二份日志文件。
+    ///
+    /// URL 分流那条路也走这里,且**永远不会带上 URL**:脱敏在源头做(`A2URLForwarder` 压根不把
+    /// URL 交给日志),而不是在这里过滤 —— 过滤器迟早有一处会漏。
+    nonisolated static func writeLogLine(_ line: String) {
         FileHandle.standardError.write(Data("[a2-panel] \(line)\n".utf8))
     }
+
+    nonisolated func writeLog(_ line: String) { A2PanelAppDelegate.writeLogLine(line) }
 }
 
 /// 壳自报的版本(**不构成身份**,只进审计与展示 —— 内核 V1 不验签)。

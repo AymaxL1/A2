@@ -72,6 +72,9 @@ public final class A2PanelSession {
         case call(capability: String, input: [String: A2JSON])
         case resolve(confirmation: String, decision: A2ConfirmationDecision, reason: String?)
         case refreshProxy
+        /// 转发一条 URL(03 票)。与别的动作不同,它**带着一个截止时刻和一个只收场一次的回调** ——
+        /// 用户在等着看链接打不打得开,不能像其它入队动作那样"等会话线程什么时候轮到"。
+        case route(A2URLRouteTicket)
     }
 
     private let configuration: Configuration
@@ -135,6 +138,17 @@ public final class A2PanelSession {
         queueLock.lock()
         queued.append(command)
         queueLock.signal()
+        queueLock.unlock()
+    }
+
+    /// 排队里那些**已经收场**的转发(看门狗先到、兜底已接手)清掉 —— 内核长时间不可达时,
+    /// 用户每点一条链接就往队里留一条永远不会被发出去的死信,不清就一直涨。
+    private func pruneSettledRoutes() {
+        queueLock.lock()
+        queued.removeAll { command in
+            if case let .route(ticket) = command { return ticket.isSettled }
+            return false
+        }
         queueLock.unlock()
     }
 
@@ -236,6 +250,49 @@ public final class A2PanelSession {
         case .refreshProxy:
             try refreshProxy(client)
             publish()
+
+        case let .route(ticket):
+            try route(ticket, on: client)
+        }
+    }
+
+    /// 转发一条 URL(03 票)。**入队纪律照旧**:这里已经在会话线程上,与其它请求同一条通道、同一个计数器。
+    ///
+    /// 三件事必须同时成立,少一件都会变成"用户点了个链接,然后什么都没发生":
+    ///   * **已收场的不发**:看门狗到点会先把它收成 `.unreachable`,兜底浏览器那时已经开过了 ——
+    ///     这时再发一次就是同一条链接开两遍;
+    ///   * **截止时刻传给客户端**:等响应的上限是这张票**剩下的**时间,不是客户端那 5 秒的缺省;
+    ///   * **超时即报废这条连接**:客户端头注写明了理由(迟到的响应会在下一次请求上撞成协议违例),
+    ///     所以照旧把错误抛出去让 `run()` 重连 —— 但**先收场**,不能让点击悬着。
+    private func route(_ ticket: A2URLRouteTicket, on client: A2KernelClient) throws {
+        guard !ticket.isSettled else {
+            emit(log: "跳过一条已超时的 URL 转发(兜底已接手)")
+            return
+        }
+        let remaining = ticket.deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            ticket.settle(.unreachable("还没轮到发出去就已经超过 \(A2URLRouter.forwardTimeout) 秒"))
+            return
+        }
+        do {
+            let response = try countingRequest {
+                // **URL 原样进 input**:壳一个字节都不改(03 四条硬边界的第①条)。
+                try client.callCapability(A2URLRouter.routeCapability,
+                                          input: ["url": .string(ticket.url)],
+                                          timeout: remaining)
+            }
+            switch response {
+            case .success:
+                ticket.settle(.routed)
+                emit(log: "\(A2URLRouter.routeCapability) 完成")
+            case let .failure(failure):
+                // 内核**在**,只是拒了。如实报出来,兜底那侧据此不弹"内核未运行"的通知。
+                ticket.settle(.refused(code: failure.error.code, message: failure.error.message))
+                emit(log: "\(A2URLRouter.routeCapability) 失败:\(failure.error.code) \(failure.error.message)")
+            }
+        } catch {
+            ticket.settle(.unreachable("与内核的这次往返没走通:\(error)"))
+            throw error
         }
     }
 
@@ -282,5 +339,65 @@ public final class A2PanelSession {
 
     private func emit(log line: String) {
         delegate?.panelSession(self, log: line)
+    }
+}
+
+// ============================================================================
+// URL 转发(03 票):与其它动作同一条队、同一条连接、同一个请求计数器
+// ============================================================================
+
+/// 一次 URL 转发的**票**:一条 URL、一个截止时刻、一个**只收场一次**的回调。
+///
+/// 为什么要一个引用类型:同一张票被两个人抢着收场 —— 会话线程(拿到响应/撞上错误)与看门狗
+/// (到点了)。谁先谁算数,另一边看到 `isSettled` 就闭嘴。没有这把锁,内核不可达时那条链接
+/// 会被开两次(看门狗兜底一次,会话重连之后又发一次)。
+public final class A2URLRouteTicket {
+    /// 用户点的那条 URL,**原样**。
+    public let url: String
+    /// 到这个时刻还没收场就算内核不可达(spec §6.1 的 1.5s,**含连接**)。
+    public let deadline: Date
+
+    private let lock = NSLock()
+    private var completion: ((A2URLRouteOutcome) -> Void)?
+
+    public init(url: String, deadline: Date, completion: @escaping (A2URLRouteOutcome) -> Void) {
+        self.url = url
+        self.deadline = deadline
+        self.completion = completion
+    }
+
+    public var isSettled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return completion == nil
+    }
+
+    /// 收场。**恰好一次**:第一个到的赢,其余调用什么都不做。
+    public func settle(_ outcome: A2URLRouteOutcome) {
+        lock.lock()
+        let settle = completion
+        completion = nil
+        lock.unlock()
+        settle?(outcome)
+    }
+}
+
+extension A2PanelSession: A2URLRouteForwarding {
+
+    /// 把一条 URL 交给内核(壳侧转发的唯一出口)。
+    ///
+    /// **看门狗是必须的,不是保险**:内核不可达时会话线程正睡在重连间隔里,压根不会去看这条队列 ——
+    /// 没有它,用户点的链接会一直悬着,直到内核某天回来才被打开(那时早已文不对题)。
+    /// 于是"超时"这件事由**发起方**计时,而不是指望连接那侧报错。
+    public func routeURL(_ url: String, completion: @escaping (A2URLRouteOutcome) -> Void) {
+        let ticket = A2URLRouteTicket(
+            url: url,
+            deadline: Date().addingTimeInterval(A2URLRouter.forwardTimeout),
+            completion: completion)
+        pruneSettledRoutes()
+        enqueue(.route(ticket))
+        DispatchQueue.global(qos: .userInitiated)
+            .asyncAfter(deadline: .now() + A2URLRouter.forwardTimeout) {
+                ticket.settle(.unreachable("等内核回应超过 \(A2URLRouter.forwardTimeout) 秒"))
+            }
     }
 }

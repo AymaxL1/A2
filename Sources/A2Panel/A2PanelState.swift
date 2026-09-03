@@ -204,6 +204,12 @@ public struct A2PanelState: Sendable, Equatable {
     public var pendingConfirmations: [A2ConfirmationRequest]
     /// 最近若干条审计事件(快照给基线,`audit` 事件叠加)。
     public var audit: [A2AuditEvent]
+    /// URL 分流:兜底浏览器是谁(03 票)。**只来自快照**,壳永不去读内核的配置文件。
+    ///
+    /// `nil` = 这次会话还没拿到过快照(壳刚起来、或内核从没跑过)。那时降级兜底用硬编码的
+    /// `com.apple.Safari` —— 但真正的"最后已知值"活在 UserDefaults 里(重启也还在),
+    /// 本字段只是它的**当前会话视图**。
+    public var urlRouter: A2URLRouterSnapshot?
 
     public init(connection: A2PanelConnection = .disconnected("未连接"),
                 kernelStatus: A2StatusResult? = nil,
@@ -212,7 +218,8 @@ public struct A2PanelState: Sendable, Equatable {
                 supervision: A2ProxySupervisionResult? = nil,
                 proxy: A2ProxyView = A2ProxyView(),
                 pendingConfirmations: [A2ConfirmationRequest] = [],
-                audit: [A2AuditEvent] = []) {
+                audit: [A2AuditEvent] = [],
+                urlRouter: A2URLRouterSnapshot? = nil) {
         self.connection = connection
         self.kernelStatus = kernelStatus
         self.capabilities = capabilities
@@ -221,6 +228,7 @@ public struct A2PanelState: Sendable, Equatable {
         self.proxy = proxy
         self.pendingConfirmations = pendingConfirmations
         self.audit = audit
+        self.urlRouter = urlRouter
     }
 
     /// 审计事件保留条数(与内核快照给的条数同量级;壳不做日志,只做「最近发生了什么」的呈现)。

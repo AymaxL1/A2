@@ -48,7 +48,10 @@ public enum A2PanelProjection {
             supervision: snapshot.supervision,
             proxy: A2ProxyView(),
             pendingConfirmations: [],
-            audit: Array(snapshot.audit.suffix(A2PanelState.auditWindow)))
+            audit: Array(snapshot.audit.suffix(A2PanelState.auditWindow)),
+            // 03 票:兜底浏览器是谁,**只从这里进壳**。断连时(`disconnect`)有意保留最后一份 ——
+            // 那正是降级兜底要用的"最后已知值",内核宕了才更需要它。
+            urlRouter: snapshot.urlRouter)
     }
 
     /// 断连:保留「最后看到的样子」供菜单如实呈现,但**清空待办**(见文件头「断线即离场」)。

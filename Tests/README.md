@@ -27,6 +27,8 @@ swift test --no-parallel
   修法是给假内核一条专用 `Thread` + 按判据差给余量,但门禁口径仍取 `--no-parallel`。
 
 **这批用例不起任何进程、不碰真实 `~/.a2`、不发一条真网络请求**,所以裸跑是安全的
+(唯一沾边的是 03 票那条看门狗用例:它建一个真的 `A2PanelSession`,socket 指向临时目录下一个
+**不存在**的路径 —— 连接当场失败,既不起进程也不碰用户的内核,1.5s 后由看门狗收场)
 (17 票时代那条「`sleep 87137` 会留在你机器上」的警告随 `AAAgentTestKitTests` 一起退场)。
 起真 daemon 的那一关在 `Scripts/a2-flagship-e2e.sh`(门禁第③步),它自带 trap 清场。
 
@@ -36,7 +38,7 @@ swift test --no-parallel
 | --- | --- | --- |
 | `A2ContractTests` | 契约金标的 **Swift 半边**:范围对账 / 合法样本往返 / 非法样本必拒 / 封闭词表对账 / 可选字段松紧 | 读 `kernel/contract/golden/` 的同一批样本 |
 | `A2KernelClientTests` | UDS 客户端的协议逻辑:字节级拆行 / id 相关 / 推送分流 / pending 顺延 | 假内核用 `socketpair()` 现造 |
-| `A2PanelTests` | 壳纯逻辑:菜单覆盖面与可追溯性 / 四态如实反映 / 六族事件投影 / 确认原样呈现 | 零 AppKit |
+| `A2PanelTests` | 壳纯逻辑:菜单覆盖面与可追溯性 / 四态如实反映 / 六族事件投影 / 确认原样呈现 / URL 转发与降级兜底(03 票四条硬边界,含源码级反向断言) | 零 AppKit |
 | `A2PanelSnapshotTests` | **壳快照**:渲染器 B 离屏渲染 × 入库 golden(像素 + 模型文本) | 要 AppKit,`@MainActor` |
 
 **固定装置不在这里**:`A2PanelFixtures` 住在 `Sources/`。理由是硬约束而不是偏好 ——
