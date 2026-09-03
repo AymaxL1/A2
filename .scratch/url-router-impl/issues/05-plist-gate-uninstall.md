@@ -1,6 +1,6 @@
 # 05 Info.plist/门禁断言 + 卸载双路径前置
 
-Status: open
+Status: claimed
 Blocked by: 04
 
 ## Question

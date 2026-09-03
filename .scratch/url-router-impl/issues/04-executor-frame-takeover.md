@@ -1,6 +1,6 @@
 # 04 执行指令帧 + takeover/restore 编排
 
-Status: claimed
+Status: resolved
 Blocked by: 03
 
 ## Question
@@ -97,3 +97,13 @@ spec §11 要求钉死「用户取消时 completion 的 NSError 域/码」。**�
 
 **无偏差**。三处口径在 spec 允许的范围内做了具体化,已在上面「CR 口径」逐条记明
 (perScheme 优先、`capability_failed` 复用、前置报错由壳的解析步承载)。
+
+### 2026-09-04 CR(Fable 主循环,双轴):通过,零修改项 → resolved
+
+registry 闸外科手术级(dangerous 分支单条件 + `confirmationModeOf` 单一出处),三处
+「既有 dangerous 不变」断言齐;编排顺序即安全语义,perScheme 事实压过 outcome 概括的
+取舍**追认**(自相矛盾回执有用例);`url_router_executor_unwired` 退场照 mihomo 先例追认;
+NSError 域/码不编造、留 06 真机回填的处理正确(含禁止执行器认 domain/code 的源码级断言)。
+复核实测 bun 629 ran/0 fail + swift 276/0。ff 合入 main = aad46aa,分支已删。
+**记账给 06**:真机回填 NSError 域/码后,壳侧 `A2URLRouterExecutorRunner.Ledger.record`
+一处加判断 + 金标占位样本(`NSOSStatusErrorDomain/-10814`)转正,连同「谁来判」过一次 CR。
