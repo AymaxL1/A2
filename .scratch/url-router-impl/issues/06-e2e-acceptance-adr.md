@@ -1,6 +1,6 @@
 # 06 e2e + 真机验收 + ADR 落笔
 
-Status: open
+Status: claimed
 Blocked by: 05
 
 ## Question

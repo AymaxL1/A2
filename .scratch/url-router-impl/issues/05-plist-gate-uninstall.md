@@ -1,6 +1,6 @@
 # 05 Info.plist/门禁断言 + 卸载双路径前置
 
-Status: claimed
+Status: resolved
 Blocked by: 04
 
 ## Question
@@ -62,3 +62,10 @@ spec §7(Info.plist)/§9(卸载)/§11(门禁):
 
   **留给 06 的**:ADR 0015 新立与 ADR 0008 第 5 条修订(spec §10,本票只补了 0012 的两条修订);
   真机验收 —— 弹框实感、悬空自动回落的实测断言、`.app` 真的出现在「默认网页浏览器」候选里。
+
+- 2026-09-04 CR(Fable 主循环,双轴):**通过 → resolved**。死锁规避(壳自发起 restore 会与
+  内核互等 120s)是真架构问题的正确解:改走内嵌 bin 白名单,语义一字不变、白名单最小增量、
+  takeover 不进、ADR 0012 两条修订就位 —— 追认。四条 CR 口径全部成立(保守 grep 宁宽勿漏 /
+  ⓪e 只拦确知 / 悬空诊断 fail-open 带对照探询 / 诊断只在 status)。假件 defaults 的 PATH
+  沙盒修补是真 bug 修复。复核实测 bun 655/0 + swift 283/0;APP14 反证采信。
+  ff 合入 main = 0a88fff,分支已删。
