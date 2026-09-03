@@ -11,7 +11,7 @@
 #   区别是这次跑在门禁里,而且被测体是**壳自己的代码**(`a2-panel-probe` 复用 A2Panel 全套)。
 #
 # ============================================================================
-# 六幕
+# 十幕(①–⑥ 由 10 票立;⑦–⑩ 是 url-router 施工 06 票接上去的)
 # ============================================================================
 #   ① 旗舰链零打断:开代理 → 切模式 → 选节点 → 激活/更新订阅,全程 safe/normal,**一次确认都不弹**;
 #      壳的菜单**逐幕跟着变**(零轮询:壳在这期间没有为了"看看变了没有"发过一条请求);
@@ -22,6 +22,14 @@
 #   ⑤ 壳与内核的能力面对账:菜单覆盖 04 票 In 清单、每项落到**真内核登记过**的能力、
 #      真内核里每条可发起的 proxy 能力要么进菜单要么在豁免表里记账;
 #   ⑥ 收场:显式 `a2 proxy off` 精确还原系统代理(「退出即还原」废除后唯一的还原入口)。
+#   ⑦ URL 分流的分流正确性(url-router spec §13.2):未命中 → 兜底浏览器;命中分流域名 + 本机没跑 Roxy
+#      → `roxy-launcher`;真 `route` 交给假 `open` 的是 **URL 原文、独立 argv、`#` 之后一个字节都不少**;
+#   ⑧ `url-router status` 两格:配置健康(现写的配置文件真的被读到)与 handler **未能判定**(不猜);
+#   ⑨ 接管的两条可自动化路(spec §13.1):执行器不在场 → 拉一把壳、等不到 → `confirmation_unavailable`;
+#      壳带着机械执行器上岗 → **真指令帧往返**(内核推帧 → 壳逐 scheme 调系统 API 替身 → 回执)→
+#      退出码 0;再跑一次 → `already: true` 幂等直通,壳一帧都没再收到;
+#   ⑩ 卸载前置⓪e(spec §13.4 的 CLI 野路径那一半):默认 handler 还挂在 com.a2.panel 上时
+#      `service uninstall --purge` 结构化拒绝且**零删除**;设回兜底浏览器后同一条命令放行。
 #
 # ============================================================================
 # 红线(逐条落实在下面)
@@ -31,6 +39,10 @@
 #   * 一切落在临时 `A2_HOME`(`/tmp/a2fs-*`),真实 `~/.a2` 绝不出现;
 #   * 不 launchctl 任何真 unit(`PATH` 只有假 supervisor,`HOME` 也换成临时目录);
 #   * `networksetup` 走 `A2_NETWORKSETUP` 覆写到假件,真系统代理一个字节都不动;
+#   * **绝不真开浏览器、绝不真改默认 handler、绝不去读真 LaunchServices**(⑦–⑩):url-router 那四个
+#     外部程序(`open` / `ps` / `lsof` / `defaults` / `mdfind`)全部经 `A2_URL_ROUTER_*` 打到
+#     `kernel/test/support/fake-url-router/` 的行为假件上;壳那侧的系统 API 也是替身
+#     (`a2-panel-probe --executor`,见它的 `ScriptedHandlerSetter`);
 #   * 起的真 daemon 与假 mihomo 用完杀净(trap 兜底,只杀本次沙盒路径下的进程)。
 #
 # 用法:
@@ -41,6 +53,11 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# 构建日志往 `.build/` 里写,而在一份**刚 checkout 出来的工作树**里它还不存在
+# (`swift package dump-package` 不替我们建它)。少这一句,脚本会死在那次重定向上,
+# 而报出来的样子是「a2-panel-probe 构建失败」—— 一条把人引向错误方向的假象。
+mkdir -p "$ROOT/.build"
 
 PASS=0
 FAIL=0
@@ -142,6 +159,20 @@ cp "$BOX/netfake-state.json" "$BOX/netfake-before.json"
 : > "$BOX/netfake-calls.log"
 : > "$BOX/supervisor-calls.log"
 
+# url-router(幕⑦–⑩)那五个外部程序的行为假件 + 两份落盘物。
+#
+#   * `open` 只把 argv 记进 `$OPEN_LOG`、**什么都不开** —— 「交出去的是 URL 原文」这条判据靠它;
+#   * `ps` 吐空表(= 这台机器上没有任何 Roxy 在跑),`lsof` 复用同一份假件(同样吐空 = 没有 CDP 端口);
+#   * `defaults` 把 `$LS_FIXTURE` 原样吐出来 —— 那就是这一幕眼里的「LaunchServices 现状」。
+#     **一开始有意让它不存在**:文件不在 → 假件非零退出 → handler「未能判定」,那正是幕⑧要验的一格,
+#     也是一台从没换过默认浏览器的机器上的真实形状;
+#   * `mdfind` 按白名单回答"这个 bundle id 装着吗"(悬空诊断用)。白名单里放上对照探询要用的
+#     `com.apple.finder` 与接管目标本身 —— 于是接管之后 `status` 不会把它误报成悬空。
+URL_FAKES="$SUPPORT/fake-url-router"
+OPEN_LOG="$BOX/url-open.log"
+LS_FIXTURE="$BOX/launch-services.plist"
+: > "$OPEN_LOG"
+
 # 假 mihomo 直接放到 a2 自管落点(14 票:embedded 一律锁定版;版本=锁定版 → enable 不走下载)。
 # "别人的 bin 目录"留空 —— 外来检测面在本场景里不该有戏份。
 mkdir -p "$A2HOME/mihomo/bin"
@@ -181,6 +212,22 @@ BOX_ENV=(
   A2_MIHOMO_CONTROLLER_PORT="$CTRL_PORT"
   A2_MIHOMO_MIXED_PORT="$MIXED_PORT"
   A2_PROXY_WATCH_INTERVAL_MS="200"
+  # ---- url-router(幕⑦–⑩)。**daemon 也吃这一份**:这几条能力跑在 daemon 进程里,
+  #      只喂给 CLI 那次调用等于没喂。
+  A2_URL_ROUTER_OPEN="$URL_FAKES/open"
+  A2_URL_ROUTER_PS="$URL_FAKES/ps"
+  A2_URL_ROUTER_LSOF="$URL_FAKES/ps"
+  A2_URL_ROUTER_DEFAULTS="$URL_FAKES/defaults"
+  A2_URL_ROUTER_MDFIND="$URL_FAKES/mdfind"
+  A2_URL_ROUTER_OPEN_LOG="$OPEN_LOG"
+  A2_URL_ROUTER_DEFAULTS_FIXTURE="$LS_FIXTURE"
+  A2_URL_ROUTER_MDFIND_PRESENT="com.apple.finder,com.a2.panel"
+  # 拉起壳之后等它注册的窗(缺省 10s)压到 0.8s:幕⑨第一格等的那个壳**在门禁里永远不会来**
+  #   (假 `open` 什么都不开),没必要真站十秒。
+  A2_URL_ROUTER_EXECUTOR_WAIT_MS="800"
+  # 等系统弹框的窗(缺省 120s)压到 20s:验的是"往返走不走得通",不是"能不能等两分钟";
+  #   真探针几毫秒就回话,这个数只是万一它挂了时的止损。
+  A2_URL_ROUTER_EXECUTION_TIMEOUT_MS="20000"
 )
 
 cleanup() {
@@ -419,7 +466,224 @@ else
   diff <(python3 -m json.tool "$BOX/netfake-before.json") <(python3 -m json.tool "$BOX/netfake-state.json") | head -20
 fi
 
-# ---- ⑨ 红线自查 -------------------------------------------------------------------------
+# ---- ⑨ 幕⑦:URL 分流的分流正确性(url-router spec §13.2)-------------------------------
+echo
+echo "-- 幕 7:URL 分流(未命中 / 命中 / fragment 不截断)"
+
+# 配置**现写**(daemon 已经在跑):url-router 的配置没有监视器、也没有缓存,每次调用现读 ——
+#   于是这一份既验了「配置真的从这个沙盒 A2_HOME 读」,也顺带验了「daemon 起来之后写的照样算数」。
+#   两个值都换成沙盒专用的:缺省域名表里没有 roxy-only.example,缺省兜底也绝不是
+#   com.example.e2e-fallback —— 下面的断言还能绿,就只可能是这份文件真的生效了。
+cat > "$A2HOME/url-router.json" <<'JSON'
+{
+  "fallbackBrowserBundleID": "com.example.e2e-fallback",
+  "routedDomains": ["roxy-only.example"],
+  "roxyApplicationPath": "/Applications/E2E-Roxy.app"
+}
+JSON
+
+# 未命中的那条 URL 带着 query 与 **fragment**,fragment 里还塞了一个问号与非 ASCII ——
+#   02 票踩过的坑正是「把 # 之后当成可以丢掉的东西」。它必须逐字节原样到达 open。
+MISS_URL='https://plain.example/a?q=hello world&x=1#片段?y=2'
+
+DRY_MISS="$(a2 url-router route "$MISS_URL" --dry-run --json 2>&1)"
+assert_eq "$?" "0" "7-1 url-router route --dry-run 成功(只判不开)"
+assert_eq "$(printf '%s' "$DRY_MISS" | json_get result.output.decision)" "fallback-browser" \
+  "7-2 未命中分流域名 → 决策是 fallback-browser"
+assert_eq "$(cat "$OPEN_LOG")" "" "7-3 --dry-run 一趟 open 都没发生(「只判不开」的字面意思)"
+
+DRY_HIT="$(a2 url-router route "https://sub.roxy-only.example/chat" --dry-run --json 2>&1)"
+assert_eq "$(printf '%s' "$DRY_HIT" | json_get result.output.decision)" "roxy-launcher" \
+  "7-4 命中分流域名(还是子域名)+ 本机没跑 Roxy(假 ps 空表)+ API 三件套没配 → 降到 roxy-launcher"
+
+ROUTE_OUT="$(a2 url-router route "$MISS_URL" --json 2>&1)"
+assert_eq "$?" "0" "7-5 真 route(非 dry-run)成功"
+assert_eq "$(printf '%s' "$ROUTE_OUT" | json_get result.output.action)" "fallback-browser" \
+  "7-6 未命中的那条真的从兜底浏览器那一级出去了"
+# 假 open 的落盘记录:每趟一组 argv、以 -- 收尾。这里做**逐字节**比对 —— 「URL 原样交出去」
+#   这条判据要的正是字节级相等(spec §13.2 的「带 fragment 的 URL 不截断」)。
+assert_eq "$(cat "$OPEN_LOG")" "$(printf -- '-b\ncom.example.e2e-fallback\n%s\n--' "$MISS_URL")" \
+  "7-7 open 收到的是 -b <配置里的兜底浏览器> <URL 原文>:URL 是独立 argv,# 之后一个字节都没少"
+assert_eq "$(printf '%s' "$ROUTE_OUT" | json_get result.output.url)" \
+  "https://plain.example/a?redacted#redacted" \
+  "7-8 报文里那份是脱敏的(query/fragment 换成 redacted)—— 开给用户的是原文,进机读面的是这份"
+assert_not_contains "$ROUTE_OUT" "hello world" "7-9 stdout 里没有 query 原文(脱敏纪律的活体证据)"
+
+# ---- ⑩ 幕⑧:url-router status 的两格 ---------------------------------------------------
+echo
+echo "-- 幕 8:url-router status(配置健康 + handler 未能判定)"
+STATUS_OUT="$(a2 url-router status --json 2>&1)"
+assert_eq "$?" "0" "8-1 url-router status 成功"
+assert_eq "$(printf '%s' "$STATUS_OUT" | json_get result.output.configSource)" "file" \
+  "8-2 配置健康:这份生效配置来自文件(合契约,已与缺省逐字段合并)"
+assert_eq "$(printf '%s' "$STATUS_OUT" | json_get result.output.config.fallbackBrowserBundleID)" \
+  "com.example.e2e-fallback" "8-3 生效配置里的兜底浏览器就是文件里写的那个"
+assert_eq "$(printf '%s' "$STATUS_OUT" | json_get result.output.config.routedDomains)" \
+  '["roxy-only.example"]' "8-4 分流域名表整份来自文件(缺省那三条一个都没掺进来)"
+# 假 defaults 此刻没有 fixture 可吐 → 非零退出 → 内核如实报「未能判定」,**不猜**。
+#   这正是一台从没换过默认浏览器的机器上的真实形状(LaunchServices 里根本没有对应条目)。
+assert_eq "$(printf '%s' "$STATUS_OUT" | json_get result.output.handler.matchesTarget)" "" \
+  "8-5 handler 读不出来时 matchesTarget 是 null(而不是猜一个「大概是 Safari」)"
+assert_contains "$STATUS_OUT" "未能判定" "8-6 而且说清了为什么(没换过就不会有登记项 —— 这不是故障)"
+
+# ---- ⑪ 幕⑨:接管的两条可自动化路(url-router spec §13.1)-------------------------------
+echo
+echo "-- 幕 9:接管(执行器不在场 → 默拒;执行器在场 → 真指令帧往返 + 幂等复跑)"
+: > "$OPEN_LOG"
+
+# ① 此刻一个壳都没在跑(幕④之后探针就退场了)。内核会先 open -b com.a2.panel 拉一把 ——
+#    假 open「成功」了(它什么都不开),于是这条路准确地落在「拉起过了,但没人注册上来」那一格。
+TAKEOVER_OUT="$(a2 url-router takeover --json 2>&1)"
+TAKEOVER_RC=$?
+assert_eq "$TAKEOVER_RC" "2" "9-1 执行器不在场 → 退出码 2(dangerous 一步都没往下走)"
+assert_contains "$TAKEOVER_OUT" "confirmation_unavailable" \
+  "9-2 拒因是第①层的「没人能替你确认」—— 确认换了个地方(系统弹框),词表一个新词都没造"
+assert_contains "$TAKEOVER_OUT" "系统设置" "9-3 拒绝即指引:连「不装壳也能干成」的那条路都给了"
+assert_eq "$(cat "$OPEN_LOG")" "$(printf -- '-b\ncom.a2.panel\n--')" \
+  "9-4 这条路上恰好一趟 open -b com.a2.panel(拉壳是显式变更里的一步),没有开任何 URL"
+
+# ② 壳带着机械执行器上岗。**装配与真壳逐字同形**(A2PanelSession 的 executor 参数),
+#    只有最末那次系统调用换成了替身 —— 见 a2-panel-probe 的 ScriptedHandlerSetter。
+: > "$OPEN_LOG"
+env "${BOX_ENV[@]}" "$PROBE_BIN" --socket "$SOCK" --role confirm-agent --executor \
+  --duration 60 >"$BOX/probe-executor.log" 2>&1 &
+PROBE_PID=$!
+for _ in $(seq 1 200); do
+  grep -q "已注册 url-router-executor" "$BOX/probe-executor.log" 2>/dev/null && break
+  sleep 0.1
+done
+if grep -q "已注册 url-router-executor" "$BOX/probe-executor.log" 2>/dev/null; then
+  ok "9-5 壳在**同一条连接**上注册了第二个角色 url-router-executor(装了执行器才举手)"
+else
+  bad "9-5 壳没能在 20 秒内注册成 url-router-executor"; sed 's/^/    /' "$BOX/probe-executor.log"
+fi
+
+TAKEOVER2_OUT="$(a2 url-router takeover --json 2>&1)"
+TAKEOVER2_RC=$?
+assert_eq "$TAKEOVER2_RC" "0" "9-6 执行器在场 → 一趟真的指令帧往返之后退出码 0"
+assert_eq "$(printf '%s' "$TAKEOVER2_OUT" | json_get result.output.outcome)" "confirmed" \
+  "9-7 收场是 confirmed(内核按 perScheme 那份逐条事实判的,不是听壳一句概括)"
+PER_SCHEME="$(printf '%s' "$TAKEOVER2_OUT" | json_get result.output.perScheme.http.ok)/$(printf '%s' "$TAKEOVER2_OUT" | json_get result.output.perScheme.https.ok)"
+assert_eq "$PER_SCHEME" "true/true" "9-8 两个 scheme 逐条都成了(http 与 https 是两次独立的系统弹框)"
+assert_eq "$(grep -c '^PANEL_EXECUTE_SET:' "$BOX/probe-executor.log")" "2" \
+  "9-9 壳收到帧之后**逐 scheme**各调了一次系统 API(账本收齐了才回执,而且只回一次)"
+assert_contains "$(cat "$BOX/probe-executor.log")" "PANEL_EXECUTE_LOCATE: bundleID=com.a2.panel" \
+  "9-10 帧上的 bundleID 原样到了壳手里 —— 壳自己不认得任何 bundle id,是内核算好了写在帧上的"
+assert_eq "$(cat "$OPEN_LOG")" "" "9-11 执行器已经在场 → 一趟 open 都没有(拉壳只发生在它不在的时候)"
+
+# 假件不会真改这台机器的默认浏览器(红线),所以这里**把 LaunchServices 那份投影换成「接管之后」** ——
+#   幂等判据读的正是它。这不是绕过判据,而是给它喂上真机上本来就会读到的下一帧。
+cat > "$LS_FIXTURE" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>LSHandlers</key>
+  <array>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.a2.panel</string>
+      <key>LSHandlerURLScheme</key>
+      <string>http</string>
+    </dict>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.a2.panel</string>
+      <key>LSHandlerURLScheme</key>
+      <string>https</string>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+STATUS_TAKEN="$(a2 url-router status --json 2>&1)"
+assert_eq "$(printf '%s' "$STATUS_TAKEN" | json_get result.output.handler.matchesTarget)" "true" \
+  "9-12 status 现读:两个 scheme 的默认 handler 都是 com.a2.panel"
+assert_eq "$(printf '%s' "$STATUS_TAKEN" | json_get result.output.handler.dangling)" "" \
+  "9-13 且不报悬空(假 mdfind 答得上话,而且这个 bundle id 在它的白名单里「装着」)"
+
+AGAIN_OUT="$(a2 url-router takeover --json 2>&1)"
+assert_eq "$?" "0" "9-14 复跑 takeover 退出码 0"
+assert_eq "$(printf '%s' "$AGAIN_OUT" | json_get result.output.already)" "true" \
+  "9-15 幂等直通:已经是目标了就 already: true"
+assert_eq "$(grep -c '^PANEL_EXECUTE_LOCATE:' "$BOX/probe-executor.log")" "1" \
+  "9-16 幂等那一趟壳一帧都没收到(不弹框 —— 幂等的调用不该打扰任何人)"
+assert_eq "$(cat "$OPEN_LOG")" "" "9-17 幂等那一趟也没拉起任何东西"
+
+kill "$PROBE_PID" 2>/dev/null; wait "$PROBE_PID" 2>/dev/null; PROBE_PID=""
+
+# ---- ⑫ 幕⑩:卸载前置⓪e(url-router spec §13.4 的 CLI 野路径那一半)---------------------
+echo
+echo "-- 幕 10:还挂着默认 handler 就拒绝 --purge(拒绝即指引 + 零删除)"
+
+# 这一幕**另起一个沙盒 home**,绝不碰上面那个正跑着 daemon 的:--purge 会把整个 $A2_HOME 删掉,
+#   而 18 票的白名单又规定它**只对缺省 ~/.a2 放行** —— 于是这里把 HOME 指到一个新的临时目录,
+#   它下面那个 .a2 就是被测进程眼里的「缺省 home」。真实家目录一个字节都不会被碰(R-1 盯着)。
+#   假 supervisor 的状态目录也单开一份:这一幕会对 com.a2.* 的 unit 说话,不该搅到主沙盒的账。
+PURGE_ROOT="$BOX/purgebox"
+PURGE_HOME="$PURGE_ROOT/.a2"
+mkdir -p "$PURGE_HOME" "$PURGE_ROOT/xdg" "$BOX/purge-state"
+: > "$PURGE_HOME/marker"
+PURGE_ENV=(
+  PATH="$FAKE_SUPERVISOR:/usr/bin:/bin"
+  HOME="$PURGE_ROOT"
+  XDG_CONFIG_HOME="$PURGE_ROOT/xdg"
+  A2_HOME="$PURGE_HOME"
+  A2_SERVICE_SUPERVISOR="launchd"
+  A2_FAKE_STATE_DIR="$BOX/purge-state"
+  A2_FAKE_LOG="$BOX/supervisor-calls.log"
+  A2_NETWORKSETUP="$FAKE_NETSETUP_SH"
+  A2_URL_ROUTER_DEFAULTS="$URL_FAKES/defaults"
+  A2_URL_ROUTER_DEFAULTS_FIXTURE="$LS_FIXTURE"
+)
+purge_a2() { env "${PURGE_ENV[@]}" "${A2_CMD[@]}" "$@"; }
+
+# fixture 此刻还是幕⑨末尾那份(两个 scheme 都是 com.a2.panel)= 还接管着。
+PURGE_OUT="$(purge_a2 service uninstall --purge --json 2>&1)"
+PURGE_RC=$?
+assert_eq "$PURGE_RC" "1" "10-1 com.a2.panel 仍是默认 handler → --purge 被拒(退出码 1:命令没错,状态不对)"
+assert_contains "$PURGE_OUT" "service_purge_url_handler_taken" "10-2 拒因指名道姓(不与别的 purge 拒绝混为一谈)"
+assert_contains "$PURGE_OUT" "a2 url-router restore --json" \
+  "10-3 拒绝即指引:先跑还原(那条命令就住在这次要删掉的 bin 里),再来 purge"
+if [ -f "$PURGE_HOME/marker" ]; then
+  ok "10-4 拒绝时**零删除**(那个 home 一个文件都没少)"
+else
+  bad "10-4 被拒的这一趟居然动了数据"
+fi
+
+# 用户跑过一次 restore 之后的现状:两个 scheme 都设回兜底浏览器 —— 这道门自然让开。
+cat > "$LS_FIXTURE" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>LSHandlers</key>
+  <array>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.example.e2e-fallback</string>
+      <key>LSHandlerURLScheme</key>
+      <string>http</string>
+    </dict>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.example.e2e-fallback</string>
+      <key>LSHandlerURLScheme</key>
+      <string>https</string>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+PURGE_OK_OUT="$(purge_a2 service uninstall --purge --json 2>&1)"
+PURGE_OK_RC=$?
+assert_eq "$PURGE_OK_RC" "0" "10-5 设回兜底浏览器之后,**同一条命令**放行"
+assert_contains "$PURGE_OK_OUT" "$PURGE_HOME" "10-6 报文如实说清删掉的是哪个 home"
+if [ -e "$PURGE_HOME" ]; then
+  bad "10-7 放行了却没真删($PURGE_HOME 还在)"
+else
+  ok "10-7 那个沙盒 home 真的清干净了"
+fi
+
+# ---- ⑬ 红线自查 -------------------------------------------------------------------------
 echo
 echo "-- 红线自查"
 if [ ! -e "$HOME/.a2" ]; then
@@ -439,6 +703,27 @@ if [ -z "$FOREIGN_LABELS" ]; then
   ok "R-3 整场只对 com.a2.* 说过话(假 supervisor 调用日志逐条核对)"
 else
   bad "R-3 对非 com.a2.* 的 label 说过话:$FOREIGN_LABELS"
+fi
+
+# R-4:url-router 那五个外部程序**必须全部**打在假件上。
+#
+# 为什么值得一条自查:它们在生产实现里走的是**绝对路径**(/usr/bin/open、/bin/ps……),
+# 「PATH 只有假 supervisor」那道防线对它们完全无效。哪天有人手滑删掉 BOX_ENV 里的一行,
+# 门禁就会真在跑测试的人脸上弹出一个浏览器窗口、真去读这台机器的 LaunchServices ——
+# 而且多半还是绿的(那些断言照样成立)。所以这里正面核一次:五个都在,且都指向假件目录。
+URL_ROUTER_INJECTED=0
+URL_ROUTER_LEAKS=""
+for pair in "${BOX_ENV[@]}"; do
+  case "$pair" in
+    A2_URL_ROUTER_PS=*|A2_URL_ROUTER_LSOF=*|A2_URL_ROUTER_OPEN=*|A2_URL_ROUTER_DEFAULTS=*|A2_URL_ROUTER_MDFIND=*)
+      URL_ROUTER_INJECTED=$((URL_ROUTER_INJECTED+1))
+      case "${pair#*=}" in "$URL_FAKES"/*) ;; *) URL_ROUTER_LEAKS="$URL_ROUTER_LEAKS $pair" ;; esac ;;
+  esac
+done
+if [ "$URL_ROUTER_INJECTED" -eq 5 ] && [ -z "$URL_ROUTER_LEAKS" ]; then
+  ok "R-4 url-router 的五个外部程序全部打在行为假件上(绝不真开浏览器、不读真 LaunchServices/Spotlight)"
+else
+  bad "R-4 url-router 假件注入有缺口(注入了 $URL_ROUTER_INJECTED/5;漏网:${URL_ROUTER_LEAKS:-无})"
 fi
 
 echo
