@@ -3,9 +3,9 @@
 // ============================================================================
 // 这一层是什么(以及它**不是**什么)
 // ============================================================================
-// 是:面板经 `.app` 里那份内嵌内核 bin 发起**五条白名单命令**、解析机读 JSON、把结果交出去。
+// 是:面板经 `.app` 里那份内嵌内核 bin 发起**白名单里那几条命令**、解析机读 JSON、把结果交出去。
 // 不是:第二条通往内核的路。壳与内核说话的正路仍是 UDS 长连接(`A2PanelSession`);
-//       本层只在**内核还没装/没跑**、**要换版本**或**要卸干净**的那几个时刻用得上,一共五条,一条不多。
+//       本层只在**内核还没装/没跑**、**要换版本**或**要卸干净**的那几个时刻用得上,一共十二条,一条不多。
 //
 // **白名单是硬的**(ADR 0012 第 3 条):`A2BootstrapCommand` 是全仓唯一构造 argv 的地方,
 //   没有 `run(arbitrary:)` 之类的口子。想多发一条命令就得改这个枚举 —— 那会当场撞上
@@ -34,10 +34,11 @@ import Foundation
 import A2Contract
 
 // ============================================================================
-// ① 白名单:五条,一条不多
+// ① 白名单:十二条,一条不多
 // ============================================================================
 
-/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条;17 票起五条,14 票恰增两条成七条)。
+/// 面板经内嵌 bin 可以执行的**全部**命令(ADR 0012 第 3 条;十二条 —— 17 票五条、14 票 +2、
+/// 2026-08-22 生命周期 +3,url-router 05 票 +2:卸载序列的 restore 前置)。
 ///
 /// 每一条都带 `--json`:壳只看机读面,人类面的散文一个字都不解析
 /// (散文会为了好读而改,机读包封改一次就要动契约与金标)。
@@ -70,6 +71,18 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
     case mihomoRestart
     /// Panel 退出前还原系统代理,避免留下指向已停止端口的网络设置。
     case proxyOff
+    /// 问一次「A2 Panel 还是不是系统默认浏览器」(url-router 05 票的卸载前置第一步)。
+    /// 只读;答案是内核算好的 `handler.matchesTarget`,壳一个判断都不做。
+    case urlRouterStatus
+    /// 把系统默认浏览器设回兜底浏览器(卸载序列的第一步 —— restore 打头,拒即中止)。
+    ///
+    /// **白名单里唯一一条会等人的命令**:它要过系统弹框(http/https 各一次),内核那侧的窗是 120s。
+    /// 等待期间引导面锁在「卸载中…」上,这与 `A2BootstrapProcessRunner` 不设超时那条注释是同一件事:
+    /// 半路 kill 掉它比让菜单显示"忙"更糟 —— 那会留下一个"框弹了、结果没人收"的系统状态。
+    ///
+    /// 走**内嵌 bin** 而不是 UDS 会话,理由见 `A2BootstrapCoordinator` 的卸载前置那一节
+    /// (壳自己就是这条命令的机械执行器,同一条连接上自调会与执行器角色互等)。
+    case urlRouterRestore
 
     /// 传给内嵌 bin 的 argv。**全仓唯一构造引导 argv 的地方**。
     public var arguments: [String] {
@@ -84,6 +97,8 @@ public enum A2BootstrapCommand: String, Sendable, Equatable, CaseIterable {
         case .mihomoStatus:          return ["mihomo", "status", "--json"]
         case .mihomoRestart:         return ["mihomo", "restart", "--json"]
         case .proxyOff:              return ["proxy", "off", "--json"]
+        case .urlRouterStatus:       return ["url-router", "status", "--json"]
+        case .urlRouterRestore:      return ["url-router", "restore", "--json"]
         }
     }
 
@@ -121,7 +136,7 @@ public protocol A2BootstrapRunner: AnyObject {
 
 /// 真实现:起子进程跑内嵌 bin。
 ///
-/// **不设超时**,理由如实写在这里:白名单五条命令都是 a2 的 CLI 面,而 a2 **永不交互阻塞**
+/// **不设超时**,理由如实写在这里:白名单里的命令都是 a2 的 CLI 面,而 a2 **永不交互阻塞**
 /// (ADR 0005)—— 它不会挂在那里等谁。真挂住了那是内核缺陷,而半路 kill 掉一次在途的
 /// `service install` 会留下一个装了一半的服务,比让菜单显示「安装中…」更糟。
 ///
@@ -154,7 +169,7 @@ public final class A2BootstrapProcessRunner: A2BootstrapRunner {
         }
         // 先读干净再等退出:反过来在输出超过管道缓冲时会死锁(这里只有一行 JSON,但顺序不该赌)。
         // **顺序读两条管道**理论上仍能互锁(stdout 读到 EOF 之前 stderr 写满 64KiB 就卡住)。
-        //   这里不管它,理由是有界:白名单五条的机读输出各是一行 JSON、stderr 至多几行诊断,
+        //   这里不管它,理由是有界:白名单里每条的机读输出各是一行 JSON、stderr 至多几行诊断,
         //   离管道容量差着数量级。真要根治得开两条读线程 —— 为一个够不到的边界加并发不划算。
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()
@@ -221,6 +236,21 @@ public struct A2BootstrapMihomoFacts: Sendable, Equatable {
         self.embeddedState = embeddedState
         self.hasProxies = hasProxies
     }
+}
+
+/// `url-router status --json` 里面板要的**那一个**字段(url-router 05 票)。
+///
+/// ⚠️ 与服务面同一条口径:这**不是** `UrlRouterStatusResult` 的镜像(那条契约有意豁免,
+///   见 `A2ContractMirror`)。壳只读 `handler.matchesTarget` —— 而它是**内核算好的判据**
+///   (两个 scheme 都是 com.a2.panel 才为真),不是壳自己拿 http/https 两个字段去比出来的。
+///   这条界很要紧:卸载序列要不要先 restore,是内核的判断,壳只照着做。
+public struct A2BootstrapURLRouterFacts: Sendable, Equatable {
+
+    /// 三值,一个都不能塌:`true` 还挂着 / `false` 不是我们 / `nil` **未能判定**
+    /// (LaunchServices 里没有条目 —— 一台从没换过默认浏览器的机器上这是常态,不是故障)。
+    public let matchesTarget: Bool?
+
+    public init(matchesTarget: Bool?) { self.matchesTarget = matchesTarget }
 }
 
 /// `service install|uninstall --json` 里面板要的部分。
@@ -417,6 +447,29 @@ public enum A2BootstrapReading {
                 return .failure(missing("status", run.exitCode))
             }
             return mihomoFacts(from: statusObject, exitCode: run.exitCode)
+        }
+    }
+
+    /// `url-router status --json` → 「还是不是我们」这一个事实(05 票)。
+    ///
+    /// 取值不是布尔而是三值:`matchesTarget` 是 `null` 时**必须**保持 `nil` ——
+    /// 把"未能判定"塌成 false,卸载序列就会在一台其实还接管着的机器上跳过 restore。
+    public static func urlRouterHandler(_ run: A2BootstrapRun)
+        -> Result<A2BootstrapURLRouterFacts, A2BootstrapFailure> {
+        result(run).flatMap { object in
+            guard let handler = object["handler"]?.objectValue else {
+                return .failure(missing("handler", run.exitCode))
+            }
+            switch handler["matchesTarget"] {
+            case let .bool(value)?: return .success(A2BootstrapURLRouterFacts(matchesTarget: value))
+            case .null?:            return .success(A2BootstrapURLRouterFacts(matchesTarget: nil))
+            case .none:             return .failure(missing("handler.matchesTarget", run.exitCode))
+            // 第四种真值不猜(与服务态那条 fail-closed 同一姿势):内核改了形状就该在这里红。
+            default:
+                return .failure(A2BootstrapFailure(
+                    code: nil, message: "handler.matchesTarget 既不是布尔也不是 null",
+                    exitCode: run.exitCode))
+            }
         }
     }
 

@@ -94,12 +94,25 @@ struct A2BootstrapWhitelistTests {
             ["mihomo", "status", "--json"],
             ["mihomo", "restart", "--json"],
             ["proxy", "off", "--json"],
+            ["url-router", "status", "--json"],
+            ["url-router", "restore", "--json"],
         ])
     }
 
-    @Test("生命周期白名单只有十条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
-    func whitelistHasTenEntries() {
-        #expect(A2BootstrapCommand.allCases.count == 10)
+    @Test("生命周期白名单只有十二条(枚举本身就是那份名单,没有第二处构造 argv 的地方)")
+    func whitelistHasTwelveEntries() {
+        #expect(A2BootstrapCommand.allCases.count == 12)
+    }
+
+    @Test("05 url-router 域恰两条:status(只读)与 restore —— **takeover 不在白名单里**")
+    func urlRouterSurfaceIsRestoreOnly() {
+        let urlRouter = A2BootstrapCommand.allCases.filter { $0.arguments[0] == "url-router" }
+        #expect(urlRouter == [.urlRouterStatus, .urlRouterRestore])
+        // 接管是用户主动发起的事(菜单/CLI 各有各的入口),卸载序列只需要**还原**那一半。
+        // 把 takeover 放进这份名单等于让卸载路径拥有一个它永远不该用的能力。
+        for command in urlRouter {
+            #expect(command.arguments.contains("takeover") == false)
+        }
     }
 
     @Test("17 --purge 只出现在卸载那一条上(它是唯一会删数据的形态)")
@@ -123,7 +136,8 @@ struct A2BootstrapWhitelistTests {
     func noCommandOutsideTheServiceSurface() {
         for command in A2BootstrapCommand.allCases {
             let head = command.arguments[0]
-            #expect(head == "service" || head == "version" || head == "mihomo" || head == "proxy",
+            #expect(head == "service" || head == "version" || head == "mihomo" || head == "proxy"
+                    || head == "url-router",
                     "白名单里混进了 `\(head)` —— 要加命令得先改 ADR 0012/0014")
         }
         // mihomo 域恰两条:status(只读)与 restart —— enable/disable 不进面板(07 票:初始化归 agent)。
@@ -616,7 +630,8 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.perform(.uninstall)
 
-        #expect(runner.issued == [.serviceUninstall, .serviceStatus, .mihomoStatus])
+        // 05 票起卸载序列的第一步是问一次 `url-router status`(前置;这里假 runner 答不出来 → 放行)。
+        #expect(runner.issued == [.urlRouterStatus, .serviceUninstall, .serviceStatus, .mihomoStatus])
         #expect(coordinator.state.serviceState == .notInstalled)
     }
 
@@ -631,10 +646,130 @@ struct A2BootstrapCoordinatorTests {
 
         coordinator.perform(.uninstall, purge: true)
 
-        #expect(runner.issued == [.serviceUninstallPurge, .serviceStatus, .mihomoStatus])
+        #expect(runner.issued == [.urlRouterStatus, .serviceUninstallPurge, .serviceStatus, .mihomoStatus])
         #expect(runner.issued.contains(.serviceUninstall) == false, "勾了那一格就不该再发默认那条")
         #expect(coordinator.state.serviceState == .notInstalled)
         #expect(coordinator.state.lastFailure == nil)
+    }
+
+    // ========================================================================
+    // 05 卸载前置:restore 打头,拒即中止
+    // ========================================================================
+    //
+    // 三条路各一个用例。夹具是**真金标**(`url-router-status-*.json`),于是内核那侧改了
+    // `handler.matchesTarget` 的形状,这批用例当场红 —— 而"还挂着就先 restore"这个判断
+    // 本来就该由内核的报文说了算,壳只照着做。
+
+    /// `url-router status --json` 的一次成功回答(金标 result 装进成功包封)。
+    private func urlRouterStatus(_ file: String) throws -> A2BootstrapRun {
+        try BootstrapGolden.success(file)
+    }
+
+    @Test("05 还是默认浏览器:**先 restore 再卸载**,顺序不许颠倒")
+    func uninstallRestoresDefaultBrowserFirst() throws {
+        let runner = RecordingRunner()
+        // 金标里这一份的 handler 两个 scheme 都是 com.a2.panel(matchesTarget = true)。
+        runner.responses[.urlRouterStatus] = try urlRouterStatus("url-router-status-taken-over.json")
+        runner.responses[.urlRouterRestore] =
+            try BootstrapGolden.success("url-router-handoff-confirmed.json")
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        #expect(runner.issued == [.urlRouterStatus, .urlRouterRestore, .serviceUninstall,
+                                  .serviceStatus, .mihomoStatus])
+        #expect(coordinator.state.serviceState == .notInstalled)
+        #expect(coordinator.state.lastFailure == nil)
+    }
+
+    @Test("05 restore 被拒(用户在系统框上点了取消):**卸载没有发生**,内核指引原样呈现")
+    func uninstallAbortsWhenRestoreIsDenied() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterStatus] = try urlRouterStatus("url-router-status-taken-over.json")
+        runner.responses[.urlRouterRestore] =
+            try BootstrapGolden.failure("response-confirmation-denied.json", exitCode: 2)
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        // **一条卸载命令都没发**(连收场那次 status 都没有 —— 系统状态一个字节没动,没有新事实要读)。
+        #expect(runner.issued == [.urlRouterStatus, .urlRouterRestore])
+        #expect(runner.issued.contains(.serviceUninstall) == false)
+        #expect(runner.issued.contains(.serviceUninstallPurge) == false)
+        let failure = try #require(coordinator.state.lastFailure)
+        #expect(failure.code == "confirmation_denied")
+        // 原样转达:壳不改写、不摘要,内核给的指引逐条落进菜单。
+        #expect(failure.guidanceLines.isEmpty == false)
+        #expect(coordinator.state.inFlight == nil, "中止之后引导面要放开,不能一直显示「卸载中…」")
+    }
+
+    @Test("05 本来就不是默认浏览器:直通 —— 一个系统框都不弹")
+    func uninstallSkipsRestoreWhenNotTheHandler() throws {
+        let runner = RecordingRunner()
+        // 金标里的这一份 matchesTarget 是 null(未能判定:LaunchServices 里没有条目)。
+        runner.responses[.urlRouterStatus] = try urlRouterStatus("url-router-status-defaults.json")
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        #expect(runner.issued == [.urlRouterStatus, .serviceUninstall, .serviceStatus, .mihomoStatus])
+        #expect(runner.issued.contains(.urlRouterRestore) == false, "未能判定不是「还挂着」")
+    }
+
+    @Test("05 status 这次问不出来(daemon 多半已经不在):照样放行 —— 否则服务没跑就永远卸不掉")
+    func uninstallProceedsWhenStatusIsUnavailable() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterStatus] = A2BootstrapRun(exitCode: 4, standardOutput: "")
+        runner.responses[.serviceUninstall] = try BootstrapGolden.uninstallChange()
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall)
+
+        #expect(runner.issued.contains(.serviceUninstall))
+        #expect(runner.issued.contains(.urlRouterRestore) == false)
+        // 放行不是"吞掉失败":这一格本来就不是失败,菜单上不该多一条红字。
+        #expect(coordinator.state.lastFailure == nil)
+    }
+
+    @Test("05 前置只挂在卸载上:装/重启 mihomo 一步都不多问")
+    func gateOnlyGuardsUninstall() throws {
+        let runner = RecordingRunner()
+        runner.responses[.serviceInstall] =
+            try BootstrapGolden.success("service-change-copy-to-home.json")
+        runner.responses[.serviceStatus] = try BootstrapGolden.success("service-status-running.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.install)
+
+        #expect(runner.issued.contains(.urlRouterStatus) == false)
+        #expect(runner.issued.contains(.urlRouterRestore) == false)
+    }
+
+    @Test("05 勾了「同时删除 ~/.a2」也一样先 restore(前置在卸载序列的最前面,与那一格无关)")
+    func gateAlsoGuardsPurge() throws {
+        let runner = RecordingRunner()
+        runner.responses[.urlRouterStatus] = try urlRouterStatus("url-router-status-taken-over.json")
+        runner.responses[.urlRouterRestore] =
+            try BootstrapGolden.success("url-router-handoff-confirmed.json")
+        runner.responses[.serviceUninstallPurge] =
+            try BootstrapGolden.success("service-change-purge.json")
+        runner.responses[.serviceStatus] =
+            try BootstrapGolden.success("service-status-not-installed.json")
+        let (coordinator, _) = makeCoordinator(runner)
+
+        coordinator.perform(.uninstall, purge: true)
+
+        #expect(runner.issued == [.urlRouterStatus, .urlRouterRestore, .serviceUninstallPurge,
+                                  .serviceStatus, .mihomoStatus])
     }
 
     @Test("17 缺省不勾:`perform(.uninstall)` 发的仍是不删数据的那条(默认值不许漂)")

@@ -13,6 +13,31 @@
 // `service status`(白名单里那条只读命令),让菜单的下一帧说的是**盘上的事实**而不是我们的推断。
 //
 // ============================================================================
+// 卸载前置:restore 打头,拒即中止(url-router 05 票)
+// ============================================================================
+// 用户在确认框上点了「停止并卸载」之后,序列的**第一步不是卸载**:
+//   ① 问一次 `url-router status` —— A2 Panel 还是系统默认浏览器吗?
+//      判据是内核算好的 `handler.matchesTarget`,壳不拿两个 scheme 自己去比;
+//   ② 是 → 发 `url-router restore`(系统弹框由 OS 出,http/https 各一次)。
+//      被拒/超时/没人能确认 → **中止卸载**,把内核那条 guidance 原样落进 `lastFailure`
+//      (菜单会把它逐条呈现)。一条卸载命令都不发;
+//   ③ 不是我们、未能判定、或这次连 status 都问不出来 → 直通,照常走既有卸载序列。
+// 为什么①③那一格要放行:`matchesTarget` 为 `nil` 是"未能判定"(LaunchServices 里没条目),
+//   而 status 问不出来多半是 daemon 已经不在了 —— 把这两格都拦下去,等于让"服务没跑"的
+//   机器再也卸不掉。**看得见的才拦**,与内核 purge-guard 那条判据同一条哲学。
+//
+// **为什么走内嵌 bin 而不是 UDS 会话**(与票面预案的偏差,理由是硬的):
+//   壳自己就是 `url-router.restore` 的机械执行器 —— 内核收到这条命令后要**反向推**一帧执行指令
+//   给壳,等它调完 NSWorkspace 再回执。若这条命令是壳自己经会话发出去的,会话线程此刻正阻塞在
+//   `awaitResponse` 上;那帧执行指令会被缓冲进推送队列、**永远不会被派发**,于是内核等满 120s
+//   超时、壳等到连接报废 —— 一次互等的死锁。走内嵌 bin 时发起方是**另一个进程**(子进程 a2 CLI),
+//   会话线程照常空闲在 `nextPush` 上,执行指令帧当场被派发,弹框正常出现。
+//   代价如实记:引导面在等人点框的那段时间里锁着(至多 120s,内核的窗)。
+//
+// 编排层对这三步**不做任何业务判断**:该不该 restore 由内核的报文说了算,拒绝的措辞与修复指引
+// 一个字都不改写(ADR 0008 第 5 条)。
+//
+// ============================================================================
 // 为什么两个调度器要能注入
 // ============================================================================
 // 门禁里**绝不许**真装服务、真碰 launchctl,所以引导链路的验证只能靠注入:
@@ -208,6 +233,55 @@ public final class A2BootstrapCoordinator {
         state.hasUsedBootstrap = true
         publish()
 
+        // 卸载序列的第一步是 restore,不是卸载(05 票;见文件头「卸载前置」)。
+        guard action == .uninstall else {
+            dispatch(action, purge: purge, runner: runner)
+            return true
+        }
+        restoreDefaultBrowserFirst(runner) { [weak self] mayProceed in
+            guard let self else { return }
+            guard mayProceed else {
+                // **中止**:一条卸载命令都没发,系统状态一个字节没动 —— 所以也没有"盘上的新事实"
+                //   要去重读(收场后那次 refresh 有意不做,免得它顺手把 restore 的拒绝指引冲掉)。
+                self.state.inFlight = nil
+                self.publish()
+                return
+            }
+            self.dispatch(action, purge: purge, runner: runner)
+        }
+        return true
+    }
+
+    /// 前置①②:问一次现状,还挂着就先 restore。`then(false)` = 中止卸载。
+    ///
+    /// 三条放行的路(见文件头):不是我们 / 未能判定 / status 这次问不出来。
+    /// 唯一的拦下是**restore 真的被拒了** —— 那时内核的 guidance 原样落进 `lastFailure`。
+    private func restoreDefaultBrowserFirst(_ runner: A2BootstrapRunner,
+                                            then proceed: @escaping (Bool) -> Void) {
+        run { runner.run(.urlRouterStatus) } then: { [weak self] output in
+            guard let self else { return }
+            guard case let .success(facts) = A2BootstrapReading.urlRouterHandler(output),
+                  facts.matchesTarget == true else {
+                proceed(true)
+                return
+            }
+            self.run { runner.run(.urlRouterRestore) } then: { [weak self] restored in
+                guard let self else { return }
+                switch A2BootstrapReading.commandSucceeded(restored) {
+                case .success:
+                    proceed(true)
+                case let .failure(failure):
+                    // 原样转达:`confirmation_denied` / `confirmation_timeout` /
+                    //   `confirmation_unavailable` 的下一步全写在内核给的 guidance 里。
+                    self.state.lastFailure = failure
+                    proceed(false)
+                }
+            }
+        }
+    }
+
+    /// 真发那条白名单命令(前置过了才走到这里)。
+    private func dispatch(_ action: A2BootstrapMenuAction, purge: Bool, runner: A2BootstrapRunner) {
         run { runner.run(action.command(purge: purge)) } then: { [weak self] output in
             guard let self else { return }
             // 两族命令的 result 形状不同,按动作分读:服务面读 `ServiceChange`,mihomo 面读 `MihomoChange`。
@@ -234,7 +308,6 @@ public final class A2BootstrapCoordinator {
             // 收场后重问一次盘上的事实(见文件头)。失败那一路也问 —— 装了一半是什么样,得如实说。
             self.refreshServiceStatus()
         }
-        return true
     }
 
     /// 用户在首启说明框上点了「稍后」。**此后不再自动弹**(标记的持久化归调用方)。
