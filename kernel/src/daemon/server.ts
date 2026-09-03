@@ -18,7 +18,7 @@ import { ErrorCode, encodeFrame, failureResponse } from "../contract/wire.ts";
 import { RUN_DIR_MODE, SOCKET_MODE, type KernelPaths } from "../runtime/paths.ts";
 import type { ClientConnection } from "./hub.ts";
 import { createUnverifiedPeerLog, judgePeer } from "./peer.ts";
-import { handleLine } from "./router.ts";
+import { handleLine, LEFT_ACTION } from "./router.ts";
 import type { KernelRuntime } from "./runtime.ts";
 import { createFrameWriter } from "./writer.ts";
 
@@ -181,6 +181,8 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
       stopped = true;
       // 先把在途确认按降级收尾,再断连接:否则挂起的那次调用会随连接一起消失,发起方只看到"断了"。
       runtime.arbiter.shutdown();
+      // 在途的执行指令同理(04 票):内核要走了,那条编排必须有个收场,不能挂着一个永不 settle 的 promise。
+      runtime.urlRouterExecutor.shutdown();
       listener.stop(true);
       // UDS 文件不随进程退出自动消失,自己收拾干净(留下的陈旧 socket 会骗到下一次 status)。
       await unlink(paths.socketPath).catch(() => {});
@@ -188,12 +190,12 @@ export async function startKernelServer(runtime: KernelRuntime): Promise<KernelS
   };
 }
 
-/** 一条连接走了:摘角色、逐个留痕、让 arbiter 重新看一眼在场情况。 */
+/** 一条连接走了:摘角色、逐个留痕、让两条仲裁面各自重新看一眼在场情况。 */
 function dropClient(runtime: KernelRuntime, client: ClientConnection): void {
   const roles = runtime.hub.drop(client);
   for (const role of roles) {
     runtime.audit.record({
-      action: role === "confirm-agent" ? "confirmer_left" : "subscriber_left",
+      action: LEFT_ACTION[role],
       client: {
         role,
         ...(client.identity?.name === undefined ? {} : { name: client.identity.name }),
@@ -202,7 +204,10 @@ function dropClient(runtime: KernelRuntime, client: ClientConnection): void {
       detail: `连接 ${client.id} 断开,${role} 角色随之离场。`,
     });
   }
-  if (roles.length > 0) runtime.arbiter.rosterChanged();
+  if (roles.length === 0) return;
+  runtime.arbiter.rosterChanged();
+  // 执行器归零 = 在途的执行指令立即按不可用收尾(04 票:那个系统弹框已经没人替我们看了)。
+  runtime.urlRouterExecutor.rosterChanged();
 }
 
 /** 自建 `<home>/run` 并显式收紧到 0700(已存在但权限松的目录也一并纠正)。 */

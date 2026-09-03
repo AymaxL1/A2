@@ -11,6 +11,7 @@ import {
   opFailure,
   opSuccess,
   type CapabilityDescriptor,
+  type ConfirmationMode,
   type Guidance,
   type JsonValue,
   type OpOutcome,
@@ -182,6 +183,12 @@ export class CapabilityRegistry {
    *
    * 第③步内部又是三层(ADR 0005 修订后第 4 条),这里是它在代码里的全貌:
    * 没有确认器就默拒;有确认器就把这次调用交出去等一个带外的决定;拒绝与超时各有各的报文。
+   *
+   * **`confirmation: "os-dialog"` 的 dangerous 能力跳过第③步**(url-router 施工 04 票):
+   * 它们的确认由**操作系统自己的弹框**承载,handler 内那趟执行指令帧的往返就是确认仪式本身。
+   * 这不是"少一道闸",是"闸挪了个地方":跳过之后仍然没有任何一条路能让 AI agent 自批 ——
+   * handler 里发生的第一件事是把指令交给壳,而框由 OS 弹、由人点。判据三条见
+   * `ConfirmationModeSchema` 的头注,名单由门禁断言钉死(别的 dangerous 能力标了就红)。
    */
   async invoke(
     id: string,
@@ -194,7 +201,10 @@ export class CapabilityRegistry {
     const invalid = validateInput(capability.descriptor, input);
     if (invalid) return opFailure(invalid);
 
-    if (capability.descriptor.risk === "dangerous") {
+    if (
+      capability.descriptor.risk === "dangerous" &&
+      confirmationModeOf(capability.descriptor) === "confirm-agent"
+    ) {
       // 第①层:一个确认器都没有 → fail-closed。**先问再等**,顺序不能反 ——
       // 反了就成了"先把请求挂起、再发现没人能确认",那正是 spec 拒绝的"超时猜谜"。
       if (!context.confirmerPresent()) {
@@ -223,6 +233,17 @@ export class CapabilityRegistry {
       });
     }
   }
+}
+
+/**
+ * 这条能力的确认由谁承载。**缺省即现状**(`confirm-agent`)——
+ * manifest 里不带这个字段的能力,行为与 04 票之前逐字节相同。
+ *
+ * 单独一个函数而不是各处 `descriptor.confirmation ?? "confirm-agent"`:
+ * 「缺省是什么」只该有一个地方说了算,它同时是 registry 的判据与门禁断言的判据。
+ */
+export function confirmationModeOf(descriptor: CapabilityDescriptor): ConfirmationMode {
+  return descriptor.confirmation ?? "confirm-agent";
 }
 
 // MARK: - 仲裁三层各自的拒绝报文

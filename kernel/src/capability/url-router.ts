@@ -10,18 +10,25 @@
 // (关掉标签页就没了),所以也不是 dangerous。`takeover` / `restore` 改的是**全系统的默认浏览器**,
 // 影响面越出 a2 自己,且用户下次点任何链接都会撞上 —— 这是 dangerous 的教科书形状。
 //
-// dangerous 的仲裁**这里一个字都不用写**:`registry.invoke` 里那三层(无确认器默拒 → 拒绝即指引 →
-// 带外确认)对 risk 分档自动生效,声明对了就够了。
+// dangerous 的仲裁在这里只写**一个字**:`confirmation: "os-dialog"`(04 票)。
 //
-// **04 票的边界**:takeover/restore 在本票只落**契约与幂等判据** —— 先读 handler,已是目标就
-// `already: true` 直通(spec §3 的幂等口径:不弹框);否则返回 `url_router_executor_unwired`。
-// 真正的执行器(壳的机械执行器 + 执行指令帧)归 04 票。
+// 前三条能力与它无关(safe/normal 本来就直通)。takeover/restore 带上这个标记之后,
+// `registry.invoke` 会**跳过 confirm-agent 那三层**,直接进 handler —— 因为它们的确认由
+// **操作系统自己的弹框**承载(ADR 0015 的可复用原则:OS 强制呈现、agent 伪造不了、结果可感知)。
+// 叠一层 confirm-agent 就是双确认,那是 04 决策底账明确否掉的方案。
+//
+// **别的 dangerous 能力一个字都没变**:不带这个字段就是 `confirm-agent`,行为与 04 票之前逐字节相同,
+// 而且有门禁断言把 os-dialog 的名单钉死在这两条上(`url-router-executor.test.ts`)。
+//
+// 04 票之后 takeover/restore 的全程是:幂等判据(02 票已落)→ 执行器在不在场 → 拉壳 →
+// 下发执行指令帧 → 等 120s → 映射收场。编排本体在 `url-router/takeover.ts`,这里只做接线。
 
 import {
   ErrorCode,
   payload,
   type JsonValue,
   type UrlRouterHandler,
+  type UrlRouterHandoffResult,
   type UrlRouterStatusResult,
 } from "../contract/wire.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
@@ -48,6 +55,7 @@ import {
   type DefaultHandlerReader,
   type HandlerSnapshot,
 } from "../url-router/handler.ts";
+import { performHandoff, type UrlRouterExecutorPort } from "../url-router/takeover.ts";
 import { CapabilityFailedError, type Capability } from "./registry.ts";
 
 /**
@@ -62,6 +70,13 @@ export interface UrlRouterContext {
   env: Record<string, string | undefined>;
   ports?: UrlRouterPorts;
   handlers?: DefaultHandlerReader;
+  /**
+   * 机械执行器那一侧(04 票)。**缺省不带 = 这份内核没有执行器面** ——
+   * 那时 takeover/restore 的非幂等路径一律报「没人能替你确认」,与壳没装是同一种收场。
+   * 生产路径由 daemon 注入真的那份(`daemon/url-router-executor.ts`);单测注入假件,
+   * 于是"下发指令帧 → 收回执 → 映射收场"这条链能在函数缝上验全,而**永远不会真弹一个系统框**。
+   */
+  executor?: UrlRouterExecutorPort;
 }
 
 /** 五条能力。登记顺序即 `capabilities list` 里的出场顺序(与 spec §3 的表同序)。 */
@@ -192,16 +207,17 @@ function route(context: UrlRouterContext): Capability {
   };
 }
 
-// MARK: - takeover / restore(本票:契约 + 幂等判据)
+// MARK: - takeover / restore(02 票的幂等判据 + 04 票的执行编排)
 
 function takeover(context: UrlRouterContext): Capability {
   return {
     descriptor: {
       id: "url-router.takeover",
       risk: "dangerous",
+      confirmation: "os-dialog",
       summary:
-        `把 ${A2_PANEL_BUNDLE_ID} 设为 http+https 的系统默认 handler(dangerous:改的是全系统的默认浏览器)。` +
-        "已经是了就幂等直通、不弹框",
+        `把 ${A2_PANEL_BUNDLE_ID} 设为 http+https 的系统默认 handler(dangerous:改的是全系统的默认浏览器;` +
+        "确认由**系统弹框**承载,http/https 各弹一次)。已经是了就幂等直通、不弹框",
       parameters: [],
       cliAlias: ["url-router", "takeover"],
     },
@@ -214,8 +230,10 @@ function restore(context: UrlRouterContext): Capability {
     descriptor: {
       id: "url-router.restore",
       risk: "dangerous",
+      confirmation: "os-dialog",
       summary:
-        "把系统默认 handler 设回兜底浏览器(dangerous:同上)。缺省取配置里的 fallbackBrowserBundleID;已经是了就幂等直通",
+        "把系统默认 handler 设回兜底浏览器(dangerous:同上,确认同样由系统弹框承载)。" +
+        "缺省取配置里的 fallbackBrowserBundleID;已经是了就幂等直通",
       parameters: [
         {
           name: "to",
@@ -251,46 +269,70 @@ function restore(context: UrlRouterContext): Capability {
  * takeover 与 restore 的**同一条身子**:它们只在"目标是谁"上不同。
  *
  * 顺序是安全语义的一部分:**先读现状再说别的**。已经是目标 → `already: true` 收工
- * (spec §3 的幂等判据:不弹框、不下发任何指令);读不出来 → 按"不是"处理,fail-closed ——
- * 猜"大概已经是了"会让一次真正需要确认的接管被静默跳过。
+ * (spec §3 的幂等判据:不弹框、不下发任何指令、不拉起任何东西);读不出来 → 按"不是"处理,
+ * fail-closed —— 猜"大概已经是了"会让一次真正需要确认的接管被静默跳过。
+ *
+ * 幂等这一关过不去才轮到编排(04 票):执行器在不在 → 拉壳 → 下发指令帧 → 等 120s。
+ * 那一段全在 `url-router/takeover.ts`,这里只负责**读两次 handler**(执行前一次做幂等判据,
+ * 执行后一次拼进报文)与拼 result。
  */
 async function handoff(
   context: UrlRouterContext,
   target: string,
   action: "takeover" | "restore",
 ): Promise<JsonValue> {
-  const snapshot = await readHandlerSnapshot(handlerReader(context), target);
-  if (snapshot.matchesTarget === true) {
-    return payload({ target, already: true, handler: handlerView(snapshot) });
+  const before = await readHandlerSnapshot(handlerReader(context), target);
+  if (before.matchesTarget === true) {
+    const result: UrlRouterHandoffResult = {
+      target,
+      already: true,
+      handler: handlerView(before),
+      outcome: "already",
+    };
+    return payload(result);
   }
-  throw new CapabilityFailedError(
-    `url-router.${action} 的执行器在本版内核里还没接线,已拒绝执行(什么都没改)。`,
-    "改默认 handler 只有一条合法路径:内核经 UDS 下发执行指令帧,由 A2 Panel 调 " +
-      "`setDefaultApplication(at:toOpenURLsWithScheme:)`,系统弹框即确认器(spec §5/§6.3)。" +
-      "那条链归施工 04 票 —— 在它接上之前,内核宁可如实说「没做」,也不走任何替代路径。",
-    {
-      code: ErrorCode.urlRouterExecutorUnwired,
-      guidance: {
-        summary:
-          "本版内核只能判断「是不是已经是目标了」。要真的改,眼下请在系统设置里手选,或等执行器接线(04 票)。",
-        steps: [
-          { description: "先看清此刻的 handler 现状", command: "a2 url-router status --json" },
-          {
-            description:
-              action === "takeover"
-                ? "在「系统设置 → 桌面与程序坞 → 默认网页浏览器」里手选 A2 Panel"
-                : `在「系统设置 → 桌面与程序坞 → 默认网页浏览器」里手选目标浏览器(${target})`,
-          },
-        ],
-        context: {
-          capability: `url-router.${action}`,
-          target,
-          http: snapshot.http ?? "(未能判定)",
-          https: snapshot.https ?? "(未能判定)",
+
+  const executor = context.executor;
+  if (executor === undefined) {
+    // 这份内核没有执行器面(单测里没注入、或将来某个不带长连接的形态)。对发起方而言这与
+    // 「壳没装」是同一件事:此刻没有人能替你把那个框弹出来。用同一条码,不另造说法。
+    throw new CapabilityFailedError(
+      `url-router.${action} 需要一个机械执行器,而这份内核没有执行器面。`,
+      "改系统默认 handler 只有一条合法路径:内核经 UDS 下发执行指令帧,由 A2 Panel 调 " +
+        "`setDefaultApplication(at:toOpenURLsWithScheme:)`,系统弹框即确认器(spec §5/§6.3)。",
+      {
+        code: ErrorCode.confirmationUnavailable,
+        guidance: {
+          summary: "在跑着 daemon 的内核上发这条命令,并保证 A2 Panel 装好了。",
+          steps: [
+            { description: "确认内核 daemon 在跑", command: "a2 status --json" },
+            { description: "看清此刻的 handler 现状", command: "a2 url-router status --json" },
+          ],
+          context: { capability: `url-router.${action}`, target },
         },
       },
-    },
-  );
+    );
+  }
+
+  const execution = await performHandoff({
+    paths: context.paths,
+    ports: ports(context),
+    executor,
+    target,
+    action,
+  });
+
+  // 执行成功之后**再读一次**:报文里的 handler 说的是"内核此刻读到的系统现状"。
+  // 它未必立刻等于目标(LaunchServices 的登记可能比 completion 晚一步)——那也是真话,如实给。
+  const after = await readHandlerSnapshot(handlerReader(context), target);
+  const result: UrlRouterHandoffResult = {
+    target,
+    already: false,
+    handler: handlerView(after),
+    outcome: "confirmed",
+    perScheme: execution.perScheme,
+  };
+  return payload(result);
 }
 
 // MARK: - 共用

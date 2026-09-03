@@ -7,8 +7,9 @@
 //
 // 推送对象是协议的一部分,不是实现细节:
 //   * `confirmation` 事件带着本次调用的真实入参 —— **只发给 confirm-agent**;
+//   * `url-router-execute` 事件带着"去改系统状态"的指令 —— **只发给 url-router-executor**(04 票);
 //   * 其余事件(仲裁状态/审计/存活监督/能力变化)发给全体已注册连接。
-// 有断言守这条(订阅者拿不到 input)。
+// 有断言守这条(订阅者拿不到 input,也拿不到执行指令)。
 
 import { encodeFrame, pushEnvelope, type ClientIdentity, type ClientRole, type KernelEvent } from "../contract/wire.ts";
 
@@ -33,6 +34,8 @@ export interface ClientHub {
   drop(connection: ClientConnection): ClientRole[];
   confirmerCount(): number;
   subscriberCount(): number;
+  /** 在场的机械执行器数(04 票)。「在场 = 长连接」,所以它每次现数,绝不缓存。 */
+  executorCount(): number;
   /**
    * 发给全体已注册连接(确认器 + 订阅者)。
    *
@@ -43,6 +46,8 @@ export interface ClientHub {
   broadcast(event: KernelEvent, except?: ClientConnection): void;
   /** 只发给确认器。带 input 的确认请求走这条。 */
   toConfirmers(event: KernelEvent): void;
+  /** 只发给机械执行器。执行指令帧走这条(04 票)。 */
+  toExecutors(event: KernelEvent): void;
 }
 
 export function createClientHub(): ClientHub {
@@ -78,11 +83,15 @@ export function createClientHub(): ClientHub {
     },
     confirmerCount: () => countOf("confirm-agent"),
     subscriberCount: () => countOf("subscriber"),
+    executorCount: () => countOf("url-router-executor"),
     broadcast(event, except) {
       deliver(event, (connection) => connection !== except);
     },
     toConfirmers(event) {
       deliver(event, (connection) => connection.roles.has("confirm-agent"));
+    },
+    toExecutors(event) {
+      deliver(event, (connection) => connection.roles.has("url-router-executor"));
     },
   };
 }

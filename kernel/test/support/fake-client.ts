@@ -14,6 +14,19 @@ import { setTimeout as delay } from "node:timers/promises";
 /** 收到确认请求时这个假确认器怎么办。`ignore` 是给超时那条断言用的(沉默不构成同意)。 */
 export type ConfirmBehavior = "approve" | "deny" | "ignore";
 
+/**
+ * 收到**执行指令帧**时这个假执行器怎么办(url-router 施工 04 票)。
+ *
+ * 它站的正是真壳的位置,只是**手里没有系统 API** —— 于是门禁能验完"下发 → 执行 → 回执"整条链,
+ * 而永远不会真的改掉跑测试这台机器的默认浏览器、也永远不会弹出一个系统框。
+ *
+ *   * `confirmed` —— 两个 scheme 都成(用户在两个框上都点了「使用」);
+ *   * `denied`    —— 用户点了取消;
+ *   * `partial`   —— 一个成一个没成(http 与 https 是两次独立的框,这是 spec §5 明写的一种收场);
+ *   * `ignore`    —— **一个字都不回**(验内核那侧的 120s 窗与"沉默不是成功")。
+ */
+export type ExecuteBehavior = "confirmed" | "denied" | "partial" | "ignore";
+
 export interface FakeClientOptions {
   socketPath: string;
   /** 自报的名字(**不构成身份**;内核只把它记进审计)。 */
@@ -25,11 +38,13 @@ export interface FakeClientOptions {
   behavior?: ConfirmBehavior;
   /** 拒绝时给的理由(进审计与拒绝报文)。 */
   reason?: string;
+  /** 只对执行器有意义(缺省 `ignore`:没注册执行器角色的客户端本来也收不到指令帧)。 */
+  executeBehavior?: ExecuteBehavior;
 }
 
 export interface FakeClient {
   /** 在这条连接上注册一个角色,返回内核回的 result(含全量快照)。 */
-  register(role: "confirm-agent" | "subscriber"): Promise<any>;
+  register(role: "confirm-agent" | "subscriber" | "url-router-executor"): Promise<any>;
   /** 在这条连接上发一条普通请求,拿它的响应包封。 */
   request(op: string, params?: Record<string, unknown>): Promise<any>;
   /** 至今收到的全部推送事件(按到达顺序)。 */
@@ -38,6 +53,8 @@ export interface FakeClient {
   waitForEvent(predicate: (event: any) => boolean, timeoutMs?: number): Promise<any>;
   /** 这个假确认器至今回过的决定(便于断言"它确实被问过")。 */
   resolved: { confirmation: string; decision: ConfirmBehavior }[];
+  /** 这个假执行器至今回过的执行结果(便于断言"指令确实下发到了它手上")。 */
+  executed: { execution: string; outcome: string }[];
   /**
    * 帧的**到达顺序**(`push` / `response`)。「快照即基线,此后才是增量」这条协议保证靠它:
    * 注册连接收到的第一帧必须是自己那条响应,不能先来一条推送。
@@ -54,7 +71,9 @@ export interface FakeClient {
 export async function connectFakeClient(options: FakeClientOptions): Promise<FakeClient> {
   const name = options.name ?? "fake-client";
   const behavior = options.behavior ?? "ignore";
+  const executeBehavior = options.executeBehavior ?? "ignore";
 
+  const executed: { execution: string; outcome: string }[] = [];
   const pushEvents: any[] = [];
   const sent: string[] = [];
   /** 到达顺序(`"push"` / `"response"`)—— 「快照即基线」那条断言靠它:第一帧必须是注册响应。 */
@@ -110,6 +129,9 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
       if (frame.event?.kind === "confirmation" && behavior !== "ignore") {
         void answer(frame.event.request.id);
       }
+      if (frame.event?.kind === "url-router-execute" && executeBehavior !== "ignore") {
+        void execute(frame.event.command);
+      }
       return;
     }
     arrivals.push("response");
@@ -145,8 +167,38 @@ export async function connectFakeClient(options: FakeClientOptions): Promise<Fak
     });
   }
 
+  /**
+   * 照剧本回一条执行回执。**这里没有一个判断是关于"该不该做"的** —— 真壳也一样:
+   * 它收到帧就调系统 API,把 completion 原样送回来。剧本决定的是"系统会怎么答",不是"壳怎么想"。
+   *
+   * 那三个 NSError 字段是**编的**:真机上用户取消时的 domain/code 归 06 票实测回填(spec §11),
+   * 在那之前没有人编造它 —— 这里只用来验"原样带出来",不用来验"内核怎么认出取消"
+   * (内核认的是 `outcome`,不是 domain/code)。
+   */
+  async function execute(command: any): Promise<void> {
+    const outcome = executeBehavior === "partial" ? "confirmed" : executeBehavior;
+    const failure = {
+      ok: false,
+      error: { domain: "假件域", code: -1, description: "假件造的一条错误(真机域/码归 06 票)" },
+    };
+    const perScheme =
+      executeBehavior === "confirmed"
+        ? { http: { ok: true }, https: { ok: true } }
+        : executeBehavior === "partial"
+          ? { http: { ok: true }, https: failure }
+          : { http: failure, https: failure };
+    executed.push({ execution: command.id, outcome });
+    await write("url-router.executor.report", {
+      execution: command.id,
+      outcome,
+      perScheme,
+      ...(executeBehavior === "denied" ? { error: "用户在系统弹框上点了取消" } : {}),
+    });
+  }
+
   return {
     resolved,
+    executed,
     sent,
     arrivals,
     async register(role) {

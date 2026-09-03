@@ -1,15 +1,17 @@
-// URL 分流的能力面(施工 02 票):五条 manifest、三种 result、接管的幂等判据,
-// 以及系统默认 handler 的只读读取。
+// URL 分流的能力面(施工 02 票立,04 票补执行编排):五条 manifest、三种 result、
+// 接管的幂等判据与整条执行链,以及系统默认 handler 的只读读取。
 //
-// 三件事在这儿钉死:
-//   * **manifest 就是契约** —— id / risk / cliAlias 一个字都不许漂:risk 定错了,dangerous 那道
-//     默拒的门就形同虚设(`route` 若被写成 safe,一条命令就能在用户脸上开窗口而不经任何把关);
+// 四件事在这儿钉死:
+//   * **manifest 就是契约** —— id / risk / cliAlias / confirmation 一个字都不许漂:risk 定错了,
+//     dangerous 那道门就形同虚设(`route` 若被写成 safe,一条命令就能在用户脸上开窗口而不经任何把关);
 //   * **报文形状对得上登记契约** —— 每条 result 都拿 wire.ts 的 schema 现场校一遍(活体对照,
 //     与金标样本互为独立事实源:样本是手写的期望,这里是代码真产出的东西);
 //   * **接管的幂等判据 fail-closed** —— 读不出 handler 时按「不是目标」处理。猜"大概已经是了"
-//     会让一次真正需要人点头的接管被静默跳过,那是安全模型上的洞,不是体验问题。
+//     会让一次真正需要人点头的接管被静默跳过,那是安全模型上的洞,不是体验问题;
+//   * **五种收场各有各的码**(04 票,spec §5)—— 拒绝 / 超时 / 执行器不在 / 半成 / 一个没成。
 //
-// 纪律:临时 A2_HOME(/tmp),外部世界全是假件 —— 不真开浏览器、不读真进程表、不出回环外网络。
+// 纪律:临时 A2_HOME(/tmp),外部世界全是假件 —— 不真开浏览器、不读真进程表、不出回环外网络,
+// **更不会真的调一次 `setDefaultApplication`**(执行器整个是假的,连系统 API 的影子都不在这个进程里)。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -25,7 +27,9 @@ import {
   UrlRouterRouteResultSchema,
   UrlRouterStatusResultSchema,
   type JsonValue,
+  type UrlRouterExecuteCommand,
 } from "../src/contract/wire.ts";
+import type { UrlRouterExecutorPort } from "../src/url-router/takeover.ts";
 import { resolvePaths } from "../src/runtime/paths.ts";
 import { URL_ROUTER_CONFIG_NAME } from "../src/url-router/config.ts";
 import type { CommandResult, UrlRouterPorts } from "../src/url-router/execute.ts";
@@ -70,15 +74,65 @@ function fakeHandlers(http: string | null, https: string | null): DefaultHandler
   return { async read(scheme: HandlerScheme) { return scheme === "http" ? http : https; } };
 }
 
+/**
+ * 假的机械执行器(04 票)。**它是这一族测试的灵魂**:真执行器要调
+ * `NSWorkspace.setDefaultApplication(…)`,那会**真的改掉跑测试这台机器的默认浏览器**并弹两个框。
+ * 于是这里注入一个只会说话不会动手的替身 —— 收到指令帧就照剧本回一条回执。
+ */
+function fakeExecutor(script: {
+  /** 在不在场(缺省在场)。 */
+  present?: boolean;
+  /** `waitForPresence` 的结果(缺省 = 跟 `present` 一样)。 */
+  arrives?: boolean;
+  /** 收到指令帧之后回什么(缺省:两个 scheme 都成)。 */
+  settle?: (command: UrlRouterExecuteCommand) => Awaited<ReturnType<UrlRouterExecutorPort["dispatch"]>>;
+  /** 记录下发过的指令帧(断言"帧上写了什么"用)。 */
+  dispatched?: UrlRouterExecuteCommand[];
+} = {}): UrlRouterExecutorPort {
+  let present = script.present ?? true;
+  return {
+    timeoutMs: 120_000,
+    launchWaitMs: 10_000,
+    present: () => present,
+    async waitForPresence() {
+      const arrives = script.arrives ?? present;
+      if (arrives) present = true;
+      return arrives;
+    },
+    async dispatch(command) {
+      script.dispatched?.push(command);
+      if (script.settle) return script.settle(command);
+      return {
+        kind: "reported",
+        report: {
+          execution: command.id,
+          outcome: "confirmed",
+          perScheme: { http: { ok: true }, https: { ok: true } },
+        },
+      };
+    },
+  };
+}
+
+/** 一条 scheme 没成时的原样 NSError(域/码是**编的**,只用来验"原样带出来" —— 真值归 06 票)。 */
+const FAKE_NSERROR = {
+  domain: "NSOSStatusErrorDomain",
+  code: -10_814,
+  description: "假件造的一条错误(真机的域/码归 06 票回填)",
+} as const;
+
 function capabilities(options: {
   ports?: UrlRouterPorts;
   handlers?: DefaultHandlerReader;
+  executor?: UrlRouterExecutorPort | null;
 } = {}): Map<string, Capability> {
   const list = urlRouterCapabilities({
     paths: resolvePaths({ A2_HOME: home }),
     env: {},
     ports: options.ports ?? fakePorts(),
     handlers: options.handlers ?? fakeHandlers(null, null),
+    // `null` = 这份内核没有执行器面(单独一条路,见"没有执行器面"那个用例)。
+    ...(options.executor === null ? {} : { executor: options.executor ?? fakeExecutor() }),
   });
   return new Map(list.map((capability) => [capability.descriptor.id, capability]));
 }
@@ -108,6 +162,20 @@ test("五条能力齐、id 与风险档逐字对上 spec §3 那张表", () => {
     ["url-router.route", "normal"],
     ["url-router.takeover", "dangerous"],
     ["url-router.restore", "dangerous"],
+  ]);
+});
+
+test("确认模式标记(04 票):**只有** takeover/restore 是 os-dialog,前三条一个字都不带", () => {
+  const all = [...capabilities().values()].map((capability) => capability.descriptor);
+
+  expect(all.map((descriptor) => [descriptor.id, descriptor.confirmation])).toEqual([
+    // safe/normal 带不带这个字段都不改变任何行为(它们本来就直通)—— 所以**不带**,免得看的人以为有讲究。
+    ["url-router.status", undefined],
+    ["url-router.decide", undefined],
+    ["url-router.route", undefined],
+    // 这两条的确认由**操作系统的弹框**承载,所以跳过 confirm-agent 那三层(ADR 0015 三条判据)。
+    ["url-router.takeover", "os-dialog"],
+    ["url-router.restore", "os-dialog"],
   ]);
 });
 
@@ -305,35 +373,270 @@ test("takeover:已经是 com.a2.panel → 幂等直通 already:true,**一个系�
     target: A2_PANEL_BUNDLE_ID,
     already: true,
     handler: { http: "com.a2.panel", https: "com.a2.panel", matchesTarget: true },
+    outcome: "already",
   });
+  // **一个系统调用都没发**:没有 `open -b` 拉壳、没有 `defaults` 之外的任何东西 ——
+  // 幂等判据排在编排之前,正是为了让"已经是了"的调用不打扰任何人(spec §3)。
   expect(ran).toBe(0);
 });
 
-test("takeover:还不是目标 → url_router_executor_unwired(退出码 5),什么都没改", async () => {
+test("takeover:还不是目标 → 下发执行指令帧,两个 scheme 都点了「使用」→ outcome=confirmed", async () => {
+  const dispatched: UrlRouterExecuteCommand[] = [];
+  const result = await call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({ dispatched }),
+    },
+  );
+  const parsed = UrlRouterHandoffResultSchema.parse(result);
+
+  expect(parsed.target).toBe(A2_PANEL_BUNDLE_ID);
+  expect(parsed.already).toBe(false);
+  expect(parsed.outcome).toBe("confirmed");
+  expect(parsed.perScheme).toEqual({ http: { ok: true }, https: { ok: true } });
+
+  // 帧上写了什么(spec §6.3 那张表):op / 两个 scheme / 目标 / 120s。
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]).toMatchObject({
+    op: "set-default-handler",
+    schemes: ["http", "https"],
+    bundleID: A2_PANEL_BUNDLE_ID,
+    timeoutSeconds: 120,
+  });
+  // `id` 是回执用来对号的那把钥匙 —— 非空是契约。
+  expect(dispatched[0]?.id).toBeTruthy();
+});
+
+test("takeover:handler 读不出来时按「不是目标」处理(fail-closed:绝不猜「大概已经是了」)", async () => {
+  const dispatched: UrlRouterExecuteCommand[] = [];
+  await call("url-router.takeover", {}, { handlers: fakeHandlers(null, null), executor: fakeExecutor({ dispatched }) });
+
+  // 读不出来 ≠ 已经是目标 —— 所以这一趟真的下发了指令帧(而不是被幂等判据静默吞掉)。
+  expect(dispatched).toHaveLength(1);
+});
+
+test("takeover:壳没装(`open -b` 非零退出)→ confirmation_unavailable(2),指引给出不装壳的那条路", async () => {
+  const ports = fakePorts({
+    async run() {
+      return { exitCode: 1, stdout: "", stderr: "Unable to find application for bundle id com.a2.panel" };
+    },
+  });
+
   const failure = call(
     "url-router.takeover",
     {},
-    { handlers: fakeHandlers("com.apple.safari", "com.apple.safari") },
+    {
+      ports,
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({ present: false, arrives: false }),
+    },
   );
 
   await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
   await failure.catch((error: CapabilityFailedError) => {
-    expect(error.code).toBe(ErrorCode.urlRouterExecutorUnwired);
-    expect(exitCodeForErrorCode(error.code)).toBe(5);
-    expect(error.guidance?.context?.["target"]).toBe(A2_PANEL_BUNDLE_ID);
-    // 指引必须给出人类此刻真能走的那条路(系统设置里手选),而不是"再试一次"。
+    expect(error.code).toBe(ErrorCode.confirmationUnavailable);
+    // **不造新码**:「没人能替你确认」在这条链上与在 confirm-agent 那条链上是同一档(退出码 2)。
+    expect(exitCodeForErrorCode(error.code)).toBe(2);
+    expect(error.message).toContain(A2_PANEL_BUNDLE_ID);
+    // 拒绝即指引:既要给"装上壳"那条路,也要给"不装壳也能干成"的那条(系统设置里手选)。
     expect(JSON.stringify(error.guidance)).toContain("系统设置");
+    expect(error.guidance?.context?.["confirmation"]).toBe("os-dialog");
   });
 });
 
-test("takeover:handler 读不出来时按「不是目标」处理(fail-closed:绝不猜「大概已经是了」)", async () => {
-  const failure = call("url-router.takeover", {}, { handlers: fakeHandlers(null, null) });
+test("takeover:壳装了但拉起后没连上来 → 同样是 confirmation_unavailable,报文说清是哪一种", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      // `open -b` 成了(假 ports 缺省 exit 0),但它没注册上来。
+      executor: fakeExecutor({ present: false, arrives: false }),
+    },
+  );
+
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.confirmationUnavailable);
+    expect(error.message).toContain("没有连上内核");
+  });
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
+});
+
+test("takeover:壳没在跑但拉得起来 → 拉一把、等它注册、照常走完(`open -b com.a2.panel`,不带 URL)", async () => {
+  const argv: string[][] = [];
+  const ports = fakePorts({
+    async run(cmd) {
+      argv.push([...cmd]);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const parsed = UrlRouterHandoffResultSchema.parse(
+    await call(
+      "url-router.takeover",
+      {},
+      {
+        ports,
+        handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+        executor: fakeExecutor({ present: false, arrives: true }),
+      },
+    ),
+  );
+
+  expect(parsed.outcome).toBe("confirmed");
+  expect(argv).toEqual([["/fake/open", "-b", A2_PANEL_BUNDLE_ID]]);
+});
+
+test("takeover:用户点了取消 → confirmation_denied(2),系统状态一个字都没改", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({
+        settle: (command) => ({
+          kind: "reported",
+          report: {
+            execution: command.id,
+            outcome: "denied",
+            perScheme: { http: { ok: false, error: { ...FAKE_NSERROR } } },
+            error: "用户在系统弹框上点了取消",
+          },
+        }),
+      }),
+    },
+  );
 
   await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
   await failure.catch((error: CapabilityFailedError) => {
-    expect(error.code).toBe(ErrorCode.urlRouterExecutorUnwired);
-    expect(error.guidance?.context?.["http"]).toBe("(未能判定)");
+    expect(error.code).toBe(ErrorCode.confirmationDenied);
+    expect(exitCodeForErrorCode(error.code)).toBe(2);
+    // 「人看了、他不同意」——指引是转告用户,不是想办法把壳弄起来。
+    expect(error.guidance?.summary).toContain("拒绝");
   });
+});
+
+test("takeover:120s 没人点 → confirmation_timeout(3)+「稍后核实」的指引(晚点才点也算数)", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({ settle: () => ({ kind: "timeout" }) }),
+    },
+  );
+
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.confirmationTimeout);
+    expect(exitCodeForErrorCode(error.code)).toBe(3);
+    expect(
+      error.guidance?.steps.some((step) => step.command === "a2 url-router status --json"),
+    ).toBe(true);
+  });
+});
+
+test("takeover:执行器在等结果时离场 → confirmation_unavailable(不等满 120s)", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({
+        settle: () => ({ kind: "gone", detail: "执行器在指令在途期间断开(在场 = 长连接)。" }),
+      }),
+    },
+  );
+
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.confirmationUnavailable);
+    expect(error.detail).toContain("在场 = 长连接");
+  });
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
+});
+
+test("takeover:一个 scheme 成了一个没成 → url_router_partial_takeover(5),报文指名道姓说缺哪个", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({
+        settle: (command) => ({
+          kind: "reported",
+          // 壳自报 confirmed,但事实是一个没成 —— **以 perScheme 为准**,绝不报成功。
+          report: {
+            execution: command.id,
+            outcome: "confirmed",
+            perScheme: { http: { ok: true }, https: { ok: false, error: { ...FAKE_NSERROR } } },
+          },
+        }),
+      }),
+    },
+  );
+
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.urlRouterPartialTakeover);
+    expect(exitCodeForErrorCode(error.code)).toBe(5);
+    expect(error.guidance?.context?.["succeeded"]).toBe("http");
+    expect(error.guidance?.context?.["failed"]).toBe("https");
+    // 原样 NSError 一路带到 context 里 —— 排查时要的正是这三样。
+    expect(error.guidance?.context?.["https"]).toContain(FAKE_NSERROR.domain);
+    expect(error.guidance?.context?.["https"]).toContain(String(FAKE_NSERROR.code));
+    // 补齐命令必须是**人类真能敲的那一条**。
+    expect(error.guidance?.steps.some((step) => step.command === "a2 url-router takeover --json")).toBe(true);
+  });
+});
+
+test("restore:目标 app 不在(壳解析 bundle id 就失败了)→ capability_failed(5)+ 改目标的指引", async () => {
+  const failure = call(
+    "url-router.restore",
+    { to: "com.nonexistent.browser" },
+    {
+      handlers: fakeHandlers("com.apple.safari", "com.apple.safari"),
+      executor: fakeExecutor({
+        settle: (command) => ({
+          kind: "reported",
+          // 一个系统 API 都没调、一个框都没弹 —— 所以 perScheme 是**空的**(压根没轮到)。
+          report: {
+            execution: command.id,
+            outcome: "error",
+            perScheme: {},
+            error: "目标 app 不存在:urlForApplication(withBundleIdentifier:) 解析不到 com.nonexistent.browser",
+          },
+        }),
+      }),
+    },
+  );
+
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.capabilityFailed);
+    expect(exitCodeForErrorCode(error.code)).toBe(5);
+    expect(error.detail).toContain("目标 app 不存在");
+    // 指引给的是"换一个装着的目标",而不是"再试一次"。
+    expect(
+      error.guidance?.steps.some((step) =>
+        step.command === "a2 url-router restore --to com.apple.Safari --json"),
+    ).toBe(true);
+  });
+});
+
+test("这份内核没有执行器面 → 同样报 confirmation_unavailable(对发起方而言与壳没装是同一件事)", async () => {
+  const failure = call(
+    "url-router.takeover",
+    {},
+    { handlers: fakeHandlers("com.apple.safari", "com.apple.safari"), executor: null },
+  );
+
+  await failure.catch((error: CapabilityFailedError) => {
+    expect(error.code).toBe(ErrorCode.confirmationUnavailable);
+    expect(exitCodeForErrorCode(error.code)).toBe(2);
+  });
+  await expect(failure).rejects.toBeInstanceOf(CapabilityFailedError);
 });
 
 test("restore:目标缺省取配置里的兜底浏览器,`to` 可显式覆写", async () => {
@@ -346,6 +649,7 @@ test("restore:目标缺省取配置里的兜底浏览器,`to` 可显式覆写", 
     target: "com.google.chrome",
     already: true,
     handler: { http: "com.google.chrome", https: "com.google.chrome", matchesTarget: true },
+    outcome: "already",
   });
 
   const byOverride = UrlRouterHandoffResultSchema.parse(

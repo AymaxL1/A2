@@ -397,12 +397,25 @@ launcher。降级不是失败(ok 照旧、退出码 0),但 result 里的 fellBac
 文件用不了则**整份**退回缺省(不留半态),毛病由 url-router status 指名道姓地说。
 roxyAPIKey 是敏感值:只留本机文件,永不进报文、日志与快照(status 只报「设过没设过」)。
 
-接管/还原:改的是全系统的默认浏览器,所以是 dangerous —— 无确认器在场即 fail-closed 默拒。
-**本版内核只落到幂等判据**:当前 handler 已经是目标就直通(already: true,不弹框);否则如实报
-url_router_executor_unwired(退出码 5),因为改 handler 的唯一合法路径是内核下发指令帧、由
-A2 Panel 调系统 API 弹框确认,那条链尚未接线。内核宁可说「没做」,也不走任何替代路径。
+接管/还原:改的是全系统的默认浏览器,所以是 dangerous。但它们的确认**不走确认器**,而是由
+**操作系统自己的弹框**承载(manifest 上标着 confirmation: os-dialog):内核经 UDS 把执行指令帧
+下发给 A2 Panel,壳调 NSWorkspace 的新 API,OS 弹框、你亲自点头,结果原样回到内核。
+一道确认,不叠第二道 —— 系统框 agent 伪造不了,那正是它能当确认器的理由。
 
-退出码:0 成功 / 1 用法错 / 2 dangerous 被拒 / 4 daemon 不可达 / 5 事没办成(链接没打开、执行器未接线) / 6 参数不成立`;
+一次接管的全程:
+  ① 当前 handler 已经是目标 → 幂等直通(already: true),一个框都不弹;
+  ② 壳没在跑 → 内核 open -b com.a2.panel 拉它一把,等它连上来(10s);
+  ③ 下发执行指令帧 → http 与 https **各弹一次**系统框 → 最多等 120s;
+  ④ 两个都点了「使用」→ ok。
+
+收场与退出码:
+  用户点取消          confirmation_denied      (2)
+  120s 没人点         confirmation_timeout     (3)  ——「稍后 a2 url-router status 核实」,晚点才点也算数
+  壳没装 / 拉不起来   confirmation_unavailable (2)  —— 指引也给了不装壳的那条路:系统设置里手选
+  一个成一个没成      url_router_partial_takeover (5) —— 报文里指名道姓说缺哪个,再跑一次即可补齐
+  目标 app 不在       capability_failed        (5)  —— 壳解析 bundle id 就失败了,一个框都没弹
+
+退出码:0 成功 / 1 用法错 / 2 被拒 / 3 没人点 / 4 daemon 不可达 / 5 事没办成(链接没打开、只接管了一半) / 6 参数不成立`;
 
 /** 域名 → 该域的用法文本。域子命令面统一从这里取(没登记的域退回顶层帮助)。 */
 export const DOMAIN_USAGE: Record<string, string> = {

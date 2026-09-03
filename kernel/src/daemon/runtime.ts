@@ -27,6 +27,10 @@ import { KERNEL_VERSION } from "../runtime/version.ts";
 import { createArbiter, type Arbiter } from "./arbitration.ts";
 import { createAuditLog, type AuditLog } from "./audit.ts";
 import { createClientHub, type ClientHub } from "./hub.ts";
+import {
+  createUrlRouterExecutorHub,
+  type UrlRouterExecutorHub,
+} from "./url-router-executor.ts";
 
 export interface KernelRuntime {
   paths: KernelPaths;
@@ -59,6 +63,13 @@ export interface KernelRuntime {
   /** 三层仲裁的第③层(带外确认)。 */
   arbiter: Arbiter;
   /**
+   * 机械执行器那一侧的在场与往返(url-router 施工 04 票)。
+   *
+   * 它与 `arbiter` 是**并列的两条路**,不是它的一部分:那条管"人同不同意",这条管
+   * "把这件事做了、结果如实回来"。takeover/restore 的确认由**系统弹框**承载,所以它们走这条。
+   */
+  urlRouterExecutor: UrlRouterExecutorHub;
+  /**
    * 确认器是否在场。**08 票起接的是真值**:注册了 confirm-agent 角色的长连接数 > 0,
    * 断线即自动回 false(在场 = 长连接,无心跳无 TTL)。04 票留的这条缝形状未改。
    */
@@ -88,6 +99,7 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
     hub.broadcast({ kind: "audit", at: event.at, audit: event }, except),
   );
   const arbiter = createArbiter({ paths, hub, audit, env });
+  const urlRouterExecutor = createUrlRouterExecutorHub({ hub, audit, env });
   const supervisor = createProxySupervisor(paths, env, (event) =>
     hub.broadcast({ kind: "supervision", at: event.at, supervision: event }),
   );
@@ -107,7 +119,9 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
     ...proxyCapabilities({ paths, env, supervisor }),
     // url-router(02 票):不注入 ports/handlers —— 生产路径用真实现(`ps`/`lsof`/`open`/`defaults`,
     // 路径可经 `A2_URL_ROUTER_*` 覆写,与 `A2_NETWORKSETUP` 同一档)。假件只在单测里注入。
-    ...urlRouterCapabilities({ paths, env }),
+    // **执行器那一侧要注入**(04 票):takeover/restore 的确认由系统弹框承载,而弹框只有壳能调 ——
+    // 于是能力 handler 必须够得着"谁在场、怎么下发指令"这件进程级事实。
+    ...urlRouterCapabilities({ paths, env, executor: urlRouterExecutor }),
     ...arbitrationCapabilities({ paths, arbiter, audit }),
     ...plugins.capabilities,
   ]);
@@ -131,6 +145,7 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
     hub,
     audit,
     arbiter,
+    urlRouterExecutor,
     confirmerPresent: () => hub.confirmerCount() > 0,
     // 配置用不了(文件坏了/读不出来)时 `loadUrlRouterConfig` 已经整份退回缺省,所以这里
     // 永远拿得到一个非空 bundle id —— 壳那侧不必处理"内核给了空值"这种形状。

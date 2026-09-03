@@ -18,6 +18,7 @@ import {
   PluginRemoveParamsSchema,
   RequestEnvelopeSchema,
   RoleRegisterParamsSchema,
+  UrlRouterExecutorReportParamsSchema,
   encodeFrame,
   failureResponse,
   opFailure,
@@ -25,6 +26,8 @@ import {
   payload,
   pushEnvelope,
   successResponse,
+  type AuditAction,
+  type ClientRole,
   type OpOutcome,
   type RequestEnvelope,
 } from "../contract/wire.ts";
@@ -159,7 +162,7 @@ const HANDLERS: Record<string, OpHandler> = {
       // 再推一次会让严格按「快照 + 增量」记账的客户端重复计入(契约见 `KernelSnapshotSchema` 头注)。
       runtime.audit.record(
         {
-          action: params.data.role === "confirm-agent" ? "confirmer_joined" : "subscriber_joined",
+          action: JOINED_ACTION[params.data.role],
           client: {
             role: params.data.role,
             name: params.data.identity.name,
@@ -171,6 +174,8 @@ const HANDLERS: Record<string, OpHandler> = {
       );
       // 确认器进场 = dangerous 从"走不通"变成"要等人点头",这条事实要让**别的**订阅者知道。
       runtime.arbiter.rosterChanged(connection);
+      // 执行器进场 = 正等在 `waitForPresence` 上的那次接管编排可以往下走了(04 票拉壳的收工信号)。
+      runtime.urlRouterExecutor.rosterChanged();
     }
 
     return opSuccess(
@@ -226,6 +231,58 @@ const HANDLERS: Record<string, OpHandler> = {
       settled: true,
     });
   },
+
+  // MARK: 机械执行器的回执(url-router 施工 04 票)—— 与上面那条逐条同构,权限却完全不同:
+  // 执行器只能回报**自己执行的结果**,它没有任何批准 dangerous 调用的能力。
+
+  [Op.urlRouterExecutorReport]: (request, runtime, connection) => {
+    const params = UrlRouterExecutorReportParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return invalidParams(Op.urlRouterExecutorReport, params.error.message);
+
+    // **角色是连接的属性,不是报文里的一句自称**:没注册执行器就没有回报执行结果的资格。
+    // 这条门与 `confirmations.resolve` 那条是分开的两把锁 —— 注册了确认器不等于能当执行器。
+    if (!connection.roles.has("url-router-executor")) {
+      return opFailure({
+        code: ErrorCode.roleNotRegistered,
+        message: "这条连接没有注册 url-router-executor 角色,不能回报执行结果。",
+        detail:
+          "机械执行器必须先在本连接上 `roles.register`(role=url-router-executor)并保持连接;" +
+          "断线即离场,在途的执行指令会立即按不可用收尾。",
+        guidance: {
+          summary: "先在同一条长连接上注册执行器角色,再回执行指令帧的结果。",
+          steps: [
+            { description: "在这条连接上发 roles.register(role=url-router-executor)" },
+            {
+              description:
+                "收到 url-router-execute 事件后,照帧上写的调系统 API,再用它的 id 发 url-router.executor.report",
+            },
+          ],
+          context: { connection: connection.id },
+        },
+      });
+    }
+
+    const refusal = runtime.urlRouterExecutor.report(params.data, {
+      connection: connection.id,
+      ...(connection.identity?.name === undefined ? {} : { name: connection.identity.name }),
+    });
+    if (refusal) return opFailure(refusal);
+    return opSuccess({ execution: params.data.execution, accepted: true });
+  },
+};
+
+/** 角色 → 进场留痕的审计动作。**穷尽映射**:加了角色而忘了这张表,TS 当场不给编译过。 */
+const JOINED_ACTION: Record<ClientRole, AuditAction> = {
+  "confirm-agent": "confirmer_joined",
+  subscriber: "subscriber_joined",
+  "url-router-executor": "executor_joined",
+};
+
+/** 角色 → 离场留痕的审计动作(同上,`daemon/server.ts` 的 `dropClient` 用它)。 */
+export const LEFT_ACTION: Record<ClientRole, AuditAction> = {
+  "confirm-agent": "confirmer_left",
+  subscriber: "subscriber_left",
+  "url-router-executor": "executor_left",
 };
 
 function invalidParams(op: string, detail: string): OpOutcome {

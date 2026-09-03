@@ -696,7 +696,7 @@ CR 修的两条真缺陷与一条语义钉死,都**没有改任何已登记报�
 
 `ServiceStatusResult` / `ServiceChangeResult` **仍不进 Swift 镜像表**,但豁免理由已按 15 票改写:
 壳从此**真的会调**这三条命令(ADR 0012 的执行器白名单),只是它经 **CLI 机读面**读三个字段
-(`state` / `binPath` / `actions`)一次,而不是在长连接上收协议帧 —— 壳的状态机依据仍是快照与七族事件。
+(`state` / `binPath` / `actions`)一次,而不是在长连接上收协议帧 —— 壳的状态机依据仍是快照与八族事件。
 真到 16 票嫌 `A2JSON` 取值啰嗦,把这两条挪进 `A2MirroredContract` 即可;样本已就位,挪动会被
 `GoldenContractTests` 的对账断言逼着做完整。
 

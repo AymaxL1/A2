@@ -21,6 +21,10 @@ import {
   UrlRouterRouteResultSchema,
   UrlRouterStatusResultSchema,
 } from "../src/contract/wire.ts";
+import {
+  EXECUTION_TIMEOUT_ENV,
+  LAUNCH_WAIT_ENV,
+} from "../src/daemon/url-router-executor.ts";
 import { connectFakeClient, type FakeClient } from "./support/fake-client.ts";
 import {
   cleanupHome,
@@ -257,28 +261,230 @@ test("`url-router route`:open 非零退出 → url_router_open_failed,退出码 
   expect(envelope.error.guidance).toBeTruthy();
 });
 
-test("`url-router takeover`:dangerous 档,无确认器在场即 fail-closed 默拒(退出码 2)", async () => {
-  const env = await boot();
+test("`url-router takeover`:没有执行器在场 → 拉一把壳、等不到就 confirmation_unavailable(退出码 2)", async () => {
+  // 拉起等待窗压到 50ms:这条路真实要等 10 秒,而它等的东西(壳注册上来)在门禁里永远不会发生。
+  const env = await boot({ [LAUNCH_WAIT_ENV]: "50" });
+
+  const result = await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(2);
+  const envelope = parseJsonStdout(result);
+  expect(envelope.ok).toBe(false);
+  // **不造新码**:确认换了个地方(系统弹框),但"没人能替你确认"对 agent 意味着什么一个字没变。
+  expect(envelope.error.code).toBe("confirmation_unavailable");
+  // 拒绝即指引:既给装壳那条路,也给不装壳也能干成的那条(系统设置里手选)。
+  expect(JSON.stringify(envelope.error.guidance)).toContain("系统设置");
+
+  // 04 票起这条路上**确实会 `open -b com.a2.panel`**(拉壳是用户显式变更里的一步,
+  // 不违「永不隐式拉起」——那条管的是查询)。除此之外一趟 open 都不该有:URL 一个都没开。
+  expect(await openedArgv()).toEqual([["-b", "com.a2.panel"]]);
+});
+
+test("`url-router takeover`:`open -b` 非零退出 = 壳没装,如实报出来(不发明第二套探测)", async () => {
+  const env = await boot({ A2_URL_ROUTER_OPEN_EXIT: "1", [LAUNCH_WAIT_ENV]: "50" });
 
   const result = await runCli(["url-router", "takeover", "--json"], { home, env });
 
   expect(result.exitCode).toBe(2);
   const envelope = parseJsonStdout(result);
   expect(envelope.error.code).toBe("confirmation_unavailable");
-  // 被拒时 handler **一次都没被碰到**:一趟 open、一次 defaults 都没有发生。
+  expect(envelope.error.message).toContain("com.a2.panel");
+  // 报文里带着 `open` 自己的退出码 —— 判据就是它,没有别的探测。
+  expect(envelope.error.detail).toContain("退出码 1");
+});
+
+test("`url-router restore --to …`:os-dialog 档**不经 confirm-agent 仲裁**,参数照旧先校验", async () => {
+  const env = await boot({ [LAUNCH_WAIT_ENV]: "50" });
+
+  // 02 票时这条命令会先撞上 dangerous 默拒(exit 2),因为它走 confirm-agent 那三层。
+  // 04 票起 takeover/restore 标了 `confirmation: "os-dialog"` —— 那三层**按设计跳过**
+  // (它们的确认由系统弹框承载,叠一层就是双确认),于是空白串 `--to` 由 handler 如实拒掉。
+  // **这不是把闸拆了**:它们照样是 dangerous,照样一步都改不动系统状态而不经 OS 弹框;
+  // 别的 dangerous 能力的默拒行为一个字都没变(下一条断言正是冲它去的)。
+  const result = await runCli(["url-router", "restore", "--to", "   ", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(6);
+  expect(parseJsonStdout(result).error.code).toBe("invalid_params");
+  // 参数就没过,当然一趟 open 都没有(连拉壳都没轮到)。
   expect(await openedArgv()).toEqual([]);
 });
 
-test("`url-router restore --to …`:dangerous 的仲裁**排在 handler 之前** —— 参数怎么写都先被默拒", async () => {
+test("**别的 dangerous 能力一个字都没变**:代理面照旧无确认器即 fail-closed 默拒(退出码 2)", async () => {
   const env = await boot();
 
-  // `--to` 写成空白串:这是 handler 会拒的参数(单测里验过 invalid_params)。
-  // 但经这条缝进来时,**handler 根本不会被碰到** —— 无确认器在场,dangerous 先默拒。
-  // 这个顺序是安全语义的一部分:参数合不合法轮不到一条被拒的调用去操心。
-  const result = await runCli(["url-router", "restore", "--to", "   ", "--json"], { home, env });
+  // 同一个内核、同一条缝,只是换一条**没标 os-dialog** 的 dangerous 能力。
+  // 04 票那条岔路若不小心开给了全体 dangerous,这一条会当场红。
+  const result = await runCli(["capabilities", "call", "demo.wipe", "--json"], { home, env });
 
   expect(result.exitCode).toBe(2);
   expect(parseJsonStdout(result).error.code).toBe("confirmation_unavailable");
+});
+
+// MARK: - 执行指令帧的整条链(04 票,spec §5/§6.3)
+//
+// 这一族是本票唯一验得到「argv → UDS → 仲裁岔路 → 编排 → 推送 → 壳 → 回执 → 报文」全程的地方。
+// 假壳站在真壳的位置上,但它手里**没有系统 API** —— 于是门禁永远不会真改这台机器的默认浏览器。
+
+/** 连一个假的**机械执行器**(注册 url-router-executor 角色,照剧本回执行结果)。 */
+async function fakeExecutor(executeBehavior: "confirmed" | "denied" | "partial" | "ignore") {
+  const client = await connectFakeClient({
+    socketPath: daemon!.socketPath,
+    name: "fake-executor",
+    executeBehavior,
+  });
+  clients.push(client);
+  await client.register("url-router-executor");
+  return client;
+}
+
+test("takeover 全程:执行器在场 → 下发指令帧 → 回执 confirmed → ok(且**没有拉壳**,它已经在了)", async () => {
+  const env = await boot();
+  const executor = await fakeExecutor("confirmed");
+
+  const result = await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(0);
+  const output = parseJsonStdout(result).result.output;
+  expect(output.target).toBe("com.a2.panel");
+  expect(output.already).toBe(false);
+  expect(output.outcome).toBe("confirmed");
+  expect(output.perScheme).toEqual({ http: { ok: true }, https: { ok: true } });
+
+  // 指令确实落到了执行器手上,而且**只回了一次**。
+  expect(executor.executed).toHaveLength(1);
+  const command = executor.events("url-router-execute")[0]?.command;
+  expect(command).toMatchObject({
+    op: "set-default-handler",
+    schemes: ["http", "https"],
+    bundleID: "com.a2.panel",
+    timeoutSeconds: 120,
+  });
+  // 执行器已经在场 → **一趟 `open` 都没有**(拉壳只发生在它不在的时候)。
+  expect(await openedArgv()).toEqual([]);
+});
+
+test("takeover:用户点取消 → confirmation_denied(退出码 2),报文说清是人不同意", async () => {
+  const env = await boot();
+  await fakeExecutor("denied");
+
+  const result = await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(2);
+  const envelope = parseJsonStdout(result);
+  expect(envelope.error.code).toBe("confirmation_denied");
+  expect(envelope.error.detail).toContain("取消");
+  expect(envelope.error.guidance).toBeTruthy();
+});
+
+test("takeover:一个 scheme 成一个没成 → url_router_partial_takeover(5)+ 补齐命令", async () => {
+  const env = await boot();
+  await fakeExecutor("partial");
+
+  const result = await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(5);
+  const envelope = parseJsonStdout(result);
+  expect(envelope.error.code).toBe("url_router_partial_takeover");
+  expect(envelope.error.guidance.context.succeeded).toBe("http");
+  expect(envelope.error.guidance.context.failed).toBe("https");
+});
+
+test("takeover:执行器在场却一个字都不回 → 等满窗口即 confirmation_timeout(3),沉默不是成功", async () => {
+  // 120s 的窗压到 300ms:验的是"等满了会怎么样",不是"能不能等 120 秒"。
+  const env = await boot({ [EXECUTION_TIMEOUT_ENV]: "300" });
+  await fakeExecutor("ignore");
+
+  const result = await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(result.exitCode).toBe(3);
+  const envelope = parseJsonStdout(result);
+  expect(envelope.error.code).toBe("confirmation_timeout");
+  // 「稍后核实」——用户晚点才点也算数,所以指引不是"再发一次"。
+  expect(
+    envelope.error.guidance.steps.some(
+      (step: { command?: string }) => step.command === "a2 url-router status --json",
+    ),
+  ).toBe(true);
+});
+
+test("执行指令帧**只推给执行器**:确认器/订阅者一帧都收不到(与 confirmation 同一条纪律)", async () => {
+  const env = await boot({ [EXECUTION_TIMEOUT_ENV]: "300" });
+  const subscriber = await fakeShell("fake-subscriber");
+  await subscriber.register("subscriber");
+  const confirmer = await fakeShell("fake-confirmer");
+  await confirmer.register("confirm-agent");
+  const executor = await fakeExecutor("confirmed");
+
+  await runCli(["url-router", "takeover", "--json"], { home, env });
+
+  expect(executor.events("url-router-execute")).toHaveLength(1);
+  expect(subscriber.events("url-router-execute")).toHaveLength(0);
+  expect(confirmer.events("url-router-execute")).toHaveLength(0);
+});
+
+test("没注册执行器角色就想回执行结果 → role_not_registered(角色是连接的属性,不是自称)", async () => {
+  await boot();
+  const impostor = await fakeShell("fake-impostor");
+  // 注册的是**确认器**:能替人做决定,但没有回报执行结果的资格 —— 两把锁是分开的。
+  await impostor.register("confirm-agent");
+
+  const response = await impostor.request("url-router.executor.report", {
+    execution: "随便编一个 id",
+    outcome: "confirmed",
+    perScheme: { http: { ok: true }, https: { ok: true } },
+  });
+
+  expect(response.ok).toBe(false);
+  expect(response.error.code).toBe("role_not_registered");
+});
+
+test("执行器回一条内核没在等的回执 → url_router_execution_unknown(退出码 6)", async () => {
+  await boot();
+  const executor = await fakeExecutor("ignore");
+
+  const response = await executor.request("url-router.executor.report", {
+    execution: "从来没有过的 id",
+    outcome: "confirmed",
+    perScheme: {},
+  });
+
+  expect(response.ok).toBe(false);
+  expect(response.error.code).toBe("url_router_execution_unknown");
+  expect(response.error.guidance).toBeTruthy();
+});
+
+test("执行器角色的进出**照样留痕**(执行器什么时候在,是接管能不能走通的运行时事实)", async () => {
+  await boot();
+  const subscriber = await fakeShell("fake-subscriber");
+  await subscriber.register("subscriber");
+
+  const executor = await fakeExecutor("confirmed");
+  await subscriber.waitForEvent(
+    (event) => event.kind === "audit" && event.audit.action === "executor_joined",
+  );
+
+  await executor.close();
+  await subscriber.waitForEvent(
+    (event) => event.kind === "audit" && event.audit.action === "executor_left",
+  );
+});
+
+test("`capabilities list`:确认模式标记进机读面 —— os-dialog **恰好**是 takeover/restore 两条", async () => {
+  const env = await boot();
+
+  const listed = parseJsonStdout(
+    await runCli(["capabilities", "list", "--json"], { home, env }),
+  ).result.capabilities as { id: string; risk: string; confirmation?: string }[];
+
+  const osDialog = listed.filter((entry) => entry.confirmation === "os-dialog").map((entry) => entry.id);
+  expect(osDialog.sort()).toEqual(["url-router.restore", "url-router.takeover"]);
+
+  // 反面:别的 dangerous 能力 manifest 上**根本没有这个字段**(缺省即 confirm-agent)。
+  const otherDangerous = listed.filter(
+    (entry) => entry.risk === "dangerous" && !entry.id.startsWith("url-router."),
+  );
+  expect(otherDangerous.length).toBeGreaterThan(0);
+  for (const entry of otherDangerous) expect(entry.confirmation).toBeUndefined();
 });
 
 test("两种写法同一条路:`url-router route <url> --dry-run` ≡ `capabilities call url-router.decide`", async () => {
