@@ -456,7 +456,7 @@
       "file": "role-register-result.json",
       "schema": "RoleRegisterResult",
       "kind": "valid",
-      "why": "注册往返的回执:确认注册了什么(role/roles/连接 id/校验到的 uid)+ **同一次往返带回的全量快照**;一条连接两个角色兼有是合法组合(09 票补,此前只有 Schema 没有样本)"
+      "why": "注册往返的回执:确认注册了什么(role/roles/连接 id/校验到的 uid)+ **同一次往返带回的全量快照**;一条连接两个角色兼有是合法组合(09 票补,此前只有 Schema 没有样本)。快照里的 `urlRouter` 有意**不写 Safari**(03 票):兜底身份是用户配的那个,两侧谁把缺省写死在解码路径上,这份样本就会当场吵起来"
     },
     {
       "file": "invalid-role-register-params-unknown-role.json",
@@ -516,7 +516,13 @@
       "file": "kernel-snapshot.json",
       "schema": "KernelSnapshot",
       "kind": "valid",
-      "why": "注册那一刻回的全量快照:状态 / 能力全集 / 仲裁面 / 存活监督 / 审计,一次往返全给"
+      "why": "注册那一刻回的全量快照:状态 / 能力全集 / 仲裁面 / 存活监督 / 审计 / URL 分流兜底,一次往返全给"
+    },
+    {
+      "file": "invalid-kernel-snapshot-empty-fallback-browser.json",
+      "schema": "KernelSnapshot",
+      "kind": "invalid",
+      "why": "`urlRouter.fallbackBrowserBundleID` 是非空 bundle id:空串打不开任何东西,而壳在内核不可达时**只有**这一个值可用 —— 与其发一个注定失败的兜底身份,不如在契约层就拒掉(壳那侧因此永远不必处理「内核给了空值」)"
     },
     {
       "file": "arbitration-status-result.json",

@@ -93,6 +93,9 @@
         },
         "detail": "连接注册为 confirm-agent。V1 不校验身份声明(已知边界:同 UID 冒充)。"
       }
-    ]
+    ],
+    "urlRouter": {
+      "fallbackBrowserBundleID": "com.google.Chrome"
+    }
   }
 }

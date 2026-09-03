@@ -8,7 +8,13 @@ import { BUILTIN_CAPABILITIES } from "../capability/builtin.ts";
 import { proxyCapabilities } from "../capability/proxy.ts";
 import { urlRouterCapabilities } from "../capability/url-router.ts";
 import { CapabilityRegistry } from "../capability/registry.ts";
-import { PROTOCOL_VERSION, type KernelSnapshot, type StatusResult } from "../contract/wire.ts";
+import {
+  PROTOCOL_VERSION,
+  type KernelSnapshot,
+  type StatusResult,
+  type UrlRouterSnapshot,
+} from "../contract/wire.ts";
+import { loadUrlRouterConfig } from "../url-router/config.ts";
 import { restorePlugins } from "../plugin/host.ts";
 import { sweepStaleBuildAreas } from "../plugin/bundle.ts";
 import { sweepStagingArtifacts } from "../plugin/store.ts";
@@ -57,8 +63,22 @@ export interface KernelRuntime {
    * 断线即自动回 false(在场 = 长连接,无心跳无 TTL)。04 票留的这条缝形状未改。
    */
   confirmerPresent(): boolean;
-  /** 注册那一刻回给客户端的全量快照(此后走增量推送)。 */
-  snapshot(): KernelSnapshot;
+  /**
+   * 快照里唯一**不来自进程内状态**的那一节(03 票):兜底浏览器是谁,事实源是磁盘上那份
+   * `<A2_HOME>/url-router.json`,所以取它要 await。
+   *
+   * 它单独一个口、而不是把 `snapshot()` 整个变成 async —— 那是协议顺序的要求,不是洁癖:
+   * `roles.register` 的响应必须是这条连接上的**第一帧**,所以"注册"与"建快照"之间**不能有 await 点**
+   * (让出去的那一瞬间,别的连接触发的推送就能挤在响应前头写给这条已注册的连接)。
+   * 于是调用方的规矩是:**先 await 这一节(那时本连接还没注册,收不到任何推送),再 register,
+   * 再同步建快照**。见 `router.ts` 的 `roles.register`。
+   *
+   * 不设文件监视:值在**每次建全量快照时现读**,与"注册即快照"同一条机制 —— 读的时刻就是发的时刻,
+   * 不存在"内核缓存了一份旧配置"的窗口。
+   */
+  urlRouterSnapshot(): Promise<UrlRouterSnapshot>;
+  /** 注册那一刻回给客户端的全量快照(此后走增量推送)。`urlRouter` 由上面那个口先读好再传进来。 */
+  snapshot(urlRouter: UrlRouterSnapshot): KernelSnapshot;
 }
 
 export function createRuntime(paths: KernelPaths, now: Date = new Date()): KernelRuntime {
@@ -112,12 +132,19 @@ export function createRuntime(paths: KernelPaths, now: Date = new Date()): Kerne
     audit,
     arbiter,
     confirmerPresent: () => hub.confirmerCount() > 0,
-    snapshot: () => ({
+    // 配置用不了(文件坏了/读不出来)时 `loadUrlRouterConfig` 已经整份退回缺省,所以这里
+    // 永远拿得到一个非空 bundle id —— 壳那侧不必处理"内核给了空值"这种形状。
+    // 「配歪了」这件事由 `url-router.status` 指名道姓地说,不在快照里重复报警。
+    urlRouterSnapshot: async () => ({
+      fallbackBrowserBundleID: (await loadUrlRouterConfig(paths)).config.fallbackBrowserBundleID,
+    }),
+    snapshot: (urlRouter) => ({
       status: statusSnapshot(runtime),
       capabilities: registry.list(),
       arbitration: arbiter.state(),
       supervision: supervisor.snapshot(),
       audit: audit.recent(),
+      urlRouter,
     }),
   };
   return runtime;

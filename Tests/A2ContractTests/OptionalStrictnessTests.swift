@@ -104,6 +104,19 @@ struct OptionalStrictnessTests {
         }
     }
 
+    @Test("快照 urlRouter.fallbackBrowserBundleID 写了 min(1):空串被拒(03 票)")
+    func urlRouterFallbackRejectsEmptyString() {
+        // 这是壳降级兜底时手里**唯一**的那个值:空 bundle id 打不开任何东西,
+        // 与其拿着它去开一个注定失败的兜底,不如在解码那一步就吵起来。
+        let bytes = Data(#"{"fallbackBrowserBundleID":""}"#.utf8)
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(A2URLRouterSnapshot.self, from: bytes)
+        }
+        let good = try? JSONDecoder().decode(
+            A2URLRouterSnapshot.self, from: Data(#"{"fallbackBrowserBundleID":"com.apple.Safari"}"#.utf8))
+        #expect(good?.fallbackBrowserBundleID == "com.apple.Safari")
+    }
+
     @Test("AuditClient.name 写了 min(1):空串被拒(与同结构体里那三个纯 optional 正好对照)")
     func auditClientNameRejectsEmptyString() {
         let bytes = Data(#"{"role":"confirm-agent","name":"","uid":501}"#.utf8)

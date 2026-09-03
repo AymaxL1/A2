@@ -34,10 +34,14 @@ struct A2PanelProjectionTests {
     }
 
     private static func snapshot(pending: [A2PendingConfirmation] = [],
-                                audit: [A2AuditEvent] = []) -> A2KernelSnapshot {
+                                audit: [A2AuditEvent] = [],
+                                fallbackBrowser: String = "com.google.Chrome") -> A2KernelSnapshot {
         A2KernelSnapshot(status: status, capabilities: A2PanelFixtures.capabilities,
                          arbitration: arbitration(pending: pending), supervision: supervision(),
-                         audit: audit)
+                         audit: audit,
+                         // 有意**不写 Safari**:兜底身份必须是快照里那一份,不是壳的缺省
+                         // ——把缺省写死在投影路径上的话,这条断言会当场红(03 票)。
+                         urlRouter: A2URLRouterSnapshot(fallbackBrowserBundleID: fallbackBrowser))
     }
 
     private static let request = A2PanelFixtures.confirmationRequest

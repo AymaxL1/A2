@@ -428,6 +428,19 @@
         ],
         "additionalProperties": false
       }
+    },
+    "urlRouter": {
+      "type": "object",
+      "properties": {
+        "fallbackBrowserBundleID": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "fallbackBrowserBundleID"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -435,7 +448,8 @@
     "capabilities",
     "arbitration",
     "supervision",
-    "audit"
+    "audit",
+    "urlRouter"
   ],
   "additionalProperties": false
 }

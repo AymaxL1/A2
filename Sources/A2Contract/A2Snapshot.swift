@@ -9,12 +9,48 @@
 
 import Foundation
 
+/// 快照里的 `urlRouter` 节(对照 `UrlRouterSnapshotSchema`,url-router 施工 03 票)。
+///
+/// **只有一个字段,而且只该有这一个**:壳拿它是为了在内核不可达的那一刻,把用户点的链接原样交给
+/// "最后已知的兜底浏览器"。分流域名表与 Roxy 那一族参数壳一个都用不上 —— 壳不做决策,
+/// 多知道一个字段就是多一次"壳自己判一下"的机会(03 四条硬边界的第①②条)。
+///
+/// 它也是那第④条边界的**唯一落点**:「配置知识只来自内核推送快照,永不读内核文件」——
+/// 壳因此从不碰 `~/.a2/url-router.json`,与内核的配置格式零耦合。
+public struct A2URLRouterSnapshot: Sendable, Equatable {
+    /// 未命中分流时把 URL 交给谁(生效配置里那份,内核已合并缺省)。
+    public let fallbackBrowserBundleID: String
+
+    public init(fallbackBrowserBundleID: String) {
+        self.fallbackBrowserBundleID = fallbackBrowserBundleID
+    }
+}
+
+extension A2URLRouterSnapshot: Codable {
+    private enum CodingKeys: String, CodingKey { case fallbackBrowserBundleID }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // **非空**是契约(`z.string().min(1)`,有非法金标守着):空 bundle id 打不开任何东西,
+        // 而这是壳降级时手里唯一的那个值 —— 与其拿着它去开一个注定失败的兜底,不如当场解码失败。
+        fallbackBrowserBundleID = try container.decodeNonEmptyString(forKey: .fallbackBrowserBundleID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fallbackBrowserBundleID, forKey: .fallbackBrowserBundleID)
+    }
+}
+
 /// 注册那一刻回给客户端的**全量快照**(对照 `KernelSnapshotSchema`)。
 ///
-/// 为什么快照就是这五样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求 ——
+/// 为什么快照就是这几样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求 ——
 /// 快照必须廉价且瞬时一致,否则"注册即快照"会变成一次慢启动。
 /// (代理的实时模式/节点不在此列:那要问 external-controller。壳按需调 `proxy.status` 能力,
 /// 此后靠 `capability` 事件跟进变化 —— 仍然零轮询。)
+///
+/// `urlRouter` 是第六节(03 票),也是唯一一节不来自内核进程内状态的:内核在**每次建全量快照时**
+/// 现读 `<A2_HOME>/url-router.json`。对壳而言这不改变任何规矩 —— 它照旧只消费快照。
 public struct A2KernelSnapshot: Sendable, Equatable {
     public let status: A2StatusResult
     /// 能力全集。
@@ -24,21 +60,27 @@ public struct A2KernelSnapshot: Sendable, Equatable {
     public let supervision: A2ProxySupervisionResult
     /// 最近若干条审计事件(全量在 `arbitration.log` 里)。
     public let audit: [A2AuditEvent]
+    /// URL 分流:壳降级兜底要用的那**一个**事实。
+    public let urlRouter: A2URLRouterSnapshot
 
     public init(
         status: A2StatusResult, capabilities: [A2CapabilityDescriptor],
-        arbitration: A2ArbitrationState, supervision: A2ProxySupervisionResult, audit: [A2AuditEvent]
+        arbitration: A2ArbitrationState, supervision: A2ProxySupervisionResult,
+        audit: [A2AuditEvent], urlRouter: A2URLRouterSnapshot
     ) {
         self.status = status
         self.capabilities = capabilities
         self.arbitration = arbitration
         self.supervision = supervision
         self.audit = audit
+        self.urlRouter = urlRouter
     }
 }
 
 extension A2KernelSnapshot: Codable {
-    private enum CodingKeys: String, CodingKey { case status, capabilities, arbitration, supervision, audit }
+    private enum CodingKeys: String, CodingKey {
+        case status, capabilities, arbitration, supervision, audit, urlRouter
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -47,6 +89,9 @@ extension A2KernelSnapshot: Codable {
         arbitration = try container.decode(A2ArbitrationState.self, forKey: .arbitration)
         supervision = try container.decode(A2ProxySupervisionResult.self, forKey: .supervision)
         audit = try container.decode([A2AuditEvent].self, forKey: .audit)
+        // **必填**:契约里它不是 optional。壳宁可在这里吵起来,也不要一份"少了兜底身份"的快照 ——
+        // 那会让降级路径在最需要它的时候才发现自己两手空空。
+        urlRouter = try container.decode(A2URLRouterSnapshot.self, forKey: .urlRouter)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -56,6 +101,7 @@ extension A2KernelSnapshot: Codable {
         try container.encode(arbitration, forKey: .arbitration)
         try container.encode(supervision, forKey: .supervision)
         try container.encode(audit, forKey: .audit)
+        try container.encode(urlRouter, forKey: .urlRouter)
     }
 }
 

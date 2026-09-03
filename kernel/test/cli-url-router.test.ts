@@ -12,14 +12,16 @@
 // 注入面为零 —— 这两件事只有在最外面这条缝上才验得到。
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeUrlRouterArgs } from "../src/cli/url-router.ts";
 import {
+  KernelSnapshotSchema,
   UrlRouterDecideResultSchema,
   UrlRouterRouteResultSchema,
   UrlRouterStatusResultSchema,
 } from "../src/contract/wire.ts";
+import { connectFakeClient, type FakeClient } from "./support/fake-client.ts";
 import {
   cleanupHome,
   makeHome,
@@ -35,17 +37,32 @@ const FAKES = path.resolve(import.meta.dir, "support/fake-url-router");
 let home: string;
 let daemon: DaemonHandle | undefined;
 let openLog: string;
+let clients: FakeClient[] = [];
 
 beforeEach(async () => {
   home = await makeHome();
   openLog = path.join(home, "open.log");
   daemon = undefined;
+  clients = [];
 });
 
 afterEach(async () => {
+  for (const client of clients) await client.close();
   if (daemon) await stopDaemon(daemon);
   await cleanupHome(home);
 });
+
+/** 连一个假的"壳"(长连接客户端)并登记进 teardown —— 03 票的快照节与转发路都靠它验。 */
+async function fakeShell(name = "fake-panel"): Promise<FakeClient> {
+  const client = await connectFakeClient({ socketPath: daemon!.socketPath, name });
+  clients.push(client);
+  return client;
+}
+
+/** 写一份配置文件到 `<A2_HOME>/url-router.json`(内容原样,坏 JSON 也照写)。 */
+async function writeConfig(text: string): Promise<void> {
+  await writeFile(path.join(home, "url-router.json"), text, "utf8");
+}
 
 /** 注入行为假件:`open` 只记 argv 不开东西,`ps` 吐空表(= 本机没跑 Roxy)。 */
 function sandboxEnv(overrides: Record<string, string> = {}): Record<string, string> {
@@ -280,6 +297,70 @@ test("两种写法同一条路:`url-router route <url> --dry-run` ≡ `capabilit
 
   expect(viaDomain.result.output).toEqual(viaCapability.result.output);
 });
+
+// MARK: - 快照的 urlRouter 节 + 壳那条转发路(03 票,spec §6.1/§6.2)
+//
+// 这一族验的是**壳降级兜底的唯一知识来源**:内核推来的快照。四条硬边界的第④条
+// (「配置知识只来自内核推送快照,永不读内核文件」)只有在这里成立,壳那侧才配不读 `~/.a2`。
+
+test("03 注册即快照:带 urlRouter 节,没有配置文件时给缺省兜底浏览器", async () => {
+  await boot();
+  const shell = await fakeShell();
+
+  const registered = await shell.register("confirm-agent");
+
+  expect(KernelSnapshotSchema.safeParse(registered.snapshot).success).toBe(true);
+  expect(registered.snapshot.urlRouter).toEqual({ fallbackBrowserBundleID: "com.apple.Safari" });
+  // **这一节只有一个字段**:分流域名表与 Roxy 那一族(含敏感的 roxyAPIKey)一个都不来 ——
+  // 壳不做决策,多给一个字段就是多给一次"壳自己判一下"的机会(spec §6.2 的最小集)。
+  expect(Object.keys(registered.snapshot.urlRouter)).toEqual(["fallbackBrowserBundleID"]);
+  // 现读磁盘没有破掉「快照是这条连接的第一帧」:第一帧仍是注册响应,不是推送。
+  expect(shell.arrivals[0]).toBe("response");
+}, 20000);
+
+test("03 快照的 urlRouter 节是**现读**的:daemon 起来之后才写的配置照样算数", async () => {
+  await boot();
+  // daemon 已经在跑了才写配置 —— 没有文件监视,也不该有缓存:下一次建全量快照时现读。
+  await writeConfig(JSON.stringify({ fallbackBrowserBundleID: "com.google.Chrome" }));
+
+  const registered = await (await fakeShell()).register("subscriber");
+
+  expect(registered.snapshot.urlRouter.fallbackBrowserBundleID).toBe("com.google.Chrome");
+}, 20000);
+
+test("03 配置文件坏了:快照照样给一个非空兜底身份(整份退回缺省,壳永远拿得到)", async () => {
+  await boot();
+  await writeConfig("{ 这不是 JSON");
+
+  const registered = await (await fakeShell()).register("subscriber");
+
+  // 「配歪了」这件事由 `url-router.status` 指名道姓地说;快照这一节的职责只有一个 ——
+  // 让壳在内核不可达时手里有个打得开的兜底(所以它宁可是缺省,也不能是空)。
+  expect(registered.snapshot.urlRouter.fallbackBrowserBundleID).toBe("com.apple.Safari");
+  const status = parseJsonStdout(await runCli(["url-router", "status", "--json"], { home }));
+  expect(status.result.output.configSource).toBe("unusable");
+}, 20000);
+
+test("03 壳那条转发路:经 UDS `capabilities.call url-router.route` 开的是 URL 原文", async () => {
+  const env = await boot();
+  const shell = await fakeShell();
+  await shell.register("confirm-agent");
+  const url = "https://example.com/a?q=hello world&x=1#片段";
+
+  // 壳与 CLI 走**同一条能力面**(spec §6.1「转发零新帧」):这里发的就是壳会发的那一条报文。
+  const response = await shell.request("capabilities.call", {
+    capability: "url-router.route",
+    input: { url },
+  });
+
+  expect(response.ok).toBe(true);
+  expect(UrlRouterRouteResultSchema.safeParse(response.result.output).success).toBe(true);
+  expect(response.result.output.action).toBe("fallback-browser");
+  // 交给 open 的是原文、且是独立 argv(壳原样转发,内核原样交出去,中间没有人改写)。
+  expect(await openedArgv()).toEqual([["-b", "com.apple.Safari", url]]);
+  // 报文里那份是脱敏的:壳的日志纪律再松,也拿不到 query/fragment 的原文。
+  expect(response.result.output.url).toBe("https://example.com/a?redacted#redacted");
+}, 20000);
 
 test("未知动作:报用法错(退出码 1)并把这个域现有的写法列出来", async () => {
   await boot();

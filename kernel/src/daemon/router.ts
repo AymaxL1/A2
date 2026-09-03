@@ -142,13 +142,18 @@ const HANDLERS: Record<string, OpHandler> = {
   [Op.mihomoRestart]: async (_request, runtime) =>
     await mihomoRestartOp(runtime.paths, runtime.mihomo),
 
-  [Op.rolesRegister]: (request, runtime, connection) => {
+  [Op.rolesRegister]: async (request, runtime, connection) => {
     const params = RoleRegisterParamsSchema.safeParse(request.params ?? {});
     if (!params.success) return invalidParams("roles.register", params.error.message);
 
+    // **要现读磁盘的那一节先读**(03 票的 `urlRouter`,见 `runtime.urlRouterSnapshot` 头注):
+    // 此刻本连接**还没注册**,收不到任何推送 —— 于是这次 await 让出去也不会有推送插到响应前头。
+    // 反过来若放在 register 之后读,那一瞬间的让出就会破掉「快照是本连接第一帧」这条协议保证。
+    const urlRouter = await runtime.urlRouterSnapshot();
     const added = runtime.hub.register(connection, params.data.role, params.data.identity);
     // **快照先取**:它必须反映"我已经在里面了"的那一刻,而且要在任何推送发出去之前定格。
-    const snapshot = runtime.snapshot();
+    // 这里到 return 之间**再无 await**(建快照是纯同步的)。
+    const snapshot = runtime.snapshot(urlRouter);
     if (added) {
       // 进场事件推给**别人**,不推给刚注册的自己 —— 它的成员关系已经含在上面那份快照里,
       // 再推一次会让严格按「快照 + 增量」记账的客户端重复计入(契约见 `KernelSnapshotSchema` 头注)。

@@ -1270,6 +1270,23 @@ export const UrlRouterHandoffResultSchema = z.object({
 });
 export type UrlRouterHandoffResult = z.infer<typeof UrlRouterHandoffResultSchema>;
 
+/**
+ * 快照里的 `urlRouter` 节(url-router 施工 03 票,spec §6.2 的**最小集**)。
+ *
+ * 只有一个字段,而且**有意只有这一个**:壳拿它是为了在内核不可达的那一刻,把用户点的链接
+ * 原样交给"最后已知的兜底浏览器"(03 研究票四条硬边界的第④条 ——「配置知识只来自内核推送快照,
+ * 永不读内核文件」)。分流域名表、Roxy 那一族参数壳一个都用不上:壳不做决策,多给一个字段
+ * 就是多给一次"壳自己判一下"的机会。
+ *
+ * **`roxyAPIKey` 在这里连字段都不存在**(spec §8:不进快照推送)—— 与 `UrlRouterConfigView`
+ * 同一条纪律的更强形式:那边是"只剩一个布尔",这边是"整族参数都不来"。
+ */
+export const UrlRouterSnapshotSchema = z.object({
+  /** 未命中分流时把 URL 交给谁;壳在内核不可达时也用它(生效配置里那份,已合并缺省)。 */
+  fallbackBrowserBundleID: z.string().min(1),
+});
+export type UrlRouterSnapshot = z.infer<typeof UrlRouterSnapshotSchema>;
+
 // MARK: - 角色注册、订阅推送与三层仲裁(08 票)
 //
 // 这一节是本效应安全模型的落点。三件事一起长出来,因为它们其实是同一件事的三个面:
@@ -1617,10 +1634,17 @@ export const PluginRemoveParamsSchema = z.object({
  *     别的已注册连接照常收到那条进场事件(对它们那是真增量)。
  * 于是客户端的算法可以是最简单的那种:拿快照当初值,之后每条事件直接叠上去,不必去重、不必对账。
  *
- * 为什么快照就是这五样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求、
+ * 为什么快照就是这几样:客户端要投影的东西全在内核的**进程内状态**里,取它们不发一次网络请求、
  * 不读一次外部进程 —— 快照必须是廉价且瞬时一致的,否则"注册即快照"会变成一次慢启动。
  * (代理的实时模式/节点不在此列:那要问 external-controller。壳按需调 `proxy.status` 能力,
  * 此后靠 `capability` 事件跟进变化 —— 仍然零轮询。)
+ *
+ * **`urlRouter` 是第六节,也是唯一一节不来自进程内状态的**(03 票):它的事实源是磁盘上那份
+ * `<A2_HOME>/url-router.json`,每次建全量快照时**现读**(不设文件监视 —— 与"注册即快照"同一条
+ * 机制,读的时刻就是发的时刻)。这没有破上面那条"廉价"的规矩:一次本地小文件读,既不出网也不起进程;
+ * 而它换来的是壳在内核不可达时**仍知道兜底浏览器是谁**(03 四条硬边界的第④条)。
+ * 读的时机在**注册之前**(见 `daemon/router.ts` 的 `roles.register`),于是"快照是这条连接的第一帧"
+ * 那条保证不受影响。
  */
 export const KernelSnapshotSchema = z.object({
   status: StatusResultSchema,
@@ -1634,6 +1658,8 @@ export const KernelSnapshotSchema = z.object({
   supervision: ProxySupervisionResultSchema,
   /** 最近若干条审计事件(全量在 `arbitration.log` 里)。 */
   audit: z.array(AuditEventSchema),
+  /** URL 分流:壳降级兜底要用的那**一个**事实(03 票,见 `UrlRouterSnapshotSchema` 头注)。 */
+  urlRouter: UrlRouterSnapshotSchema,
 });
 export type KernelSnapshot = z.infer<typeof KernelSnapshotSchema>;
 
