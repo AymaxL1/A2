@@ -20,7 +20,9 @@ import {
   nonDefaultHome,
   unsafeHomeOnDisk,
   unsafeHomeShape,
+  urlHandlerHold,
 } from "../src/service/purge-guard.ts";
+import type { DefaultHandlerReader, HandlerScheme } from "../src/url-router/handler.ts";
 import {
   renderLaunchdPlist,
   renderSystemdUnit,
@@ -204,4 +206,53 @@ test("解不出就返回 undefined:不是本内核写的 / 被改坏了 —— �
   // 别的环境变量在场时不许张冠李戴。
   expect(unitHomePath("systemd", "Environment=A2_HOMEX=/tmp/x\nEnvironment=OTHER=1\n")).toBeUndefined();
   expect(unitHomePath("systemd", "Environment=OTHER=1\nEnvironment=A2_HOME=/tmp/x\n")).toBe("/tmp/x");
+});
+
+// ============================================================================
+// ⓪e:com.a2.panel 还挂着默认浏览器就拒 purge(url-router 05 票)
+// ============================================================================
+// 这一档与上面几档是**两类东西**:上面问"这个路径能不能删",这一条问"删了之后还有没有工具
+// 收拾系统状态"。判据的哲学同源(看得见的才拦),所以放在同一个文件里验。
+//
+// 纪律照旧:reader 是假的 —— **绝不去读跑测试这台机器的默认浏览器**。
+
+/** 两个 scheme 各报一个 bundle id(`null` = 读不出来 = 未能判定)。 */
+function reader(http: string | null, https: string | null): DefaultHandlerReader {
+  return { async read(scheme: HandlerScheme) { return scheme === "http" ? http : https; } };
+}
+
+test("⓪e:两个 scheme 都是 com.a2.panel → 拦(报文要说清挂着哪几个)", async () => {
+  expect(await urlHandlerHold(reader("com.a2.panel", "com.a2.panel"))).toEqual({
+    schemes: ["http", "https"],
+    bundleID: "com.a2.panel",
+  });
+});
+
+test("⓪e:**半个接管照样拦** —— 只有 http 是我们时,一部分链接仍然会来找这个 app", async () => {
+  expect(await urlHandlerHold(reader("com.a2.panel", "com.apple.safari"))).toEqual({
+    schemes: ["http"],
+    bundleID: "com.a2.panel",
+  });
+});
+
+test("⓪e:大小写不敏感 —— LaunchServices 存的是小写形式,配置里未必", async () => {
+  expect(await urlHandlerHold(reader("COM.A2.PANEL", null))).toEqual({
+    schemes: ["http"],
+    bundleID: "com.a2.panel",
+  });
+});
+
+test("⓪e:**读不出来不拦**(未能判定 ≠ 确知挂着)—— 否则 Linux 与没装过 Panel 的机器全被堵死", async () => {
+  expect(await urlHandlerHold(reader(null, null))).toBeUndefined();
+});
+
+test("⓪e:别人当默认浏览器不拦 —— 这条守的只有 com.a2.panel 自己", async () => {
+  expect(await urlHandlerHold(reader("com.apple.safari", "com.google.chrome"))).toBeUndefined();
+});
+
+test("⓪e:reader 抛了也不拦(fail-open 的**诊断**,不是 fail-open 的删除:拒绝面只认确知的事实)", async () => {
+  const throwing: DefaultHandlerReader = {
+    async read() { throw new Error("defaults 炸了"); },
+  };
+  expect(await urlHandlerHold(throwing)).toBeUndefined();
 });

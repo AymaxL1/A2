@@ -183,6 +183,12 @@
       "why": "服务面拒绝之四(17 票):系统代理仍处接管态时 --purge 被拒(退出码 1,「这会儿不该发」),**拒绝时零删除**,指引给出还原的两条路(CLI / 面板)"
     },
     {
+      "file": "response-service-purge-url-handler-taken.json",
+      "schema": "ResponseEnvelope",
+      "kind": "valid",
+      "why": "服务面拒绝之五(url-router 05 票):com.a2.panel 仍是默认浏览器时 --purge 被拒(退出码 1,与上一条同档)—— 还原它的唯一入口 `a2 url-router restore` 正住在要被删掉的 $A2_HOME/bin/a2 里;同样零删除、同样拒绝即指引"
+    },
+    {
       "file": "response-service-purge-non-default-home.json",
       "schema": "ResponseEnvelope",
       "kind": "valid",

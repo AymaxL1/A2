@@ -1,8 +1,12 @@
 #!/bin/sh
 # 行为假件:把 $A2_URL_ROUTER_DEFAULTS_FIXTURE 指的那份 plist 原样吐出来;
 # 没指就非零退出(= LaunchServices 那份库读不出来 → handler 报「未能判定」)。
+#
+# **只用 shell 内建命令**(不调 cat):有些沙盒把被测进程的 PATH 钉死成假 supervisor 那一个目录
+# (`cli-service.test.ts`),那时 `cat` 根本不在 —— 假件会静默失败,而失败的样子恰好是
+# 「读不出来」,于是本该被拦下的用例会安静地通过。假件不该有这种自己坏掉还看不出来的姿势。
 if [ -n "$A2_URL_ROUTER_DEFAULTS_FIXTURE" ] && [ -f "$A2_URL_ROUTER_DEFAULTS_FIXTURE" ]; then
-  cat "$A2_URL_ROUTER_DEFAULTS_FIXTURE"
+  while IFS= read -r line; do printf '%s\n' "$line"; done < "$A2_URL_ROUTER_DEFAULTS_FIXTURE"
   exit 0
 fi
 echo "fake defaults:没有 fixture,当作读不出来" >&2

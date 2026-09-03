@@ -197,6 +197,25 @@ export const ErrorCode = {
    * 到那个 home 去执行、或先把那边收拾干净,这条就成立了。
    */
   servicePurgeHomeMismatch: "service_purge_home_mismatch",
+  /**
+   * `service uninstall --purge` 撞上 **com.a2.panel 仍是 http/https 的默认 handler**
+   * (url-router 05 票)——**拒绝,且一个字节都不删**。
+   *
+   * 与 `service_purge_blocked` 逐条同构,只是挂着的东西换了一样:那条守的是系统代理的还原依据,
+   * 这条守的是**默认浏览器的还原能力** —— `a2 url-router restore` 是把 handler 设回兜底浏览器的
+   * 唯一入口(spec §3),而 purge 要删的 `$A2_HOME/bin/a2` 正是它住的地方。删完之后,
+   * 用户点任何链接都会去拉一个不存在的 app,而收拾它的命令已经不在了。
+   * **绝不"顺手替他还原"**:改系统默认浏览器要过系统弹框(spec §5),那是一次显式动作,
+   * 不能搭在一条卸载命令上顺手做掉。
+   *
+   * 归 1(与 `service_purge_blocked` / `service_purge_home_mismatch` 同档):命令本身完全成立,
+   * 只是**这会儿不该发** —— 跑一次 `a2 url-router restore` 之后同一条命令就成立了。
+   *
+   * **读不出 handler 不算命中**:LaunchServices 读不到条目在一台从没换过默认浏览器的机器上是常态,
+   * 那时的真话是"未能判定"。这条拒绝面只拦**确知挂着**的事实 —— 把"没判出来"也拦下去,
+   * 等于让每一台 Linux 机器与每一台没装过 Panel 的 Mac 都清理不了数据。
+   */
+  servicePurgeUrlHandlerTaken: "service_purge_url_handler_taken",
 
   // MARK: mihomo 托管面(06 票立,14 票重塑)—— 五码全部映射退出码 5(路走通了、事没办成)
   //

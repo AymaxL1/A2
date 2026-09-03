@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "id": "018f7a20-9c31-7d42-b6a8-5e1f3c8d7052",
+  "ok": false,
+  "error": {
+    "code": "service_purge_url_handler_taken",
+    "message": "com.a2.panel 仍是 http 与 https 的系统默认 handler,已拒绝 --purge —— 什么都没删。",
+    "detail": "LaunchServices 此刻登记的 http 与 https 默认 handler 是 com.a2.panel。把它设回兜底浏览器的唯一入口是 `a2 url-router restore`,而它就住在 --purge 要删掉的 $A2_HOME/bin/a2 里 —— 连它一起删掉,用户点任何链接都会去拉一个马上不存在的 app,而收拾这件事的命令已经没了。",
+    "guidance": {
+      "summary": "先显式还原默认浏览器(会弹系统确认框,那是这条 dangerous 命令的确认器),再来 purge。",
+      "steps": [
+        {
+          "description": "把默认浏览器设回兜底浏览器",
+          "command": "a2 url-router restore --json"
+        },
+        {
+          "description": "核实现在的 handler 是谁",
+          "command": "a2 url-router status --json"
+        },
+        {
+          "description": "还原之后再来一次",
+          "command": "a2 service uninstall --purge --json"
+        },
+        {
+          "description": "或者这次就只拆服务(数据与 $A2_HOME 原样留下)",
+          "command": "a2 service uninstall"
+        }
+      ],
+      "context": {
+        "home": "/Users/alice/.a2",
+        "bundleID": "com.a2.panel",
+        "schemes": "http,https"
+      }
+    }
+  }
+}

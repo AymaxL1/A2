@@ -29,11 +29,18 @@ import { readSnapshot, snapshotPath } from "../proxy/system-proxy.ts";
 import type { KernelPaths } from "../runtime/paths.ts";
 import { convergeUnit, removeUnit, settle, SETTLE_POLL_MS } from "./converge.ts";
 import {
+  createDefaultHandlerReader,
+  type DefaultHandlerReader,
+} from "../url-router/handler.ts";
+import { createUrlRouterPorts } from "../url-router/execute.ts";
+import {
   defaultHome,
   nonDefaultHome,
   unsafeHomeOnDisk,
   unsafeHomeShape,
+  urlHandlerHold,
   type PurgeRefusal,
+  type UrlHandlerHold,
 } from "./purge-guard.ts";
 import { copySelfToHome, homeBinPath, resolveSelfBin, SELF_BIN_ENV } from "./self-copy.ts";
 import {
@@ -186,6 +193,12 @@ export interface ServiceUninstallOptions {
    * 装着才拆)、再删掉整个 `$A2_HOME`。不给则行为一字不变(只拆内核那一个 unit)。
    */
   purge?: boolean;
+  /**
+   * 系统默认 handler 的只读读取(05 票的⓪e 用它)。缺省是真的那份(`defaults export`,只读);
+   * 测试注入假件 —— 于是"还挂着就拒 purge"这条能在 CLI 缝上验,
+   * 而**永远不会去读跑测试这台机器的默认浏览器**。
+   */
+  handlers?: DefaultHandlerReader;
 }
 
 /**
@@ -197,7 +210,10 @@ export interface ServiceUninstallOptions {
  *      ⓪a 目标形状(`purge-guard.ts` 的纯判据:不许是 `/`、家目录本身、家目录的祖先、相对路径);
  *      ⓪b 目标是不是符号链接(删链不删树 = 假账,如实拒绝并告诉他真实目标在哪);
  *      ⓪c **盘上那两份 unit 服务的 home 与本次的 `$A2_HOME` 一致**(见 `unitRecordedHome`);
- *      ⓪d 系统代理仍处接管态(见 `purgeBlockedError`)。
+ *      ⓪d 系统代理仍处接管态(见 `purgeBlockedError`);
+ *      ⓪e **com.a2.panel 仍是 http/https 默认 handler**(05 票,见 `urlHandlerTakenError`)——
+ *         排在最后是因为它是唯一一条要**起一次子进程**(`defaults export`)的判据:
+ *         前面几条都是纯字符串/文件判断,几微秒就能拒掉的局面不值得先去问一次系统。
  *      全部放在最前面是因为"删一半再拒"比"直接拒"糟得多:那时内核已经没了,而还原依据还在,人两头够不着。
  *   ① 拆内核 unit(既有路径,含"进程真的没了"的确认);
  *   ② 拆 `com.a2.mihomo`(装着才拆,不在则整条不报 action);两个 unit 都收拾干净,才轮得到删数据 ——
@@ -253,6 +269,12 @@ export async function serviceUninstall(
       if (existsSync(snapshotPath(paths))) {
         return opFailure(await purgeBlockedError(paths));
       }
+      // ⓪e 默认浏览器还挂在 com.a2.panel 上吗(05 票)。同⓪d 的姿势:**只看、不动手**,
+      //    读不出来不拦(那是"未能判定",不是"确知挂着" —— 判据在 `urlHandlerHold`)。
+      const held = await urlHandlerHold(
+        options.handlers ?? createDefaultHandlerReader(createUrlRouterPorts()),
+      );
+      if (held) return opFailure(urlHandlerTakenError(paths, held));
     }
 
     const supervisor = createSupervisor(plan);
@@ -767,6 +789,41 @@ async function purgeBlockedError(paths: KernelPaths): Promise<WireError> {
         { description: "或者这次就只拆服务(数据与 $A2_HOME 原样留下)", command: "a2 service uninstall" },
       ],
       context: { home: paths.home, snapshotPath: file },
+    },
+  };
+}
+
+/**
+ * ⓪e:`--purge` 撞上 **com.a2.panel 仍是 http/https 的默认 handler**(url-router 05 票)。
+ * **拒绝即指引**,而且拒绝时零删除 —— 与⓪d 逐字同构,只是挂着的东西换了一样。
+ *
+ * 为什么不"顺手替他还原了再删":改系统默认浏览器要**过一次系统弹框**(spec §5,那正是这条
+ * dangerous 命令的确认器)。把它塞进一条卸载命令里,等于让用户在一次他以为只是"删文件"的操作里
+ * 撞上两个他没预料到的系统框 —— 而且弹框需要 A2 Panel 在场当执行器,卸载时它多半正要退场。
+ *
+ * 报文说清**挂着哪几个 scheme**:半个接管(只有 http 是我们)与整个接管的下一步是同一条命令,
+ * 但人得知道自己此刻在哪种局面里。
+ */
+function urlHandlerTakenError(paths: KernelPaths, held: UrlHandlerHold): WireError {
+  const schemes = held.schemes.join(" 与 ");
+  return {
+    code: ErrorCode.servicePurgeUrlHandlerTaken,
+    message: `${held.bundleID} 仍是 ${schemes} 的系统默认 handler,已拒绝 --purge —— 什么都没删。`,
+    detail:
+      `LaunchServices 此刻登记的 ${schemes} 默认 handler 是 ${held.bundleID}。` +
+      "把它设回兜底浏览器的唯一入口是 `a2 url-router restore`,而它就住在 --purge 要删掉的 " +
+      "$A2_HOME/bin/a2 里 —— 连它一起删掉,用户点任何链接都会去拉一个马上不存在的 app," +
+      "而收拾这件事的命令已经没了。",
+    guidance: {
+      summary:
+        "先显式还原默认浏览器(会弹系统确认框,那是这条 dangerous 命令的确认器),再来 purge。",
+      steps: [
+        { description: "把默认浏览器设回兜底浏览器", command: "a2 url-router restore --json" },
+        { description: "核实现在的 handler 是谁", command: "a2 url-router status --json" },
+        { description: "还原之后再来一次", command: "a2 service uninstall --purge --json" },
+        { description: "或者这次就只拆服务(数据与 $A2_HOME 原样留下)", command: "a2 service uninstall" },
+      ],
+      context: { home: paths.home, bundleID: held.bundleID, schemes: held.schemes.join(",") },
     },
   };
 }

@@ -1112,6 +1112,132 @@ test("系统代理仍处接管态:purge 结构化拒绝 + 退出码 1,**一个�
 });
 
 /**
+ * ⓪e(url-router 05 票):**A2 Panel 仍是系统默认浏览器时,`--purge` 拒删数据**。
+ *
+ * 与上面那条(系统代理仍处接管态)是同一件事的另一个投影:还原它的唯一入口
+ * `a2 url-router restore` 就住在 `--purge` 要删掉的 `$A2_HOME/bin/a2` 里。
+ *
+ * **`defaults` 是假件**:harness 默认把它指到一执行就失败的兜底假件(于是所有既有 purge 用例
+ * 都落在"未能判定 → 不拦"那一格,与作者本机的默认浏览器无关);这条用例显式换成行为假件,
+ * 喂一份"两个 scheme 都是 com.a2.panel"的 LaunchServices 导出物。
+ * **门禁绝不去读跑测试这台机器的默认浏览器。**
+ */
+test("默认浏览器仍是 A2 Panel:purge 结构化拒绝 + 退出码 1,零删除,指引先跑 url-router restore", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  await writeSelfBin(box, "v1");
+  const installEnv = { ...box.env, ...selfBinEnv(box) };
+  const installed = parseJsonStdout(
+    await runCli(["service", "install", "--copy-to-home", "--json"], { home: box.home, env: installEnv }),
+  );
+  const lsExport = path.join(box.root, "launch-services.plist");
+  await writeFile(
+    lsExport,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>LSHandlers</key>
+  <array>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.a2.panel</string>
+      <key>LSHandlerURLScheme</key>
+      <string>http</string>
+    </dict>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.a2.panel</string>
+      <key>LSHandlerURLScheme</key>
+      <string>https</string>
+    </dict>
+  </array>
+</dict>
+</plist>
+`,
+  );
+  const env = {
+    ...box.env,
+    A2_URL_ROUTER_DEFAULTS: path.resolve(import.meta.dir, "support/fake-url-router/defaults"),
+    A2_URL_ROUTER_DEFAULTS_FIXTURE: lsExport,
+  };
+  const callsBefore = (await supervisorCalls(box)).length;
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env,
+  });
+
+  // 与 service_purge_blocked 同档(1):跑一次 restore 之后,同一条命令就成立了。
+  expect(result.exitCode).toBe(1);
+  const body = parseJsonStdout(result);
+  expect(body.ok).toBe(false);
+  expect(body.error.code).toBe("service_purge_url_handler_taken");
+  expect(body.error.message).toContain("com.a2.panel");
+  const commands = body.error.guidance.steps.map((step: { command?: string }) => step.command);
+  expect(commands).toContain("a2 url-router restore --json");
+  expect(commands).toContain("a2 service uninstall");
+
+  // **拒绝时零删除**:unit 在、home 在、拷贝在、服务照跑、一条改状态的 supervisor 命令都没发。
+  expect(existsSync(box.unitPath)).toBe(true);
+  expect(existsSync(box.home)).toBe(true);
+  expect(existsSync(box.homeBinPath)).toBe(true);
+  expect(isAlive(installed.result.status.pid)).toBe(true);
+  expect((await supervisorCalls(box)).slice(callsBefore)).toEqual([]);
+
+  // 金标是这条拒绝的手写镜像(与 purge-blocked 那条同一种对账:静态文本逐字、步骤同序、context 键集)。
+  const golden = await Bun.file(
+    path.resolve(import.meta.dir, "../contract/golden/response-service-purge-url-handler-taken.json"),
+  ).json();
+  expect(body.error.code).toBe(golden.error.code);
+  expect(body.error.message).toBe(golden.error.message);
+  expect(body.error.detail).toBe(golden.error.detail);
+  expect(body.error.guidance.summary).toBe(golden.error.guidance.summary);
+  expect(commands).toEqual(
+    golden.error.guidance.steps.map((step: { command?: string }) => step.command),
+  );
+  expect(Object.keys(body.error.guidance.context).sort()).toEqual(
+    Object.keys(golden.error.guidance.context).sort(),
+  );
+});
+
+test("默认浏览器**不是** A2 Panel(或读不出来):这道门让开,purge 照常走完", async () => {
+  const box = (sandbox = await makeSandbox("launchd"));
+  const lsExport = path.join(box.root, "launch-services.plist");
+  await writeFile(
+    lsExport,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>LSHandlers</key>
+  <array>
+    <dict>
+      <key>LSHandlerRoleAll</key>
+      <string>com.apple.safari</string>
+      <key>LSHandlerURLScheme</key>
+      <string>http</string>
+    </dict>
+  </array>
+</dict>
+</plist>
+`,
+  );
+  await mkdir(box.home, { recursive: true });
+  await writeFile(path.join(box.home, "settings.json"), "{}\n");
+  const env = {
+    ...box.env,
+    A2_URL_ROUTER_DEFAULTS: path.resolve(import.meta.dir, "support/fake-url-router/defaults"),
+    A2_URL_ROUTER_DEFAULTS_FIXTURE: lsExport,
+  };
+
+  const result = await runCli(["service", "uninstall", "--purge", "--json"], {
+    home: box.home,
+    env,
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(box.home)).toBe(false);
+});
+
+/**
  * 18 票(用户裁定):**`--purge` 只对缺省 `~/.a2` 生效**。
  *
  * 17 票的护栏是**地板**(挡 `/`、家目录、`/Users` 那几种"绝不可能"的形状),挡不住

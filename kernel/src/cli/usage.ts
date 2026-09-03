@@ -94,7 +94,7 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
   自定义 home 多半另有用途(测试沙盒、多份配置、指向共享目录),内核不替你判断哪一份该整棵删掉。
   要清自定义 home 请自己 rm -rf(拒绝报文里给出那条路径);服务本身照常可以 a2 service uninstall。
 
-  动手之前有五道门,任何一道不过都**当场拒绝、一个字节都不删**:
+  动手之前有六道门,任何一道不过都**当场拒绝、一个字节都不删**:
     · 不是缺省 home(service_purge_unsafe_home + context.reason=non_default_home,6):见上。
     · 目标形状不成立(service_purge_unsafe_home,6):缺省 home **是一根符号链接** —— 符号链接上的
       rm -rf 只删链不删树,报"删干净了"是假账。(同码还挡 /、家目录、家目录的上级几档:
@@ -104,6 +104,9 @@ export const SERVICE_USAGE = `a2 service —— 常驻服务的显式安装(系�
     · **系统代理仍处接管态**(service_purge_blocked,1):接管快照 $A2_HOME/system-proxy.json 是
       还原的唯一依据,连它一起删就再也还原不回去了。先 a2 proxy off(或面板的「关闭系统代理(还原)」)
       再来 —— 还原永远是显式命令,卸载不替你做。
+    · **A2 Panel 仍是 http/https 默认浏览器**(service_purge_url_handler_taken,1):把它设回去的
+      唯一入口 a2 url-router restore 就住在要被删掉的 $A2_HOME/bin/a2 里。先 a2 url-router restore
+      (会弹系统确认框)再来。读不出系统 handler 时**不拦** —— 那是"未能判定",不是"确知挂着"。
     · 两个 unit 里任何一个"卸下了但进程还在",也停在那一步(service_operation_failed,5),数据不删。
   从 $A2_HOME/bin/a2 那份拷贝上跑它是合法的:删掉正在执行的自身在 macOS/Linux 上没问题
   (inode 活到进程退出),命令照常跑完、退出码 0。
@@ -130,8 +133,8 @@ status 的三态(机读字段 result.state):
   A2_SELF_BIN          覆写 --copy-to-home 要拷的那份可分发单文件。仅测试与诊断用
 
 退出码:0 成功
-       1 用法错,以及「这会儿/这儿不该发」(service_purge_blocked、service_purge_home_mismatch ——
-         命令没错,把状态弄对或换个 home 再原样重来)
+       1 用法错,以及「这会儿/这儿不该发」(service_purge_blocked、service_purge_home_mismatch、
+         service_purge_url_handler_taken —— 命令没错,把状态弄对或换个 home 再原样重来)
        5 操作失败(supervisor 报错、装完没跑起来、卸下了但进程还在)
        6 这条请求在这台机器 / 这个 bin / 这个 $A2_HOME 上根本不成立(本平台无已支持的 supervisor;
          源码态的 a2 用了 --copy-to-home;--purge 的目标不是缺省 ~/.a2、或者是一根符号链接)`;

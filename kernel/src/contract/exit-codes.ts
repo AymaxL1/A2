@@ -52,6 +52,10 @@ export function exitCodeForErrorCode(code: string): number {
     // 同一档(17 票 CR 尾款):purge 站错了 home。命令没错、什么都没做,到那个 home 去执行
     // (或先把那边收拾干净)这条就成立了 —— 与上面两条是同一种"此刻/此地不该发"。
     case ErrorCode.servicePurgeHomeMismatch:
+    // 同一档(url-router 05 票):`--purge` 撞上 com.a2.panel 仍是默认 handler。与上面那条
+    // (系统代理仍处接管态)逐字同构 —— 命令没错、什么都没做,跑一次 `a2 url-router restore`
+    // 之后同一条命令就成立了。
+    case ErrorCode.servicePurgeUrlHandlerTaken:
       return ExitCode.usage;
     // dangerous 被拒的两种:没人能替你确认(第①层默拒 / 在途降级)、有人看了但不同意(第③层)。
     case ErrorCode.confirmationUnavailable:

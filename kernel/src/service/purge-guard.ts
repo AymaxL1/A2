@@ -23,11 +23,23 @@
 //
 // 三层都返回「拒绝原因」而不是布尔值:调用方要把原因翻成人话与指引(拒绝即指引),
 // 而机读面要拿它当分支依据 —— 一个 true/false 两头都不够用。
+//
+// **本文件末尾还有一条与上面三层无关的拒绝面**(url-router 05 票的 `urlHandlerHold`):
+// 它问的不是"这个路径能不能删",而是"删了之后还有没有工具收拾系统状态" —— 与 `manager.ts` 里
+// 那条「系统代理仍处接管态」(⓪d)同族。放在这个文件里是因为它们是同一类东西:
+// **purge 的前置拒绝面**,而不是因为它们的判据同源。
 
 import { lstat, readlink, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME_DIR_NAME } from "../runtime/paths.ts";
+import {
+  A2_PANEL_BUNDLE_ID,
+  HANDLER_SCHEMES,
+  sameBundleID,
+  type DefaultHandlerReader,
+  type HandlerScheme,
+} from "../url-router/handler.ts";
 
 /**
  * 拒绝原因(机读词表)。进 `guidance.context.reason`,agent 据此分支。
@@ -158,6 +170,44 @@ export async function unsafeHomeOnDisk(home: string): Promise<PurgeRefusal | und
       : `${home} 是一根符号链接,而它指向的 ${where} 已经不在了 —— 删掉这根链既清不掉数据,也证明不了数据在哪。`,
     ...(resolved === undefined ? {} : { linkTarget: resolved }),
   };
+}
+
+// MARK: - 第⓪e 层(url-router 05 票):A2 Panel 还挂着默认浏览器
+
+/** 还挂着的那些 scheme(`bundleID` 恒是 `com.a2.panel` —— 拦的只有它)。 */
+export interface UrlHandlerHold {
+  schemes: HandlerScheme[];
+  bundleID: string;
+}
+
+/**
+ * **com.a2.panel 仍是 http/https 默认 handler 时,拒绝 `--purge`**(05 票裁定第 2 条的内核那一半)。
+ *
+ * 与⓪d(系统代理仍处接管态)是同一件事的另一个投影:purge 要删的 `$A2_HOME` 里住着
+ * `bin/a2`,而 `a2 url-router restore` —— 把默认浏览器设回去的**唯一入口** —— 正是它提供的。
+ * 删完之后,用户点任何链接都会去拉一个可能已经不在的 app,而收拾它的命令没了。
+ *
+ * **两条路各兜一半**:面板卸载序列的 restore 打头是壳侧编排(用户走菜单那条路),
+ * 而这一条守的是 CLI 野路径(`a2 service uninstall --purge` 直接敲)。两处都拦,
+ * 因为它们是两条真实存在的入口,不是同一条路的两次检查。
+ *
+ * **任一 scheme 挂着就拦**(不是"两个都挂着才拦"):半个接管照样意味着一部分链接会来找这个 app。
+ * 判据用 `sameBundleID`(大小写不敏感)——LaunchServices 存的是小写形式。
+ *
+ * **读不出来(`null`)不拦**:那是"未能判定",不是"确知挂着"。Linux、没装过 Panel 的 Mac、
+ * `defaults` 被换掉的机器都会落在这一格,把它们一起拦下去等于让 purge 在多数机器上永远失效
+ * —— 与 17 票「先看后删」的判据哲学一致:**看得见的才拦**。
+ */
+export async function urlHandlerHold(
+  reader: DefaultHandlerReader,
+): Promise<UrlHandlerHold | undefined> {
+  const held: HandlerScheme[] = [];
+  for (const scheme of HANDLER_SCHEMES) {
+    const current = await reader.read(scheme).catch(() => null);
+    if (sameBundleID(current, A2_PANEL_BUNDLE_ID)) held.push(scheme);
+  }
+  if (held.length === 0) return undefined;
+  return { schemes: held, bundleID: A2_PANEL_BUNDLE_ID };
 }
 
 /** 去掉尾随分隔符(`/Users/` 与 `/Users` 是同一个地方;根除外,那本来就是一个分隔符)。 */
