@@ -139,6 +139,17 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
     /// 13 票:`a2 about` 的机读面(GPL 义务的必有落点)。
     case aboutResult = "AboutResult"
 
+    // url-router 施工 02 票的五条能力、三种 result 加两个嵌套形状。
+    // **壳在这条链上确实有份**(03 票起它会调 `url-router.route`),但它读的只有「成没成」——
+    // 见下面逐条的理由。这一族的账在 03 票补上(02 票登记了契约却没登记镜像范围,门禁当场红,
+    // 那正是这张表存在的意义)。
+    case urlRouterConfigView = "UrlRouterConfigView"
+    case urlRouterHandler = "UrlRouterHandler"
+    case urlRouterStatusResult = "UrlRouterStatusResult"
+    case urlRouterDecideResult = "UrlRouterDecideResult"
+    case urlRouterRouteResult = "UrlRouterRouteResult"
+    case urlRouterHandoffResult = "UrlRouterHandoffResult"
+
     /// 为什么不镜像。**每一条都要能经得起问**:理由是"壳不消费"或"CLI 自己的输出面",
     /// 不是"来不及写"。真到 10 票发现壳要投影某一条,就把它挪进 `A2MirroredContract` 并补断言。
     public var reason: String {
@@ -186,6 +197,18 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             return "**内核 ↔ 插件**那条接口(exec 一次一调)的报文:两端都是内核与插件子进程,壳不在这条链上,一个字节都不经手。它们登记成契约是为了让写插件的 agent 有机器可读的规格,不是为了给 Swift 客户端消费。"
         case .pluginRecord, .pluginListResult, .pluginChangeResult:
             return "`a2 plugin add|list|remove` 的 CLI 机读面。壳不装插件也不列插件 —— 它只需要知道「能调的东西变了」,那走已镜像的 `CapabilitySetEvent`(快照 capabilities 同一形状)。"
+        case .urlRouterStatusResult, .urlRouterConfigView, .urlRouterHandler:
+            // 壳**有意不读整份配置**:它降级兜底只需要一个 bundle id,而那一个字段已经在
+            // **已镜像**的 `KernelSnapshot.urlRouter` 里(03 票)。镜像 status 的全份配置视图
+            // 等于把分流域名表、Roxy 参数一并搬进壳 —— 那正是 03 四条硬边界要挡的东西
+            // (知道得越少,越不可能"顺手判一下")。
+            return "`url-router.status` 的机读面(CLI 与 agent 的诊断面)。壳只需要「兜底浏览器是谁」这**一个**事实,而它由快照的 `urlRouter` 节直送(已镜像);把整份配置视图搬进壳反而会给它多余的知识 —— 03 票四条硬边界正是要它对分流规则一无所知。"
+        case .urlRouterDecideResult, .urlRouterRouteResult:
+            // 03 票的壳确实会调 `url-router.route`,但它对 output **一个字段都不看**:
+            // 唯一的分支是「内核接走了没有」,那来自包封的 ok/error(已镜像的 ResponseEnvelope)。
+            return "`url-router.decide` / `url-router.route` 的 output。壳 03 票起会调 route,但**只看包封的成败**(那是已镜像的 `ResponseEnvelope`)—— decision/action/steps 是给人和 agent 看的,壳读了就等于开始关心「内核怎么判的」,而它不该关心。"
+        case .urlRouterHandoffResult:
+            return "`url-router.takeover` / `url-router.restore` 的 output(dangerous 那两条)。壳作为确认器呈现的是**确认请求**(已镜像),作为机械执行器收的是 04 票的执行指令帧(另一族);这条 result 是发起方(CLI/agent)的回执,壳不在它的读者里。"
         case .aboutResult:
             return "`a2 about` 的 CLI 机读面,**不经协议**(无 op、不走 UDS —— 义务落点不许依赖 daemon 在不在)。壳侧的对位物是 `A2AboutWindow.declaration` 那份静态文本:它有意**不**向内核请求任何东西(关掉内核、没装内核,关于页照样打得开),所以壳这边没有可解的报文,镜像它只会多一处会漂的类型。"
         }
@@ -213,5 +236,7 @@ public enum A2ContractCoverage {
             "嵌套类型:它只作为失败包封的 error 字段出现,由 12 份 ResponseEnvelope 合法样本 + 2 份非法样本传递覆盖(其中 invalid-response-error-missing-message 正是冲它去的)。单造一份等于把同一批字节再抄一遍。",
         "KernelEvent":
             "嵌套类型:它只作为推送帧的 event 字段出现,由 6 份 PushEnvelope 样本(六族各一)+ 1 份未知 kind 的非法样本传递覆盖。",
+        "UrlRouterConfigView":
+            "嵌套类型:它只作为 `UrlRouterStatusResult.config` 出现,由那条 result 的合法样本 + 非法样本(invalid-url-router-status-half-merged-config)传递覆盖。单造一份等于把同一批字节再抄一遍 —— 与 WireError 同一条口径。",
     ]
 }
