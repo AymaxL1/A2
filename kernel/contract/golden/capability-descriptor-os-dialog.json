@@ -1,0 +1,8 @@
+{
+  "id": "url-router.takeover",
+  "risk": "dangerous",
+  "summary": "把 com.a2.panel 设为 http+https 的系统默认 handler(确认由系统弹框承载)",
+  "parameters": [],
+  "cliAlias": ["url-router", "takeover"],
+  "confirmation": "os-dialog"
+}

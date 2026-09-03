@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "id": "018f3b1c-5555-7c3e-9f2b-1d4e5f6a7b8d",
+  "push": true,
+  "event": {
+    "kind": "url-router-execute",
+    "at": "2026-09-04T02:15:00.000Z",
+    "command": {
+      "id": "018f3b1c-4444-7c3e-9f2b-1d4e5f6a7b8d",
+      "op": "set-default-handler",
+      "schemes": ["http", "https"],
+      "bundleID": "com.a2.panel",
+      "timeoutSeconds": 120
+    }
+  }
+}

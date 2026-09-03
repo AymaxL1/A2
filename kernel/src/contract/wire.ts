@@ -261,7 +261,13 @@ export const ErrorCode = {
   /** 指名道姓的那个插件没登记过(`a2 plugin remove` 的对象不存在)。 */
   unknownPlugin: "unknown_plugin",
 
-  // MARK: URL 分流面(url-router 施工 02 票)—— 两码,都归退出码 5(路走通了、事没办成)
+  // MARK: URL 分流面(url-router 施工 02 票立,04 票接执行器)
+  //
+  // (退场过一条:`url_router_executor_unwired` —— 02 票为「执行器还没接线」造的临时码。
+  //  04 票把那条链接上之后它**永远不会再出现**,而留一条不可达的错误码等于让 agent 为一个
+  //  不存在的分支写代码 —— 与 mihomo 那两条退场码同一条口径,不是"只增不改"的例外,
+  //  是"这条分支本身没了"。它的三条真实出口现在是:执行器不在场 → `confirmation_unavailable`;
+  //  人点了取消 → `confirmation_denied`;120s 没人点 → `confirmation_timeout`。)
 
   /**
    * 决策做完了、降级链也走完了,但最后那步 `open` 没能把链接交出去
@@ -272,14 +278,23 @@ export const ErrorCode = {
    */
   urlRouterOpenFailed: "url_router_open_failed",
   /**
-   * `takeover` / `restore` 的**非幂等**那一路:当前 handler 不是目标,而真正的执行器
-   * (壳的机械执行器 + 执行指令帧,spec §5/§6.3)要到 04 票才接线。
+   * `takeover` / `restore` 走完了整条执行链,但**只成了一半**:http 与 https 是两次独立的系统弹框,
+   * 用户完全可能同意一个、取消另一个(spec §5 明写的一种收场)。
    *
-   * 归 5 不归 6:这条请求完全成立、参数也没错 —— 内核确实走到了该动手的地方,
-   * 只是这一版的内核还没有能动手的那只手。agent 拿到它该做的是转告"这条路本版未通",
-   * 不是改参数重试(那是 6 的语义)。
+   * 为什么它值一个自己的码而不是并进 `capability_failed`:这一档的下一步是**补齐另一半**
+   * (报文里的 `perScheme` 指名道姓说了缺哪个),而不是"这件事没办成、换个参数再来"。
+   * 归 5:路走通了、事只办成了一半 —— 半成品也是"执行了但没到位",不是参数错。
    */
-  urlRouterExecutorUnwired: "url_router_executor_unwired",
+  urlRouterPartialTakeover: "url_router_partial_takeover",
+  /**
+   * `url-router.executor.report` 指向的那条执行指令不存在,或**已经收场了**
+   * (超时了 / 同一条指令已经回过一次 / 内核已停)。
+   *
+   * 与 `confirmation_unknown` 逐字同构 —— 它们是同一件事在两条链上的投影:
+   * **首个回话收场胜出**,迟到的那一条拿到的是"没有这条待办了",而不是把已经收场的结果改写掉。
+   * 归 6(同 `confirmation_unknown`):这条报文本身不成立。
+   */
+  urlRouterExecutionUnknown: "url_router_execution_unknown",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
@@ -338,6 +353,14 @@ export const Op = {
   rolesRegister: "roles.register",
   /** 确认器对一条待确认请求做决定(批准/拒绝)。**只有注册过 confirm-agent 的连接能发**。 */
   confirmationsResolve: "confirmations.resolve",
+  /**
+   * 机械执行器回报一条执行指令帧的结果(url-router 施工 04 票)。
+   * **只有注册过 `url-router-executor` 的连接能发**,与 `confirmations.resolve` 逐条同构。
+   *
+   * 为什么不做成能力:与那条同理 —— 它没有独立语义,只是内核发起的那次编排的下半程,
+   * 而且它的合法性取决于"这句话是哪条连接说的"(角色是连接的属性)。
+   */
+  urlRouterExecutorReport: "url-router.executor.report",
 
   // MARK: 插件面(11 票)—— 装载零闸,仲裁只在调用层
   //
@@ -494,6 +517,25 @@ export const ParameterTypeSchema = z.enum(["string", "number", "boolean", "objec
 export type ParameterType = z.infer<typeof ParameterTypeSchema>;
 
 /**
+ * dangerous 能力的**确认模式**(url-router 施工 04 票新增,取值即契约)。
+ *
+ *   * `confirm-agent` —— **缺省,也是绝大多数能力唯一该用的那个**:ADR 0005 第 4 条那三层
+ *     (无确认器默拒 → 拒绝即指引 → 带外确认)。人在**菜单栏壳的确认框**上点头。
+ *   * `os-dialog` —— 确认由**操作系统自己的弹框**承载:内核把执行指令下发给壳,壳调系统 API,
+ *     OS 强制呈现一个 agent 伪造不了的框,结果经 completion 回到内核。此时再叠一层 confirm-agent
+ *     就是**双确认**(04 决策底账明确否掉的方案),所以这一档**跳过**那三层,
+ *     由执行指令帧的往返充当确认仪式本身。
+ *
+ * **它不是"免确认"的后门,而是"确认换了个地方"**:ADR 0015 把可复用的判据写死成三条
+ * (OS 强制呈现、agent 伪造不了、结果可被发起方感知),三条缺一不可 —— 缺一条就只能用
+ * `confirm-agent`。眼下满足三条的只有 `url-router.takeover` / `url-router.restore`
+ * (`NSWorkspace.setDefaultApplication(at:toOpenURLsWithScheme:)`,01 研究票钉死),
+ * **门禁有断言把这份名单钉死**:别的 dangerous 能力若被标成 os-dialog,测试当场红。
+ */
+export const ConfirmationModeSchema = z.enum(["confirm-agent", "os-dialog"]);
+export type ConfirmationMode = z.infer<typeof ConfirmationModeSchema>;
+
+/**
  * 单个参数的声明。**数据驱动**(而不是把 zod schema 塞进 manifest):
  * 插件(11 票)只能用 JSON 描述自己的工具,能力面必须能被纯数据表达,内置能力与插件才是同一套东西。
  */
@@ -522,6 +564,12 @@ export const CapabilityDescriptorSchema = z.object({
   parameters: z.array(ParameterSpecSchema),
   /** 域子命令写法(有序 token;缺省 = 这条能力只能用 `capabilities call` 调)。 */
   cliAlias: z.array(z.string().min(1)).min(1).optional(),
+  /**
+   * 这条 dangerous 能力的**确认由谁承载**(url-router 施工 04 票)。
+   * 缺省(不带这个字段)= `confirm-agent`,即现状:走 ADR 0005 第 4 条那三层。
+   * 只对 `risk: "dangerous"` 有意义;别的档带了也不改变任何行为(它们本来就直通)。
+   */
+  confirmation: ConfirmationModeSchema.optional(),
 });
 export type CapabilityDescriptor = z.infer<typeof CapabilityDescriptorSchema>;
 
@@ -1254,12 +1302,63 @@ export const UrlRouterRouteResultSchema = z.object({
 });
 export type UrlRouterRouteResult = z.infer<typeof UrlRouterRouteResultSchema>;
 
+/** 能被接管的两个 scheme —— 只有这两个(spec §3/§5)。 */
+export const UrlRouterSchemeSchema = z.enum(["http", "https"]);
+export type UrlRouterScheme = z.infer<typeof UrlRouterSchemeSchema>;
+
 /**
- * `url-router.takeover` / `url-router.restore` 的 result。
+ * 一个 scheme 上系统 API 回来的原样错误(04 票)。
  *
- * **02 票只产出幂等那一条**(`already: true`:当前 handler 已经是目标,一个系统调用都没发)。
- * 真正的编排(拉起壳、下发执行指令帧、等两次系统弹框)归 04 票 —— 在那之前,非幂等的调用返回
- * `url_router_executor_unwired`。字段只增不改:04 票会往这条上加 `outcome` / `perScheme`。
+ * **三个字段是 `NSError` 的三件套,原样序列化、不翻译、不归类**:壳是机械执行器,
+ * 它没有资格判断"这个 domain/code 是用户取消还是别的什么" —— 那种判断一旦写进壳,
+ * 就等于让壳替内核决定一次 dangerous 调用的收场。真值只有一份,在内核的映射表里。
+ *
+ * (spec §11 遗留项:用户取消时这三个字段的实际取值要在 06 票的真机弹框旅程里回填 ——
+ *  在那之前**没有人编造它**,内核的映射靠壳自报的 `outcome`,不靠猜 domain/code。)
+ */
+export const UrlRouterExecutorErrorSchema = z.object({
+  /** `NSError.domain` 原文。 */
+  domain: z.string().min(1),
+  /** `NSError.code` 原值(可能是负数)。 */
+  code: z.number().int(),
+  /** `localizedDescription` 原文。 */
+  description: z.string().min(1),
+});
+export type UrlRouterExecutorError = z.infer<typeof UrlRouterExecutorErrorSchema>;
+
+/** 单个 scheme 的执行结果:成了没有,没成带上原样错误。 */
+export const UrlRouterSchemeReportSchema = z.object({
+  ok: z.boolean(),
+  /** `ok: false` 时的原样 NSError(`ok: true` 时**没有这个字段**)。 */
+  error: UrlRouterExecutorErrorSchema.optional(),
+});
+export type UrlRouterSchemeReport = z.infer<typeof UrlRouterSchemeReportSchema>;
+
+/**
+ * 逐 scheme 的执行结果表。
+ *
+ * 两个成员**都是可选的**,这是真话而不是宽松:壳可能在解析目标 app 那一步就失败了
+ * (一个系统调用都没发,于是一个 scheme 都没有结果),也可能第一个 scheme 就撞上错误。
+ * 缺席 = 「这个 scheme 压根没轮到」,与 `{ok:false}`(轮到了、没成)是两件事。
+ */
+export const UrlRouterPerSchemeSchema = z.object({
+  http: UrlRouterSchemeReportSchema.optional(),
+  https: UrlRouterSchemeReportSchema.optional(),
+});
+export type UrlRouterPerScheme = z.infer<typeof UrlRouterPerSchemeSchema>;
+
+/**
+ * `url-router.takeover` / `url-router.restore` 的 result(04 票补齐执行那一半)。
+ *
+ * 两种成功收场,由 `outcome` 分辨:
+ *   * `already` —— 当前 handler 已经是目标,**一个系统调用都没发、一个框都没弹**(spec §3 幂等判据);
+ *   * `confirmed` —— 执行指令帧走完一个来回,两个 scheme 都成了。
+ * 别的收场(拒绝 / 超时 / 半成 / 执行不了)一律走**失败包封**,不在这条 result 里 ——
+ * 「成了」与「没成」不共用一个形状,agent 就不必先读 result 再判断它是不是其实失败了。
+ *
+ * **`handler` 是执行之后现读的一份**:LaunchServices 的登记可能比 completion 回调晚一步,
+ * 所以它未必立刻就等于目标 —— 本次执行的直接结果以 `outcome` / `perScheme` 为准,
+ * `handler` 说的是"内核此刻读到的系统现状"。两者都如实给,不替谁圆场。
  */
 export const UrlRouterHandoffResultSchema = z.object({
   /** 要成为 http+https 默认 handler 的那个 bundle id。 */
@@ -1267,8 +1366,87 @@ export const UrlRouterHandoffResultSchema = z.object({
   /** 当前 handler 已经是目标 —— 幂等直通,不弹框(spec §3「幂等判据」)。 */
   already: z.boolean(),
   handler: UrlRouterHandlerSchema,
+  /** 这一次是怎么收场的(04 票新增;02 票的样本不带它,`already: true` 即等价)。 */
+  outcome: z.enum(["already", "confirmed"]).optional(),
+  /** 逐 scheme 的执行结果(`already` 那一路没有 —— 它什么都没执行)。 */
+  perScheme: UrlRouterPerSchemeSchema.optional(),
 });
 export type UrlRouterHandoffResult = z.infer<typeof UrlRouterHandoffResultSchema>;
+
+// MARK: - 执行指令帧与回执(url-router 施工 04 票,spec §6.3)
+//
+// 这一对是**内核 ↔ 机械执行器**之间的全部协议。它与确认器那一对(`ConfirmationRequest` /
+// `ConfirmationResolveParams`)形状同构、纪律同源,但**语义完全不同**,值得写清楚:
+//
+//   * 确认器收到的是「有人要干这件事,你替人看一眼」——它的回答是**决定**;
+//   * 执行器收到的是「去把这件事做了」——它的回答是**结果**。执行器**零判断**:
+//     唯一合法反应是照帧上写的调系统 API,再把 completion 原样回传。它不许挑 scheme、
+//     不许改 bundleID、不许自己决定要不要弹框(弹不弹是 OS 的事)。
+//
+// 于是壳里那条边界很好守:执行器的代码里**没有一个 if 是关于"该不该做"的**,只有"做完了没有"。
+
+/** 执行指令帧的动作词表。目前只有一条 —— 白名单是有意的:壳只认得它认得的那几件事。 */
+export const UrlRouterExecuteOpSchema = z.enum(["set-default-handler"]);
+export type UrlRouterExecuteOp = z.infer<typeof UrlRouterExecuteOpSchema>;
+
+/**
+ * 内核 → 壳的**执行指令帧**(spec §6.3)。只推给注册了 `url-router-executor` 的连接。
+ *
+ * `id` 是 spec 那张表之外唯一多出来的字段,而它是必须的:同一条连接上可能有不止一次编排在途
+ * (takeover 与 restore 撞在一起、两个 agent 同时发),没有 id 就没法说清"这条回执是哪条指令的"——
+ * 与 `ConfirmationRequest.id` 同一个理由、同一种用法(回执带着它原样送回来)。
+ */
+export const UrlRouterExecuteCommandSchema = z.object({
+  /** 这一次执行的 id;回执必须原样带回来(首个回话收场胜出)。 */
+  id: z.string().min(1),
+  op: UrlRouterExecuteOpSchema,
+  /** 要设的那些 scheme(spec §5:http 与 https 各弹一次框是 OS 行为,如实等两次)。 */
+  schemes: z.array(UrlRouterSchemeSchema).min(1),
+  /** 要成为这些 scheme 默认 handler 的 bundle id。 */
+  bundleID: z.string().min(1),
+  /** 内核这一侧的等待窗(秒)。**壳不自己设第二个钟** —— 一件事只该有一个人计时。 */
+  timeoutSeconds: z.number().int().positive(),
+});
+export type UrlRouterExecuteCommand = z.infer<typeof UrlRouterExecuteCommandSchema>;
+
+/**
+ * 壳自报的收场词。
+ *
+ * **本版的壳只会产出 `confirmed` 与 `error`**,这是如实记下的边界而不是遗漏:
+ * 分辨"用户点了取消"要靠 completion 那个 NSError 的 domain/code,而那两个值要到 06 票的
+ * 真机弹框旅程才拿得到(spec §11 遗留项)—— 在那之前**没有人编造它**。
+ * `denied` / `timeout` 两个取值先立在契约里、内核侧的映射也已就位并有断言,
+ * 06 回填之后壳只需在一处加一个判断,协议一个字都不用改。
+ */
+export const UrlRouterExecutionOutcomeSchema = z.enum([
+  "confirmed",
+  "denied",
+  "timeout",
+  "error",
+]);
+export type UrlRouterExecutionOutcome = z.infer<typeof UrlRouterExecutionOutcomeSchema>;
+
+/** `url-router.executor.report` 的 params:壳 → 内核的回执。 */
+export const UrlRouterExecutorReportParamsSchema = z.object({
+  /** 对应指令帧的 `id`。 */
+  execution: z.string().min(1),
+  outcome: UrlRouterExecutionOutcomeSchema,
+  perScheme: UrlRouterPerSchemeSchema,
+  /** 一句话说明(如「目标 app 不存在」)。**不替代 perScheme 里的原样 NSError**。 */
+  error: z.string().min(1).optional(),
+});
+export type UrlRouterExecutorReportParams = z.infer<typeof UrlRouterExecutorReportParamsSchema>;
+
+/**
+ * `url-router.executor.report` 的 result。`accepted` 恒 true ——
+ * 回执没被采纳的情形一律走失败包封(`url_router_execution_unknown` / `role_not_registered`),
+ * 与 `ConfirmationResolveResult.settled` 同一条口径。
+ */
+export const UrlRouterExecutorReportResultSchema = z.object({
+  execution: z.string().min(1),
+  accepted: z.literal(true),
+});
+export type UrlRouterExecutorReportResult = z.infer<typeof UrlRouterExecutorReportResultSchema>;
 
 /**
  * 快照里的 `urlRouter` 节(url-router 施工 03 票,spec §6.2 的**最小集**)。
@@ -1304,13 +1482,20 @@ export type UrlRouterSnapshot = z.infer<typeof UrlRouterSnapshotSchema>;
 // 只有一条:对端 UID(`getpeereid`/`SO_PEERCRED`,见 `daemon/peer.ts`),它进审计、进快照。
 
 /**
- * 长连接上可注册的角色。取值即契约,**逐字取自 spec 与 ADR 0005/0008**(`confirm-agent` / `subscriber`):
+ * 长连接上可注册的角色。取值即契约,前两个**逐字取自 spec 与 ADR 0005/0008**:
  *   * `confirm-agent` —— 确认器:替人类出面呈现 dangerous 确认并安全回传决定;
- *   * `subscriber` —— 订阅者:只收状态投影,不参与仲裁。
+ *   * `subscriber` —— 订阅者:只收状态投影,不参与仲裁;
+ *   * `url-router-executor` —— **机械执行器**(url-router 施工 04 票):收内核下发的执行指令帧、
+ *     调系统 API、把 completion 原样回传。**零判断**(ADR 0008 第 5 条修订的第②条受限例外)。
  *
- * 一条连接可以两个角色都注册(菜单栏壳就是这样:既确认也投影);重复注册同一角色是幂等的。
+ * 为什么它是**第三个角色**而不是复用 confirm-agent:两者的权限完全不同 ——
+ * 确认器能替人做决定(`confirmations.resolve`),执行器只能回报自己执行的结果
+ * (`url-router.executor.report`),它**没有任何批准 dangerous 调用的能力**。
+ * 角色分开,这条边界才在协议层成立,而不是靠壳自觉。
+ *
+ * 一条连接可以多个角色都注册(菜单栏壳就是这样:既确认、又投影、还执行);重复注册同一角色是幂等的。
  */
-export const ClientRoleSchema = z.enum(["confirm-agent", "subscriber"]);
+export const ClientRoleSchema = z.enum(["confirm-agent", "subscriber", "url-router-executor"]);
 export type ClientRole = z.infer<typeof ClientRoleSchema>;
 
 /**
@@ -1424,6 +1609,13 @@ export const AuditActionSchema = z.enum([
   "confirmer_left",
   "subscriber_joined",
   "subscriber_left",
+  /**
+   * 机械执行器进/离场(url-router 施工 04 票)。与确认器那两条同等重要:
+   * 「执行器什么时候在」正是 takeover/restore 能不能走通的那条运行时事实,
+   * 而它离场会让在途的执行指令**立即**按不可用收尾(在场 = 长连接)。
+   */
+  "executor_joined",
+  "executor_left",
   /**
    * 对端 UID 与内核不符,连接被拒。**留痕的意义在这条上最大** ——
    * 它是"有别的用户在敲这个 socket"的唯一记录。
@@ -1667,10 +1859,12 @@ export type KernelSnapshot = z.infer<typeof KernelSnapshotSchema>;
  * 增量推送的事件族(按 `kind` 判别)。**推送对象各不相同**,这是协议的一部分:
  *   * `confirmation` —— **只推给 confirm-agent**(带 input);
  *   * `confirmation-pending` —— **只推给发起那次调用的那条连接**(告诉它"我转给人了,最多等这么久");
- *   * 其余 —— 推给全体已注册连接(确认器 + 订阅者)。
+ *   * `url-router-execute` —— **只推给 url-router-executor**(带"去改系统状态"的指令);
+ *   * 其余 —— 推给全体已注册连接(确认器 + 订阅者 + 执行器)。
  *
  * 11 票加了第七族 `capability-set`(能力全集变了)。它与 `capability` 一字之差却是两件事:
  * 后者说"有人改了状态",前者说"**能调的东西本身变了**"。
+ * url-router 施工 04 票加了第八族 `url-router-execute`(执行指令帧)。
  */
 export const KernelEventSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -1707,6 +1901,18 @@ export const KernelEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("capability-set"),
     at: z.string().min(1),
     capabilities: CapabilitySetEventSchema,
+  }),
+  z.object({
+    /**
+     * **执行指令帧**(url-router 施工 04 票,spec §6.3)——**只推给 `url-router-executor`**。
+     *
+     * 它与 `confirmation` 是仅有的两条**按角色**定向的推送,理由也同源:
+     * 那一条带着人类要核对的入参,这一条带着"去改系统状态"的指令 —— 都不该发给不相干的订阅者。
+     * (`confirmation-pending` 也是定向的,但那是**按连接**定向 —— 只发给发起那次调用的人,又是另一回事。)
+     */
+    kind: z.literal("url-router-execute"),
+    at: z.string().min(1),
+    command: UrlRouterExecuteCommandSchema,
   }),
 ]);
 export type KernelEvent = z.infer<typeof KernelEventSchema>;

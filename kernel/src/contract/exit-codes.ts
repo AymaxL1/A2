@@ -91,11 +91,16 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.pluginFailed:
     case ErrorCode.pluginTimeout:
     case ErrorCode.pluginLoadFailed:
-    // URL 分流面同档(02 票):决策与降级都走完了,是最后那步 `open` 没把链接交出去;
-    // 或者 takeover/restore 走到了该动手的地方,而执行器要到 04 票才接线。
+    // URL 分流面同档(02 票立,04 票补第二条):决策与降级都走完了,是最后那步 `open` 没把链接
+    // 交出去;或者接管的两个 scheme 只成了一个(半成品也是"执行了但没到位")。
     // 两条都是"路走通了、事没办成" —— 参数一个字都不用改,改了也不会变。
+    //
+    // **接管/还原的另外三种收场不在这里**,它们复用仲裁词表:执行器不在场 →
+    // `confirmation_unavailable`(2)、人点了取消 → `confirmation_denied`(2)、
+    // 120s 没人点 → `confirmation_timeout`(3)。确认换了个地方(系统弹框),
+    // 但"被拒/超时"对 agent 意味着什么一个字都没变,所以退出码也一个字都不该变。
     case ErrorCode.urlRouterOpenFailed:
-    case ErrorCode.urlRouterExecutorUnwired:
+    case ErrorCode.urlRouterPartialTakeover:
       return ExitCode.capabilityFailure;
     case ErrorCode.badRequest:
     case ErrorCode.unknownOp:
@@ -118,9 +123,11 @@ export function exitCodeForErrorCode(code: string): number {
     case ErrorCode.servicePurgeUnsafeHome:
     // 同理:Linux 上没有 `networksetup`,这条请求在那台机器上根本不成立。
     case ErrorCode.systemProxyUnsupported:
-    // 长连接协议面的两条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活。
+    // 长连接协议面的三条"你这条报文不成立":指向不存在/已收场的确认请求;没注册角色就干角色的活;
+    // 指向不存在/已收场的那条执行指令(04 票,与第一条逐字同构 —— 首个回话收场胜出)。
     case ErrorCode.confirmationUnknown:
     case ErrorCode.roleNotRegistered:
+    case ErrorCode.urlRouterExecutionUnknown:
     // 插件说的话不合协议(describe 输出坏了 / 退出码不在词表 / 清单里有的工具它自己不认)——
     // 与 `unknown_capability` 同档:这条请求本身不成立,要改的是插件而不是参数。
     case ErrorCode.pluginProtocolError:

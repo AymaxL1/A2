@@ -1,0 +1,14 @@
+{
+  "target": "com.a2.panel",
+  "already": false,
+  "handler": {
+    "http": "com.a2.panel",
+    "https": "com.a2.panel",
+    "matchesTarget": true
+  },
+  "outcome": "confirmed",
+  "perScheme": {
+    "http": { "ok": true },
+    "https": { "ok": true }
+  }
+}

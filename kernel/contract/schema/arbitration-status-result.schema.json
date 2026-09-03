@@ -101,6 +101,8 @@
               "confirmer_left",
               "subscriber_joined",
               "subscriber_left",
+              "executor_joined",
+              "executor_left",
               "peer_rejected",
               "peer_unverified",
               "backpressure_dropped",
@@ -121,7 +123,8 @@
                 "type": "string",
                 "enum": [
                   "confirm-agent",
-                  "subscriber"
+                  "subscriber",
+                  "url-router-executor"
                 ]
               },
               "name": {

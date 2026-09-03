@@ -1,0 +1,7 @@
+{
+  "id": "demo.wipe",
+  "risk": "dangerous",
+  "summary": "抹掉演示数据",
+  "parameters": [],
+  "confirmation": "none"
+}

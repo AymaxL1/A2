@@ -69,6 +69,13 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "confirmation": {
+      "type": "string",
+      "enum": [
+        "confirm-agent",
+        "os-dialog"
+      ]
     }
   },
   "required": [

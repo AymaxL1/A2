@@ -62,6 +62,9 @@ import {
   SystemProxyStatusResultSchema,
   UrlRouterConfigViewSchema,
   UrlRouterDecideResultSchema,
+  UrlRouterExecuteCommandSchema,
+  UrlRouterExecutorReportParamsSchema,
+  UrlRouterExecutorReportResultSchema,
   UrlRouterHandlerSchema,
   UrlRouterHandoffResultSchema,
   UrlRouterRouteResultSchema,
@@ -125,6 +128,12 @@ export const CONTRACT_SCHEMAS = {
   UrlRouterDecideResult: UrlRouterDecideResultSchema,
   UrlRouterRouteResult: UrlRouterRouteResultSchema,
   UrlRouterHandoffResult: UrlRouterHandoffResultSchema,
+  // url-router 施工 04 票:执行指令帧那一对(内核 ↔ 机械执行器)。
+  // 与确认器那一对(ConfirmationRequest / ConfirmationResolveParams)同一条登记理由 ——
+  // **壳两侧都要用**:一边解指令帧,一边拼回执,所以两个方向都得有可读的 schema。
+  UrlRouterExecuteCommand: UrlRouterExecuteCommandSchema,
+  UrlRouterExecutorReportParams: UrlRouterExecutorReportParamsSchema,
+  UrlRouterExecutorReportResult: UrlRouterExecutorReportResultSchema,
   // 08 票:角色注册、订阅推送、三层仲裁。09 票的 Swift 壳既要**读**推送(PushEnvelope/KernelEvent/
   // KernelSnapshot),也要**写**请求(RoleRegisterParams/ConfirmationResolveParams),两侧都在这张表上。
   RoleRegisterParams: RoleRegisterParamsSchema,

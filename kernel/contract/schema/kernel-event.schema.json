@@ -183,6 +183,13 @@
                     "type": "string",
                     "minLength": 1
                   }
+                },
+                "confirmation": {
+                  "type": "string",
+                  "enum": [
+                    "confirm-agent",
+                    "os-dialog"
+                  ]
                 }
               },
               "required": [
@@ -328,6 +335,8 @@
                 "confirmer_left",
                 "subscriber_joined",
                 "subscriber_left",
+                "executor_joined",
+                "executor_left",
                 "peer_rejected",
                 "peer_unverified",
                 "backpressure_dropped",
@@ -348,7 +357,8 @@
                   "type": "string",
                   "enum": [
                     "confirm-agent",
-                    "subscriber"
+                    "subscriber",
+                    "url-router-executor"
                   ]
                 },
                 "name": {
@@ -626,6 +636,13 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "enum": [
+                      "confirm-agent",
+                      "os-dialog"
+                    ]
                   }
                 },
                 "required": [
@@ -715,6 +732,13 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "enum": [
+                      "confirm-agent",
+                      "os-dialog"
+                    ]
                   }
                 },
                 "required": [
@@ -741,6 +765,68 @@
         "kind",
         "at",
         "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "url-router-execute"
+        },
+        "at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "set-default-handler"
+              ]
+            },
+            "schemes": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "http",
+                  "https"
+                ]
+              }
+            },
+            "bundleID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "op",
+            "schemes",
+            "bundleID",
+            "timeoutSeconds"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "kind",
+        "at",
+        "command"
       ],
       "additionalProperties": false
     }

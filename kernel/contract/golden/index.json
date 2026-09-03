@@ -462,7 +462,7 @@
       "file": "invalid-role-register-params-unknown-role.json",
       "schema": "RoleRegisterParams",
       "kind": "invalid",
-      "why": "角色词表封闭:只有 confirm-agent 与 subscriber,没有 `admin` 这种东西"
+      "why": "角色词表封闭:只有 confirm-agent、subscriber 与 url-router-executor(04 票),没有 `admin` 这种东西"
     },
     {
       "file": "confirmation-resolve-params.json",
@@ -733,6 +733,66 @@
       "schema": "UrlRouterHandler",
       "kind": "invalid",
       "why": "matchesTarget 只有 true / false / null 三种真值,没有第四种:`null` 已经**就是**「未能判定」,再造一个 \"unknown\" 字符串等于让客户端为同一件事写两个分支"
+    },
+    {
+      "file": "url-router-handoff-confirmed.json",
+      "schema": "UrlRouterHandoffResult",
+      "kind": "valid",
+      "why": "04 票的另一条成功收场:执行指令帧走完一个来回、两个 scheme 都点了「使用」→ already:false + outcome:confirmed + 逐 scheme 的结果。与 handoff-already 那份并排看,「弹过框」与「一个框都没弹」在报文上一眼分得开"
+    },
+    {
+      "file": "url-router-execute-command.json",
+      "schema": "UrlRouterExecuteCommand",
+      "kind": "valid",
+      "why": "spec §6.3 那张表的字面落点:op/schemes/bundleID/timeoutSeconds,外加对号用的 id。**壳对这一帧零判断** —— 唯一合法反应是照它调系统 API 再回传"
+    },
+    {
+      "file": "invalid-url-router-execute-unknown-op.json",
+      "schema": "UrlRouterExecuteCommand",
+      "kind": "invalid",
+      "why": "指令 op 是**白名单**:壳只认得它认得的那几件事。`set-default-browser` 不在表上,壳宁可整帧解不动也不能猜内核想让它干什么"
+    },
+    {
+      "file": "push-url-router-execute.json",
+      "schema": "PushEnvelope",
+      "kind": "valid",
+      "why": "第八族推送(04 票):执行指令帧。它与 confirmation 是仅有的两条**定向**推送 —— 那一条带人类要核对的入参,这一条带「去改系统状态」的指令,都不发给不相干的订阅者"
+    },
+    {
+      "file": "url-router-executor-report-confirmed.json",
+      "schema": "UrlRouterExecutorReportParams",
+      "kind": "valid",
+      "why": "壳 → 内核的回执,两个 scheme 都成:perScheme 是**逐条的事实**,outcome 只是一句概括 —— 内核以前者为准(不一致时绝不报成功)"
+    },
+    {
+      "file": "url-router-executor-report-partial.json",
+      "schema": "UrlRouterExecutorReportParams",
+      "kind": "valid",
+      "why": "半成那一路:http 成了、https 带着**原样 NSError**(domain/code/描述三件套)回来。壳不翻译、不归类这三个字段 —— 判断收场是内核的事(真机的域/码归 06 票回填,这里的值是占位)"
+    },
+    {
+      "file": "invalid-url-router-executor-report-unknown-outcome.json",
+      "schema": "UrlRouterExecutorReportParams",
+      "kind": "invalid",
+      "why": "收场词表封闭(confirmed/denied/timeout/error):`cancelled` 不在表上。壳想表达「用户取消」只有 denied 那一个词,不许自己造一个近义的"
+    },
+    {
+      "file": "url-router-executor-report-result.json",
+      "schema": "UrlRouterExecutorReportResult",
+      "kind": "valid",
+      "why": "回执被收下:accepted 恒 true —— 没被收下的情形一律走失败包封(url_router_execution_unknown / role_not_registered),与 ConfirmationResolveResult.settled 同一条口径"
+    },
+    {
+      "file": "capability-descriptor-os-dialog.json",
+      "schema": "CapabilityDescriptor",
+      "kind": "valid",
+      "why": "04 票给 manifest 加的确认模式标记:`os-dialog` 说的是「这条 dangerous 的确认由操作系统的弹框承载」。它进机读面是有意的 —— agent 在 capabilities list 里就该看得见「这条会弹系统框」,而不是调下去才发现"
+    },
+    {
+      "file": "invalid-capability-descriptor-unknown-confirmation.json",
+      "schema": "CapabilityDescriptor",
+      "kind": "invalid",
+      "why": "确认模式词表封闭(confirm-agent/os-dialog):没有 `none` 这种东西。这一条挡的是最坏的一种漂移 —— 有人想用一个新取值把 dangerous 的确认整个关掉"
     }
   ]
 }

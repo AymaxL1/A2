@@ -1,0 +1,15 @@
+{
+  "execution": "018f3b1c-4444-7c3e-9f2b-1d4e5f6a7b8d",
+  "outcome": "confirmed",
+  "perScheme": {
+    "http": { "ok": true },
+    "https": {
+      "ok": false,
+      "error": {
+        "domain": "NSOSStatusErrorDomain",
+        "code": -10814,
+        "description": "占位:用户取消时的真实域/码由 06 票真机回填"
+      }
+    }
+  }
+}
