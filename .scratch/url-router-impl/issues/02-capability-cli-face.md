@@ -1,6 +1,6 @@
 # 02 capability/CLI 面 + contract golden
 
-Status: claimed
+Status: resolved
 Blocked by: 01
 
 ## Question
@@ -67,3 +67,12 @@ spec §3/§4:五条能力上注册表 —— `url-router.status`(safe)/`decide`(
 
 **留给后续票**:`takeover`/`restore` 的真执行器与两次系统弹框(04);handler 悬空诊断与
 `restore` 目标缺失前置校验(05);`a2 guide` 里要不要提这五条(本票未动 guide)。
+
+### 2026-09-04 CR(Fable 主循环,双轴):通过,零修改项 → resolved
+
+七条口径逐条裁定:①两处 CLI 接线理由成立(风险档必须在 manifest 上分档是决定性论据);
+②decide 真探测但域名未命中零外调,safe 档成立;③`steps` 进报文**追认**(spec §8 不设 logPath
+的直接后果,比暗开日志通道诚实);④fail-closed 方向正确;⑤三处收紧**追认**(常驻内核 vs
+点开即退的小程序,风险形状不同);⑥plist 嵌套字典 bug 修法经测试先红后绿,采信;
+⑦forbidden 假件红线照 FORBIDDEN_NETWORKSETUP 先例,好。执行侧逐函数对母本核过保真。
+复核实测 547/0 + typecheck 干净。ff 合入 main = 87ab993,分支已删。
