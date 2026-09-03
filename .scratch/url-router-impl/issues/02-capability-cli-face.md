@@ -1,6 +1,6 @@
 # 02 capability/CLI 面 + contract golden
 
-Status: open
+Status: claimed
 Blocked by: 01
 
 ## Question

@@ -1,6 +1,6 @@
 # 01 内核决策核心 + 配置模块
 
-Status: claimed
+Status: resolved
 Blocked by: —
 
 ## Question
@@ -31,3 +31,6 @@ spec §2/§8/§12:把母本 `ClaudeURLRouter.swift` 的决策核心与配置移�
      收紧的代价不对等(一个写歪的 `roxyStartupAttempts: 0` 会连带把兜底浏览器打回缺省);
   ③ `roxyAPIKey` 纪律的落点是「错误文本只报字段名、不带文件原文」+ `redactUrlRouterConfig`,
      两条都有「把钥匙写进文件再断言产物里搜不到」的用例。
+- 2026-09-04 CR(Fable 主循环,双轴):**通过,零修改项**。三处口径全部成立(五值分词本就是
+  spec §3 要求;整份退缺省是母本语义 + 诊断出口;类型级校验取舍论证正确,clamp 归 02 使用侧)。
+  复核实测 480/0 + typecheck 干净。ff 合入 main = 35cf7ca,分支已删。→ resolved。
