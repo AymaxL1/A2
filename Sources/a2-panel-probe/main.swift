@@ -26,6 +26,8 @@
 //   PANEL_CONFIRM: id=<..> capability=<..> input=<k=v;k=v>
 //   PANEL_DECIDED: id=<..> decision=<approve|deny>
 //   PANEL_IDLE: before=<n> after=<n> seconds=<n>
+//   PANEL_EXECUTE_LOCATE: bundleID=<..> found=<0|1>          (--executor 才有)
+//   PANEL_EXECUTE_SET: app=<..> scheme=<http|https> reply=<ok>       (同上)
 //   PANEL_SUMMARY: confirmations=<n> decided=<n> requests=<n> ok=<0|1>
 
 import Foundation
@@ -45,6 +47,9 @@ struct Options {
     var idleSeconds: TimeInterval = 0
     var expectConfirmations = 0
     var quitAfterDecisions = 0
+    /// 给会话装上机械执行器(04 票)。**缺省不装** —— 那时这个壳连 `url-router-executor`
+    /// 角色都不注册,内核那侧于是如实报"没有执行器在场",旗舰 e2e 的「执行器不在场」那一幕靠它。
+    var executor = false
 }
 
 func parseOptions() -> Options {
@@ -70,6 +75,7 @@ func parseOptions() -> Options {
         case "--idle-probe": options.idleSeconds = Double(next(flag)) ?? 0
         case "--expect-confirmations": options.expectConfirmations = Int(next(flag)) ?? 0
         case "--quit-after-decisions": options.quitAfterDecisions = Int(next(flag)) ?? 0
+        case "--executor": options.executor = true
         default: die("未知参数:\(flag)")
         }
     }
@@ -85,6 +91,43 @@ func die(_ message: String) -> Never {
 func say(_ line: String) {
     print(line)
     fflush(stdout)
+}
+
+// ============================================================================
+// 机械执行器的**系统那一侧**(04 票的 `A2DefaultHandlerSetting`)
+// ============================================================================
+// 真壳装的是 `A2WorkspaceDefaultHandlerSetter` —— 它一调就**真改这台机器的默认浏览器**,
+// 并且真弹两个系统框。门禁里绝不能发生那件事,所以这里放一个剧本假件。
+//
+// 它与 `--decision approve|deny` 同源:那是**人**的替身,这是**操作系统**的替身,
+// 两者都只能住在测试工具里(内核与壳里都没有任何测试专用旁路 —— 08 票的裁定)。
+//
+// **被测的那条链一个字都没换**:装配用的就是壳生产路径上那一句
+// (`A2PanelSession(…, executor: A2URLRouterExecutorRunner(setter:log:))`,见 A2PanelAppDelegate),
+// 举手的开关也是生产代码里那一个(`executor != nil` 才注册 `url-router-executor` 角色)。
+// 于是旗舰 e2e 验到的是真壳的「收帧 → 逐 scheme 调 → 记账 → 回执」,只有最末那次系统调用是替身。
+//
+// 剧本只有一格:**解析得到目标、两个 scheme 的 completion 都无错**(= 用户在两个系统框上都点了
+// 「使用」)。别的格(目标 app 不在 / NSError / 只成一半 / 一个字不回)在函数缝上已经验全 ——
+// `Tests/A2PanelTests/A2URLRouterExecutorTests.swift`(壳侧)与 `kernel/test/cli-url-router.test.ts`
+// (内核侧,假执行器),这里不重复它们,只补一条别处替不了的:**真进程 × 真 UDS 的整趟往返**。
+final class ScriptedHandlerSetter: A2DefaultHandlerSetting {
+    /// 解析出来的假位置。**不碰文件系统**:执行器只把它当不透明句柄递给系统 API,自己不看它一眼。
+    private let applicationURL = URL(fileURLWithPath: "/nonexistent/a2-panel-probe/Target.app")
+
+    func locateApplication(bundleID: String) -> URL? {
+        say("PANEL_EXECUTE_LOCATE: bundleID=\(bundleID) found=1")
+        return applicationURL
+    }
+
+    func setDefaultApplication(
+        at applicationURL: URL, toOpenURLsWithScheme scheme: String,
+        completion: @escaping @Sendable ((any Error)?) -> Void
+    ) {
+        // 契约要求 completion **恰好一次**(真实现里它在用户点完系统框之后才回来)。
+        say("PANEL_EXECUTE_SET: app=\(applicationURL.lastPathComponent) scheme=\(scheme) reply=ok")
+        completion(nil)
+    }
 }
 
 // ============================================================================
@@ -319,7 +362,14 @@ let session = A2PanelSession(
         socketPath: options.socketPath,
         identity: A2ClientIdentity(name: "a2-panel-probe", version: "0.1.0"),
         reconnectDelay: 0.5),
-    delegate: probe)
+    delegate: probe,
+    // **装配与壳逐字同形**(见 ScriptedHandlerSetter 头注):同一个 Runner、同一个注册开关,
+    //   只有 setter 换成剧本假件。不装 = 不举手,内核那侧如实报"没有执行器在场"。
+    executor: options.executor
+        ? A2URLRouterExecutorRunner(
+            setter: ScriptedHandlerSetter(),
+            log: { line in say("PANEL_EXECUTE_LOG: \(line)") })
+        : nil)
 probe.session = session
 session.start()
 
