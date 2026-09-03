@@ -1,6 +1,6 @@
 # 06 e2e + 真机验收 + ADR 落笔
 
-Status: claimed
+Status: resolved
 Blocked by: 05
 
 ## Question
@@ -16,6 +16,24 @@ spec §10/§11/§13:
   可与 mihomo 内嵌线的真机验收并一次仪式。
 
 验收:check.sh 8 步全绿;ADR 两篇入库;人工项清单交用户。
+
+## Answer
+
+三个半票全部落地,2026-09-04 收束(细节见下方 Comments 与各提交):
+
+1. **e2e 半票**:旗舰 e2e 六幕 → 十幕(50 → 90),含**真指令帧往返活体**(probe `--executor`
+   替身,产品代码零改动)与 R-4 红线自查;check.sh 结构一步没动。
+2. **ADR 半票**(主循环亲笔):新立 [ADR 0015](../../../docs/adr/0015-url-router-default-browser.md)
+   (含可复用确认器原则三条件);ADR 0008 三条修订(壳两条受限例外 + 拉壳澄清);
+   ADR 0012 两处随动;spec §15 施工修正案十条;分发 runbook 人工项 **#13–#17**。
+3. **收尾小施工**:面板「设为默认浏览器…」入口(白名单 +takeover 共十三条,壳侧零确认框
+   ——系统弹框即确认器),补上 spec §9 / 地图 04 票裁定漏排的那一块。
+
+spec §13 验收对账:①接管旅程(e2e ⑨ 两路 + 单测 denied/timeout 假件路 + 真机 #13)
+②分流正确性含 fragment(e2e ⑦)③降级+节流通知(swift 单测)④卸载三防线(e2e ⑩ +
+bootstrap/install-script 测试)⑤门禁 APP1–15 + 两侧全绿 ⑥真机人工项 → runbook §8 #13–#17。
+终局门禁在合并后的 main 上实跑:**八步 PASS=8 FAIL=0**(bun 655 / swift 296 / 旗舰 e2e 90 /
+插件 e2e 50 / .app 出包 APP1–15)。真机项交用户,可与 mihomo 内嵌线验收并一次仪式。
 
 ## Comments
 
