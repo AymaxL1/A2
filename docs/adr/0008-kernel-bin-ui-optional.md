@@ -20,9 +20,13 @@ date: 2026-08-04
 3. **无 GUI 是一等公民运行形态**：内核 + CLI 可独立分发、全功能可用（Linux 无头用户与 mac 终端用户走同一套命令面，不存在阉割版）。唯一的分级点是 dangerous：无确认器在场时结构化默拒（`confirmation_unavailable`，fail-closed），且拒绝报文自带机器可读的「人类如何完成」精确命令——agent 只转告，人类自己执行。详见 [ADR 0005](0005-agent-first-interaction.md) 修订后的第 4 条。
 4. **裁决序（本项目通用）**：**安全底线 > 法律义务（GPL）> agent-first > 人类便利**。agent-first 压倒人类 UX（结构化输出、永不交互阻塞、GUI 只是内核的又一个客户端），但压不过「dangerous 需真人在场证明」与 GPL 义务履行；反过来，法律义务的**落点**必须 CLI 化，不得依赖 UI（见 [ADR 0007](0007-mihomo-subprocess-gpl-compliance.md) 修订）。
 5. **UI = 可选的对等客户端**：Mac 菜单栏壳 `a2-panel`（.app 显示名「A2 Panel」）与其他客户端走同一条 UDS capability 面，**无特权通道**；确认器（confirm agent）与订阅者（subscriber）只是长连接上注册的**角色**。壳只做两件事——内核事件流的投影（全量快照 + 增量推送，零轮询）与确认器呈现；**`a2-panel` 不得含业务逻辑**（新架构下的结构红线）。壳缺席/崩溃时内核静默运行：事件入日志、CLI 可查、dangerous 自动降回默拒。系统代理还原始终走内核显式命令；**2026-08-22 修订**：用户点击「退出 A2」本身就是一次显式 UI 动作，壳依次发 `proxy off` 与 `service stop`，成功后才退出。细节见 [ADR 0012](0012-panel-self-sufficient-bootstrap.md)。
+   > **修订（2026-09-04，url-router，[ADR 0015](0015-url-router-default-browser.md)）**：红线**不改写**，但对壳增列两条**受限例外**，均系机械动作、有源码级反向断言盯着：
+   > ① **降级兜底（哑管道 + 断电开关）**：壳把收到的 URL **原样**交给「最后已知快照里的兜底浏览器」（无快照则硬编码 Safari）。触发口只有两个——内核不可达（连接失败或 1.5s 超时）、或内核如实答复「没能把链接交出去」；节流通知只在**不可达**一种收场上发。四条硬边界：不解析 URL 内容／不做域名匹配／分支依据只有内核的收场、与 URL 内容无关／配置知识只来自内核推送快照、永不读内核文件。突破任一即踩红线。
+   > ② **机械执行器**：壳仅执行内核经 UDS 下发的白名单指令帧（`set-default-handler`），调系统 API 后把 completion 结果**原样**回传，零判断——决定由 OS 弹框承载、由人点（确认器原则见 ADR 0015）。
 6. **常驻 = 显式安装 + 系统托管**：一个编译产物多模式（默认 CLI，`a2 daemon run` 进前台常驻）；`a2 service install|uninstall|status` 落 launchd user 域 plist / systemd user unit，开机自启与崩溃自愈全归系统 supervisor，应用层不造看门狗。未安装/未运行时 CLI **永不隐式拉起** daemon，返回含精确修复命令的结构化指引（与「拒绝即指引」同构）——系统状态永远不因 agent 的一次查询而被动改变。
    > **修订（2026-08-09，14 票）**：本条**不改写**。菜单栏壳自 [ADR 0012](0012-panel-self-sufficient-bootstrap.md)（面板自足引导）起可经 `.app` 内嵌的内核 bin、以白名单 `service` 命令引导安装——那是**多了一条显式发起路径**（用户的一次点击），「永不隐式拉起」与「系统托管、应用层不造看门狗」两条边界原样有效。
    > **修订（2026-08-18，[ADR 0014](0014-mihomo-embedded-subprocess.md)）**：「应用层不造看门狗」对 **mihomo 开显式例外**——mihomo 改为内核直接子进程，保活（节流重拉、故障态、启动认尸）由内核亲管；**a2 daemon 自身仍归系统 supervisor，本条对 a2 自身原样有效**。连带：`com.a2.kernel` 的 KeepAlive 修为 `{Crashed:true, SuccessfulExit:false}`（补 kill -9 不自愈缺口，实测见 0014 Context），代价是主动停止路径必须 exit 0。
+   > **修订（2026-09-04，[ADR 0015](0015-url-router-default-browser.md)）**：「永不隐式拉起」再次**不改写**。`a2 url-router takeover|restore` 在壳未运行时会 `open -b com.a2.panel` 把壳拉到前台——那是用户**显式发起**的一次系统状态变更的其中一步（接下来他要在系统弹框上点头），不是查询引发的被动改变；查询面（`status`/`decide`/`route`）**永不**拉壳。
 7. **命名与路径统一 a2 系**（品牌级改名，原 `aa` 系全面退场）：bin `a2`、常驻 `a2 daemon run`、服务 `a2 service …`、壳 target `a2-panel`；路径 `~/.a2`（`A2_HOME` 可覆写）、socket `~/.a2/run/kernel.sock`、unit 命名空间 `com.a2.*`。中文概念名不变（「菜单栏壳」「确认器」）。
 
 ## Consequences
