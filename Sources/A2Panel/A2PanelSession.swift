@@ -75,10 +75,17 @@ public final class A2PanelSession {
         /// 转发一条 URL(03 票)。与别的动作不同,它**带着一个截止时刻和一个只收场一次的回调** ——
         /// 用户在等着看链接打不打得开,不能像其它入队动作那样"等会话线程什么时候轮到"。
         case route(A2URLRouteTicket)
+        /// 一帧执行指令做完了,把回执发回内核(04 票)。**入队而不是就地发**:系统弹框的
+        /// completion 可能在任意线程、在几十秒之后才回来,而这条连接只有会话线程能碰。
+        case report(A2URLRouterExecutorReportParams)
     }
 
     private let configuration: Configuration
     private weak var delegate: A2PanelSessionDelegate?
+    /// 机械执行器(04 票)。**缺省 nil = 这个壳不当执行器**:那时它连
+    /// `url-router-executor` 角色都不注册,内核那侧于是如实报"没有执行器在场"。
+    /// 有它才注册 —— 「在场」这条事实必须与"真的能干活"一致,不能先举手再说自己干不了。
+    private let executor: A2URLRouterExecutorRunner?
 
     private let queueLock = NSCondition()
     private var queued: [Command] = []
@@ -96,9 +103,13 @@ public final class A2PanelSession {
         return _requestCount
     }
 
-    public init(configuration: Configuration, delegate: A2PanelSessionDelegate?) {
+    public init(
+        configuration: Configuration, delegate: A2PanelSessionDelegate?,
+        executor: A2URLRouterExecutorRunner? = nil
+    ) {
         self.configuration = configuration
         self.delegate = delegate
+        self.executor = executor
     }
 
     // MARK: - 生命周期
@@ -193,6 +204,16 @@ public final class A2PanelSession {
         state = A2PanelProjection.base(from: registered.snapshot)
         emit(log: "已注册 confirm-agent(连接 \(registered.connection),uid=\(registered.uid.map(String.init) ?? "未知"))")
         publish()
+        // **第二个角色,同一条连接**(04 票):确认器与执行器是两把分开的锁 —— 前者替人做决定,
+        //   后者只回报自己执行的结果。注册两次是协议本来就支持的(重复/多角色皆幂等),
+        //   而**只有真装了执行器才举手**:内核靠"有没有执行器在场"决定 takeover 走不走得通,
+        //   举了手却干不了活会把它坑在 120s 的等待里。
+        if executor != nil {
+            let both = try countingRequest {
+                try client.registerRole(.urlRouterExecutor, identity: configuration.identity)
+            }
+            emit(log: "已注册 url-router-executor(本连接现有角色:\(both.roles.map(\.rawValue).joined(separator: "、")))")
+        }
         try refreshProxy(client)
         publish()
 
@@ -213,6 +234,8 @@ public final class A2PanelSession {
                     delegate?.panelSession(self, present: request)
                 case let .dismissConfirmations(ids):
                     delegate?.panelSession(self, dismissConfirmations: ids)
+                case let .executeURLRouter(command):
+                    execute(command)
                 }
                 publish()
             } catch A2ClientError.timeout {
@@ -253,6 +276,32 @@ public final class A2PanelSession {
 
         case let .route(ticket):
             try route(ticket, on: client)
+
+        case let .report(report):
+            do {
+                _ = try countingRequest { try client.reportURLRouterExecution(report) }
+                emit(log: "已回执行结果:\(report.outcome.rawValue)(\(report.execution))")
+            } catch let A2ClientError.kernelRefused(error) {
+                // 最常见的一种:内核那侧的 120s 窗已经关了(它早就按超时收场了)。
+                // **如实报,不重试** —— 重发只会再拿一次 `url_router_execution_unknown`。
+                emit(log: "执行回执未被采纳:\(error.code) \(error.message)")
+            }
+        }
+    }
+
+    /// 收到一帧执行指令(04 票)。**这里不能阻塞读循环**:系统弹框的 completion 要等人点,
+    /// 可能是几十秒。所以交给执行器去跑,结果回来时**入队**,由会话线程在两次读之间发出去 ——
+    /// 与别的动作同一条通道、同一个请求计数器(入队纪律 10 票起一字未改)。
+    ///
+    /// 没装执行器却收到了指令帧,说明协议出了岔(壳没注册那个角色,内核就不该推给它)。
+    /// **如实记一行,什么都不回** —— 内核那侧的窗会兜住它(超时即拒),而壳绝不伪造一条回执。
+    private func execute(_ command: A2URLRouterExecuteCommand) {
+        guard let executor else {
+            emit(log: "收到执行指令帧,但本壳没有执行器(没注册那个角色却收到了它 —— 不回执,交给内核的窗兜)")
+            return
+        }
+        executor.run(command) { [weak self] report in
+            self?.enqueue(.report(report))
         }
     }
 

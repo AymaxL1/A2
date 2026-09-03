@@ -48,6 +48,8 @@ public final class A2KernelClient {
         public static let capabilitiesCall = "capabilities.call"
         public static let rolesRegister = "roles.register"
         public static let confirmationsResolve = "confirmations.resolve"
+        /// 机械执行器回报一条执行指令帧的结果(url-router 施工 04 票)。
+        public static let urlRouterExecutorReport = "url-router.executor.report"
     }
 
     private let transport: A2Transport
@@ -199,6 +201,26 @@ public final class A2KernelClient {
             return try result.decode(A2ConfirmationResolveResult.self)
         } catch {
             throw A2ClientError.protocolViolation("confirmations.resolve 的 result 解不动:\(error)")
+        }
+    }
+
+    /// 回报一条执行指令帧的结果。**只有注册过 url-router-executor 的连接能发**
+    /// (否则内核回 `role_not_registered`);指令已经收场时回 `url_router_execution_unknown`。
+    ///
+    /// 与 `resolveConfirmation` 是两件事:那条**替人做决定**,这条只**如实回报自己做完了什么**。
+    @discardableResult
+    public func reportURLRouterExecution(
+        _ report: A2URLRouterExecutorReportParams, timeout: TimeInterval? = nil
+    ) throws -> A2URLRouterExecutorReportResult {
+        let params = try A2JSON.encoding(report)
+        guard let object = params.objectValue else {
+            throw A2ClientError.protocolViolation("url-router.executor.report 的 params 编码结果不是 JSON 对象")
+        }
+        let result = try requestResult(op: Op.urlRouterExecutorReport, params: object, timeout: timeout)
+        do {
+            return try result.decode(A2URLRouterExecutorReportResult.self)
+        } catch {
+            throw A2ClientError.protocolViolation("url-router.executor.report 的 result 解不动:\(error)")
         }
     }
 

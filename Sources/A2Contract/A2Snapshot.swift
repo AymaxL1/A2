@@ -151,7 +151,7 @@ extension A2RoleRegisterResult: Codable {
     }
 }
 
-/// 增量事件的七族判别值(对照 `KernelEventSchema` 的 `kind`;11 票起是七族)。
+/// 增量事件的八族判别值(对照 `KernelEventSchema` 的 `kind`;url-router 施工 04 票起是八族)。
 public enum A2KernelEventKind: String, Sendable, Codable, Equatable, CaseIterable {
     /// 仲裁面变了(整份 state,推给全体)。
     case arbitration
@@ -167,12 +167,14 @@ public enum A2KernelEventKind: String, Sendable, Codable, Equatable, CaseIterabl
     case capability
     /// **能调的东西本身变了**(装/卸插件,11 票):带变化后的全集,拿到就整份替换(推给全体)。
     case capabilitySet = "capability-set"
+    /// **执行指令帧**(04 票)——**只推给 url-router-executor**:照它调系统 API,再原样回传结果。
+    case urlRouterExecute = "url-router-execute"
 }
 
 /// 增量推送的事件族(对照 `KernelEventSchema`,按 `kind` 判别的联合)。
 ///
 /// **推送对象各不相同,这是协议的一部分**:`confirmation` 只给确认器,`confirmation-pending` 只给发起方,
-/// 其余给全体已注册连接。
+/// `url-router-execute` 只给执行器,其余给全体已注册连接。
 public enum A2KernelEvent: Sendable, Equatable {
     case arbitration(at: String, state: A2ArbitrationState)
     case confirmation(at: String, request: A2ConfirmationRequest)
@@ -181,6 +183,7 @@ public enum A2KernelEvent: Sendable, Equatable {
     case supervision(at: String, supervision: A2ProxySupervisionEvent)
     case capability(at: String, capability: A2CapabilityEvent)
     case capabilitySet(at: String, capabilities: A2CapabilitySetEvent)
+    case urlRouterExecute(at: String, command: A2URLRouterExecuteCommand)
 
     public var kind: A2KernelEventKind {
         switch self {
@@ -191,10 +194,11 @@ public enum A2KernelEvent: Sendable, Equatable {
         case .supervision: return .supervision
         case .capability: return .capability
         case .capabilitySet: return .capabilitySet
+        case .urlRouterExecute: return .urlRouterExecute
         }
     }
 
-    /// 事件发生时刻(七族都有)。
+    /// 事件发生时刻(八族都有)。
     public var at: String {
         switch self {
         case let .arbitration(at, _): return at
@@ -204,6 +208,7 @@ public enum A2KernelEvent: Sendable, Equatable {
         case let .supervision(at, _): return at
         case let .capability(at, _): return at
         case let .capabilitySet(at, _): return at
+        case let .urlRouterExecute(at, _): return at
         }
     }
 }
@@ -211,7 +216,7 @@ public enum A2KernelEvent: Sendable, Equatable {
 extension A2KernelEvent: Codable {
     private enum CodingKeys: String, CodingKey {
         case kind, at, state, request, requestId, timeoutMs, confirmation, audit, supervision, capability
-        case capabilities
+        case capabilities, command
     }
 
     public init(from decoder: Decoder) throws {
@@ -244,6 +249,10 @@ extension A2KernelEvent: Codable {
             self = .capabilitySet(
                 at: at,
                 capabilities: try container.decode(A2CapabilitySetEvent.self, forKey: .capabilities))
+        case .urlRouterExecute:
+            self = .urlRouterExecute(
+                at: at,
+                command: try container.decode(A2URLRouterExecuteCommand.self, forKey: .command))
         }
     }
 
@@ -268,6 +277,8 @@ extension A2KernelEvent: Codable {
             try container.encode(capability, forKey: .capability)
         case let .capabilitySet(_, capabilities):
             try container.encode(capabilities, forKey: .capabilities)
+        case let .urlRouterExecute(_, command):
+            try container.encode(command, forKey: .command)
         }
     }
 }

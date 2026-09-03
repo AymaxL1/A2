@@ -30,6 +30,12 @@ public enum A2PanelEffect: Sendable, Equatable {
     case presentConfirmation(A2ConfirmationRequest)
     /// 某条在途确认已经收场(批准/拒绝/超时/降级/取消)—— 关掉对应的界面。
     case dismissConfirmations([String])
+    /// 内核下发了一帧执行指令(04 票)——**照做,然后如实回报**。
+    ///
+    /// 它与 `presentConfirmation` 长得像却是两件事:那条是「替人看一眼」,这条是「去把这件事做了」。
+    /// 壳对这一帧**零判断**(见 `A2URLRouterExecutor` 文件头),所以这里也不改任何状态 ——
+    /// 执行指令不是"壳的状态变了",是"内核让壳去干一件事"。
+    case executeURLRouter(A2URLRouterExecuteCommand)
 }
 
 public enum A2PanelProjection {
@@ -66,7 +72,7 @@ public enum A2PanelProjection {
 
     /// 叠加一条推送事件,返回壳该做的事。
     ///
-    /// 七族全部有分支,**一族都不许默默吞掉** —— 未知族在解码层就已经被拒
+    /// 八族全部有分支,**一族都不许默默吞掉** —— 未知族在解码层就已经被拒
     /// (`A2KernelEvent` 的 `kind` 是封闭词表,有 invalid 金标守着),所以这里的 switch 是穷尽的。
     public static func apply(_ event: A2KernelEvent, to state: inout A2PanelState) -> A2PanelEffect {
         switch event {
@@ -141,6 +147,12 @@ public enum A2PanelProjection {
             //   要按 id 找 manifest,而插件工具**照样会走仲裁**(它与内置能力是同一种东西)。
             state.capabilities = change.capabilities
             return .none
+
+        case let .urlRouterExecute(_, command):
+            // **一个字段都不改**:这一帧不是"状态变了",是"内核让壳去干一件事"。
+            //   壳干完之后系统默认浏览器确实变了,但那件事的权威记录在**内核**那边
+            //   (`url-router.status` 现读 LaunchServices),壳这里存一份只会存出第二个可能过时的真相。
+            return .executeURLRouter(command)
         }
     }
 }

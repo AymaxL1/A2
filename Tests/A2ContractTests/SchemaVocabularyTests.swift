@@ -123,6 +123,20 @@ struct SchemaVocabularyTests {
             in: "capability-descriptor.schema.json", "ParameterType")
     }
 
+    /// 04 票的三张新词表。头一张最要紧:**它挡的是"有人用一个新取值把 dangerous 的确认整个关掉"**。
+    @Test("确认模式 / 执行指令 op / 收场词三张词表(04 票)")
+    func urlRouterExecutionVocabularies() throws {
+        try expectVocabulary(
+            Set(A2ConfirmationMode.allCases.map(\.rawValue)), of: "confirmation",
+            in: "capability-descriptor.schema.json", "ConfirmationMode")
+        try expectVocabulary(
+            Set(A2URLRouterExecuteOp.allCases.map(\.rawValue)), of: "op",
+            in: "url-router-execute-command.schema.json", "UrlRouterExecuteOp")
+        try expectVocabulary(
+            Set(A2URLRouterExecutionOutcome.allCases.map(\.rawValue)), of: "outcome",
+            in: "url-router-executor-report-params.schema.json", "UrlRouterExecutionOutcome")
+    }
+
     @Test("存活观测事件与实例归属词表")
     func supervisionVocabularies() throws {
         try expectVocabulary(

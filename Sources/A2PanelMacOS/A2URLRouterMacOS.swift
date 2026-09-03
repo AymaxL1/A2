@@ -52,6 +52,42 @@ public final class A2WorkspaceFallbackBrowser: A2FallbackBrowserOpening {
     }
 }
 
+/// `NSWorkspace` 版的**默认 handler 设置件**(url-router 施工 04 票,spec §5)。
+///
+/// ============================================================================
+/// 这里只有两行真正做事的代码,而它们的选型是本票的地基
+/// ============================================================================
+/// **必须走新 API** `setDefaultApplication(at:toOpenURLsWithScheme:completionHandler:)`(macOS 12+):
+/// 它的 completion **在用户点完系统弹框之后**才回调(01 研究票钉死的 SDK 头注原文)——
+/// 「结果可被发起方感知」正是 ADR 0015 那三条判据的第三条,也是"系统弹框能当确认器"的全部前提。
+///
+/// **禁旧 LS API**(`LSSetDefaultHandlerForURLScheme` 那一族):已弃用,而且返回码即时给出、
+/// **不含用户在弹框上点了什么** —— 用它就等于把这条路的地基抽掉,却看不出任何症状
+/// (命令会"成功",而系统状态没变)。有源码级断言盯着那个记号,改不回去。
+///
+/// **线程**:`urlForApplication(withBundleIdentifier:)` 是 LaunchServices 查询,
+/// `setDefaultApplication` 本身就是异步式接口 —— 两条都不要求主线程,与本文件其余部分同一条纪律
+/// (会话线程上被调到,**不要**在这里碰任何 AppKit 界面对象)。
+public final class A2WorkspaceDefaultHandlerSetter: A2DefaultHandlerSetting {
+
+    public init() {}
+
+    public func locateApplication(bundleID: String) -> URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    }
+
+    public func setDefaultApplication(
+        at applicationURL: URL, toOpenURLsWithScheme scheme: String,
+        completion: @escaping @Sendable ((any Error)?) -> Void
+    ) {
+        // 尾随闭包写法**不是风格选择**:这个方法在 Swift 里同时导入了 async 版与 completion 版,
+        // 显式写 `completionHandler:` 标签编译不过(会被判成"多了一个参数")。
+        NSWorkspace.shared.setDefaultApplication(at: applicationURL, toOpenURLsWithScheme: scheme) {
+            completion($0)
+        }
+    }
+}
+
 /// `UNUserNotificationCenter` 版的通知件(**best-effort**)。
 public final class A2UserNotificationNotifier: A2URLRouterNotifying {
 

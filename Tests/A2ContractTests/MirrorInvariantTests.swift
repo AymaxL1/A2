@@ -106,6 +106,75 @@ struct MirrorInvariantTests {
         #expect(encoded == expected, "决定报文与金标不一致:\(encoded)")
     }
 
+    @Test("url-router.executor.report 的 params 编出来逐字段等于金标(04 票要写出去的第三类)")
+    func executorReportParamsMatchGolden() throws {
+        let params = A2URLRouterExecutorReportParams(
+            execution: "018f3b1c-4444-7c3e-9f2b-1d4e5f6a7b8d",
+            outcome: .confirmed,
+            perScheme: A2URLRouterPerScheme(
+                http: A2URLRouterSchemeReport(ok: true),
+                https: A2URLRouterSchemeReport(ok: true)))
+        let encoded = try json(try JSONEncoder().encode(params))
+        let expected = try json(try golden("url-router-executor-report-confirmed.json"))
+        #expect(encoded == expected, "执行回执与金标不一致:\(encoded)")
+
+        // 成功那一路**不许多出一个 `error: null`**:zod 的 optional 不收 null,内核会当场拒。
+        #expect(encoded.objectValue?["error"] == nil)
+        #expect(encoded.objectValue?["perScheme"]?.objectValue?["http"]?.objectValue?["error"] == nil)
+    }
+
+    @Test("确认模式:缺省(nil)= confirm-agent,而带了个不认识的取值必须解不动")
+    func confirmationModeDefaultsButNeverGuesses() throws {
+        // 老样本(没有 confirmation 字段)——缺省即现状,壳不许把它读成别的什么。
+        let classic = try JSONDecoder().decode(
+            A2CapabilityDescriptor.self, from: golden("capability-descriptor.json"))
+        #expect(classic.confirmation == nil)
+        #expect(classic.effectiveConfirmation == .confirmAgent)
+
+        let osDialog = try JSONDecoder().decode(
+            A2CapabilityDescriptor.self, from: golden("capability-descriptor-os-dialog.json"))
+        #expect(osDialog.confirmation == .osDialog)
+        #expect(osDialog.risk == .dangerous)
+
+        // **不许静默退回缺省**:不认识的取值意味着"确认模式变了而壳没跟",装作没看见是最坏的一种处置。
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(
+                A2CapabilityDescriptor.self,
+                from: self.golden("invalid-capability-descriptor-unknown-confirmation.json"))
+        }
+    }
+
+    @Test("执行指令帧的 op 是白名单:不认识的动作整帧解不动(壳绝不猜内核想让它干什么)")
+    func executeCommandOpIsWhitelisted() throws {
+        let command = try JSONDecoder().decode(
+            A2URLRouterExecuteCommand.self, from: golden("url-router-execute-command.json"))
+        #expect(command.op == .setDefaultHandler)
+        #expect(command.schemes == [.http, .https])
+
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(
+                A2URLRouterExecuteCommand.self,
+                from: self.golden("invalid-url-router-execute-unknown-op.json"))
+        }
+    }
+
+    @Test("perScheme 的缺席与 ok:false 是两件事(「压根没轮到」vs「轮到了、没成」)")
+    func perSchemeAbsenceIsNotFailure() throws {
+        let partial = try JSONDecoder().decode(
+            A2URLRouterExecutorReportParams.self,
+            from: golden("url-router-executor-report-partial.json"))
+        #expect(partial.perScheme[.http]?.ok == true)
+        #expect(partial.perScheme[.https]?.ok == false)
+        // 原样 NSError 三件套一个都不少 —— 排查时要的正是它们(真机域/码归 06 票回填)。
+        #expect(partial.perScheme[.https]?.error?.domain.isEmpty == false)
+        #expect(partial.perScheme[.https]?.error?.code != 0)
+
+        // 空表 = 一个 scheme 都没轮到(壳解析目标 app 就失败了,一个系统调用都没发)。
+        let empty = A2URLRouterPerScheme()
+        #expect(empty[.http] == nil)
+        #expect(empty[.https] == nil)
+    }
+
     // MARK: - ConfirmationError 是 WireError 的收窄版
 
     @Test("仲裁三码:同一批字节既是 WireError 也是 ConfirmationError")
@@ -134,17 +203,20 @@ struct MirrorInvariantTests {
 
     /// 这条断言的期望值是**手写的字面量**,所以每加一族都得有人来改它 —— 那正是它存在的意义:
     /// 事件族是壳的状态机依据,多一族少一族都该是一次**可审阅的动作**,而不是随手加个 case 就过去了。
-    /// (11 票加了第七族 `capability-set`:能力全集变了。)
-    @Test("增量事件恰好七族,判别值逐字对齐契约")
-    func kernelEventFamiliesAreExactlySeven() {
+    /// (11 票加了第七族 `capability-set`:能力全集变了。
+    ///  url-router 施工 04 票加了第八族 `url-router-execute`:内核让壳去改系统默认 handler。
+    ///  第八族与前七族有一处不同,值得记在这里:**它是唯一一条会让壳去改机器状态的推送** ——
+    ///  别的七族要么是"状态变了、你更新一下投影",要么是"替人看一眼";只有这一条是"去做"。)
+    @Test("增量事件恰好八族,判别值逐字对齐契约")
+    func kernelEventFamiliesAreExactlyEight() {
         let kinds = Set(A2KernelEventKind.allCases.map(\.rawValue))
         #expect(kinds == [
             "arbitration", "confirmation", "confirmation-pending", "audit", "supervision", "capability",
-            "capability-set",
+            "capability-set", "url-router-execute",
         ], "事件族变了:\(kinds.sorted())")
     }
 
-    @Test("七份推送金标各自落到正确的事件族")
+    @Test("八份推送金标各自落到正确的事件族")
     func pushGoldensMapToTheirFamily() throws {
         let expectations: [(file: String, kind: A2KernelEventKind)] = [
             ("push-arbitration.json", .arbitration),
@@ -154,6 +226,7 @@ struct MirrorInvariantTests {
             ("push-supervision-down.json", .supervision),
             ("push-capability.json", .capability),
             ("push-capability-set.json", .capabilitySet),
+            ("push-url-router-execute.json", .urlRouterExecute),
         ]
         for expectation in expectations {
             let push = try JSONDecoder().decode(A2PushEnvelope.self, from: golden(expectation.file))

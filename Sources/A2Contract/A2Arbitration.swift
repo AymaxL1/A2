@@ -11,12 +11,17 @@
 
 import Foundation
 
-/// 长连接上可注册的角色(对照 `ClientRoleSchema`)。一条连接可两者兼有;重复注册幂等。
+/// 长连接上可注册的角色(对照 `ClientRoleSchema`)。一条连接可多者兼有;重复注册幂等。
 public enum A2ClientRole: String, Sendable, Codable, Equatable, CaseIterable {
     /// 确认器:替人类出面呈现 dangerous 确认并安全回传决定。
     case confirmAgent = "confirm-agent"
     /// 订阅者:只收状态投影,不参与仲裁。
     case subscriber
+    /// **机械执行器**(url-router 施工 04 票):收内核下发的执行指令帧、调系统 API、原样回传结果。
+    ///
+    /// 它与确认器是**两把分开的锁**:确认器能替人做决定,执行器只能回报自己执行的结果 ——
+    /// 它没有任何批准 dangerous 调用的能力。壳两个都注册,但那是两件事。
+    case urlRouterExecutor = "url-router-executor"
 }
 
 /// 注册时客户端自报的身份(对照 `ClientIdentitySchema`)。**V1 全部字段只用于展示与审计**。
@@ -324,6 +329,9 @@ public enum A2AuditAction: String, Sendable, Codable, Equatable, CaseIterable {
     case confirmerLeft = "confirmer_left"
     case subscriberJoined = "subscriber_joined"
     case subscriberLeft = "subscriber_left"
+    /// 机械执行器进/离场(04 票)。「执行器什么时候在」正是接管能不能走通的那条运行时事实。
+    case executorJoined = "executor_joined"
+    case executorLeft = "executor_left"
     /// 对端 UID 与内核不符,连接被拒。
     case peerRejected = "peer_rejected"
     /// 对端凭据**问不出来**,连接照常放行(fail-open)。正常机器上一次都不该出现。

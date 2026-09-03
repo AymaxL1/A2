@@ -69,6 +69,17 @@ extension A2ParameterSpec: Codable {
     }
 }
 
+/// dangerous 能力的**确认模式**(对照 `ConfirmationModeSchema`,url-router 施工 04 票)。
+///
+/// **词表封闭**:未知取值必须解码失败(有 invalid 金标守着)。这一条比别的词表更要紧 ——
+/// 它挡的是最坏的一种漂移:有人用一个新取值把 dangerous 的确认整个关掉,而壳装作看懂了。
+public enum A2ConfirmationMode: String, Sendable, Codable, Equatable, CaseIterable {
+    /// **缺省**:ADR 0005 第 4 条那三层,人在**菜单栏壳的确认框**上点头。
+    case confirmAgent = "confirm-agent"
+    /// 确认由**操作系统自己的弹框**承载(内核下发执行指令帧 → 壳调系统 API → OS 弹框 → 人点)。
+    case osDialog = "os-dialog"
+}
+
 /// 能力 manifest(对照 `CapabilityDescriptorSchema`)。
 public struct A2CapabilityDescriptor: Sendable, Equatable {
     public let id: String
@@ -77,21 +88,30 @@ public struct A2CapabilityDescriptor: Sendable, Equatable {
     public let parameters: [A2ParameterSpec]
     /// 域子命令写法(有序 token:`["proxy","on"]` ⇒ `a2 proxy on`);缺省 = 只能用 `capabilities call` 调。
     public let cliAlias: [String]?
+    /// 这条 dangerous 的确认由谁承载。**缺省(nil)= `confirm-agent`**,即现状。
+    public let confirmation: A2ConfirmationMode?
 
     public init(
         id: String, risk: A2RiskLevel, summary: String, parameters: [A2ParameterSpec],
-        cliAlias: [String]? = nil
+        cliAlias: [String]? = nil, confirmation: A2ConfirmationMode? = nil
     ) {
         self.id = id
         self.risk = risk
         self.summary = summary
         self.parameters = parameters
         self.cliAlias = cliAlias
+        self.confirmation = confirmation
     }
+
+    /// 缺省归一后的确认模式。**「缺省是什么」只该有一个地方说了算**(内核那侧是
+    /// `confirmationModeOf`,这边是它)—— 各处 `?? .confirmAgent` 迟早会有一处写反。
+    public var effectiveConfirmation: A2ConfirmationMode { confirmation ?? .confirmAgent }
 }
 
 extension A2CapabilityDescriptor: Codable {
-    private enum CodingKeys: String, CodingKey { case id, risk, summary, parameters, cliAlias }
+    private enum CodingKeys: String, CodingKey {
+        case id, risk, summary, parameters, cliAlias, confirmation
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -102,6 +122,9 @@ extension A2CapabilityDescriptor: Codable {
         parameters = try container.decode([A2ParameterSpec].self, forKey: .parameters)
         // 契约是 `z.array(z.string().min(1)).min(1).optional()` —— **元素也带 min(1)**,两级都要镜像。
         cliAlias = try container.decodeNonEmptyStringArrayIfPresent(forKey: .cliAlias)
+        // 缺席是合法的(= confirm-agent);**带了个不认识的取值必须炸**,不许悄悄退回缺省 ——
+        // 那等于把"确认模式变了"这件事当成"没写"。
+        confirmation = try container.decodeIfPresent(A2ConfirmationMode.self, forKey: .confirmation)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -111,6 +134,7 @@ extension A2CapabilityDescriptor: Codable {
         try container.encode(summary, forKey: .summary)
         try container.encode(parameters, forKey: .parameters)
         try container.encodeIfPresent(cliAlias, forKey: .cliAlias)
+        try container.encodeIfPresent(confirmation, forKey: .confirmation)
     }
 }
 

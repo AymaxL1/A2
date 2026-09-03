@@ -45,13 +45,23 @@ public enum A2MirroredContract: String, Sendable, CaseIterable {
     case confirmationResolveParams = "ConfirmationResolveParams"
     case confirmationResolveResult = "ConfirmationResolveResult"
 
-    // 增量事件的载荷(七族里唯一带自定义 output 的那一族)。
+    // 增量事件的载荷(八族里唯一带自定义 output 的那一族)。
     case capabilityEvent = "CapabilityEvent"
 
     // 11 票新增的第七族:能力全集变了(装/卸插件)。**镜像它不是因为壳要展示插件**
     // (菜单只投影 `proxy.*`,有断言钉着),而是因为 `A2KernelEvent` 的未知 kind 会让**整帧解码失败**——
     // 壳不镜像它就会在用户装第一个插件的那一刻开始丢帧。
     case capabilitySetEvent = "CapabilitySetEvent"
+
+    // url-router 施工 04 票的执行指令帧那一对 —— **壳在这条链上是主角**(机械执行器):
+    // 一边解内核推来的指令,一边拼回执写回去。与确认往返同一条镜像理由:
+    // 它们是壳的**状态机依据**,不是展示数据,错一个字段是行为错(而且是"改全系统状态"那种行为)。
+    case urlRouterExecuteCommand = "UrlRouterExecuteCommand"
+    case urlRouterExecutorReportParams = "UrlRouterExecutorReportParams"
+    // 回执被收下之后内核回的那条 result。镜像它与镜像 `ConfirmationResolveResult` 同一条理由:
+    // 壳要能确定自己那条回执**真的被采纳了**(accepted 恒 true;没被采纳一律走失败包封),
+    // 而不是"发出去了就当成了"——那条链的另一头连着"系统默认浏览器改没改"。
+    case urlRouterExecutorReportResult = "UrlRouterExecutorReportResult"
 
     /// 解码 → 重编码。金标往返断言用它:重编码后的 JSON 必须与原样本**语义等价**
     /// (逐字段相等,不比键序)。少一个字段、多一个字段、类型漂了,都会在那一步吵起来。
@@ -80,6 +90,12 @@ public enum A2MirroredContract: String, Sendable, CaseIterable {
         case .confirmationResolveResult: return try Self.roundTrip(A2ConfirmationResolveResult.self, data)
         case .capabilityEvent: return try Self.roundTrip(A2CapabilityEvent.self, data)
         case .capabilitySetEvent: return try Self.roundTrip(A2CapabilitySetEvent.self, data)
+        case .urlRouterExecuteCommand:
+            return try Self.roundTrip(A2URLRouterExecuteCommand.self, data)
+        case .urlRouterExecutorReportParams:
+            return try Self.roundTrip(A2URLRouterExecutorReportParams.self, data)
+        case .urlRouterExecutorReportResult:
+            return try Self.roundTrip(A2URLRouterExecutorReportResult.self, data)
         }
     }
 
@@ -181,7 +197,7 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             // **16 票起这是既成事实**:壳经嵌入 bin 走 `service install --copy-to-home --json` /
             // `service uninstall --json` / `service status --json`(ADR 0012 的执行器白名单)。
             // 但界没变:那是**经 CLI 机读面**拿到的一条包封,不是长连接上的协议帧 ——
-            // 壳的状态机依据仍然是快照与七族事件,service 的 result 只在引导那几下读一次,
+            // 壳的状态机依据仍然是快照与八族事件,service 的 result 只在引导那几下读一次,
             // 取的是 `state` / `binPath` / `actions` 与 change 结果里嵌的 `status.state` 四个字段,
             // 经 A2JSON 取值即可;**解析用例直接喂 `kernel/contract/golden/` 的真样本**
             // (含非法样本验 fail-closed),所以"不建 typed 镜像"并不等于"没有双端对账"。
@@ -208,7 +224,10 @@ public enum A2UnmirroredContract: String, Sendable, CaseIterable {
             // 唯一的分支是「内核接走了没有」,那来自包封的 ok/error(已镜像的 ResponseEnvelope)。
             return "`url-router.decide` / `url-router.route` 的 output。壳 03 票起会调 route,但**只看包封的成败**(那是已镜像的 `ResponseEnvelope`)—— decision/action/steps 是给人和 agent 看的,壳读了就等于开始关心「内核怎么判的」,而它不该关心。"
         case .urlRouterHandoffResult:
-            return "`url-router.takeover` / `url-router.restore` 的 output(dangerous 那两条)。壳作为确认器呈现的是**确认请求**(已镜像),作为机械执行器收的是 04 票的执行指令帧(另一族);这条 result 是发起方(CLI/agent)的回执,壳不在它的读者里。"
+            // 04 票把执行指令帧那一族真接上了,这条豁免的理由**因此更硬而不是更软**:
+            // 壳在这条链上确实有份,但它经手的是**指令与回执**(两条都已镜像),
+            // 而这条 result 是内核回给**发起方**(CLI/agent)的成绩单 —— 壳一个字节都不经手。
+            return "`url-router.takeover` / `url-router.restore` 的 output(dangerous 那两条)。壳作为确认器呈现的是**确认请求**、作为机械执行器收发的是 `UrlRouterExecuteCommand` / `UrlRouterExecutorReportParams`(三条都已镜像);这条 result 是内核回给发起方(CLI/agent)的回执,壳不在它的读者里 —— 04 票接上执行链之后这条界更清楚了,不是更模糊。"
         case .aboutResult:
             return "`a2 about` 的 CLI 机读面,**不经协议**(无 op、不走 UDS —— 义务落点不许依赖 daemon 在不在)。壳侧的对位物是 `A2AboutWindow.declaration` 那份静态文本:它有意**不**向内核请求任何东西(关掉内核、没装内核,关于页照样打得开),所以壳这边没有可解的报文,镜像它只会多一处会漂的类型。"
         }

@@ -115,7 +115,12 @@ public final class A2PanelAppDelegate: NSObject, NSApplicationDelegate {
             configuration: .init(
                 socketPath: socketPath,
                 identity: A2ClientIdentity(name: "a2-panel", version: A2PanelBuild.version)),
-            delegate: self)
+            delegate: self,
+            // URL 接管的机械执行器(04 票)。装配也只有一行:动作走 NSWorkspace 的新 API,
+            //   判断一条都不在这里 —— 全在 `A2URLRouterExecutorRunner`(纯逻辑,零判断有断言守着)。
+            executor: A2URLRouterExecutorRunner(
+                setter: A2WorkspaceDefaultHandlerSetter(),
+                log: { [weak self] line in self?.writeLog(line) }))
         self.session = session
         session.start()
 

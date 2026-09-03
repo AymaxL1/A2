@@ -9,7 +9,7 @@ import A2Contract
 import A2Panel
 import A2PanelFixtures
 
-@Suite("10 事件投影(快照即基线 + 七族增量 + 断线即离场)")
+@Suite("10 事件投影(快照即基线 + 八族增量 + 断线即离场)")
 struct A2PanelProjectionTests {
 
     // ---- 装置 ----
